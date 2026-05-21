@@ -111,4 +111,36 @@ struct leanring_buddyTests {
         #expect(store.selectedWorkspaceStatus == .invalidDirectory(store.selectedWorkspacePath!))
         #expect(!store.canOpenSelectedWorkspace)
     }
+
+    @Test func routerMapsShowGitStatusToStatus() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("show git status") == .gitStatus)
+    }
+
+    @Test func routerMapsWhatChangedToDiff() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("what changed?") == .gitDiff)
+    }
+
+    @Test func routerMapsRunTestsToTests() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("run tests") == .runTests)
+    }
+
+    @Test func routerReturnsUnsupportedForUnknownText() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("open the project") == .unsupported("Only status, diff, and test are wired yet."))
+    }
+
+    @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {
+        let executor = WorkspaceCommandExecutor()
+
+        let result = await executor.run(.gitStatus, workspacePath: nil)
+
+        #expect(result.summary == "No workspace selected.")
+    }
 }

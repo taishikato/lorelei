@@ -45,6 +45,9 @@ final class CompanionManager: ObservableObject {
     let buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
+    private let commandRouter = LoreleiCommandRouter()
+    private let workspaceSettingsStore = WorkspaceSettingsStore()
+    private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
     private var currentResponseTask: Task<Void, Never>?
@@ -363,23 +366,35 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    // MARK: - Local Placeholder Response Pipeline
+    // MARK: - Local Command Routing Pipeline
 
-    /// Local placeholder until a later task wires transcripts to CodexExecutor.
-    /// This deliberately avoids copied Cloudflare, Claude, and TTS service hooks.
+    /// Routes final transcripts to Lorelei's current read-only workspace actions.
     private func handleFinalTranscriptLocally(_ transcript: String) {
         currentResponseTask?.cancel()
+        lastTranscript = transcript
+        let action = commandRouter.route(transcript)
 
         currentResponseTask = Task { @MainActor in
             voiceState = .processing
+            setPendingConfirmationTitle(nil)
 
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            if case let .unsupported(message) = action {
+                updateLatestResultSummary(message)
+                ClickyAnalytics.trackAIResponseReceived(response: "unsupported local command")
+                voiceState = .idle
+                currentResponseTask = nil
+                scheduleTransientHideIfNeeded()
+                return
+            }
+
+            let result = await workspaceCommandExecutor.run(
+                action,
+                workspacePath: workspaceSettingsStore.selectedWorkspacePath
+            )
             guard !Task.isCancelled else { return }
 
-            print("🗣️ Lorelei placeholder received transcript: \(transcript)")
-            ClickyAnalytics.trackAIResponseReceived(response: "local placeholder")
-            updateLatestResultSummary("Transcript captured. Command execution is not connected yet.")
-            setPendingConfirmationTitle(nil)
+            updateLatestResultSummary(result.summary)
+            ClickyAnalytics.trackAIResponseReceived(response: "local workspace command")
             voiceState = .idle
             currentResponseTask = nil
             scheduleTransientHideIfNeeded()
