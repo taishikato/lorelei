@@ -68,7 +68,21 @@ struct CodexExecutor {
         }
     }
 
-    func run(_ mode: CodexExecutionMode, prompt: String, workspacePath: String?) async -> WorkspaceCommandResult {
+    func run(
+        _ mode: CodexExecutionMode,
+        prompt: String,
+        workspacePath: String?,
+        imagePaths: [String] = [],
+        removeImageInputsAfterRun: Bool = false
+    ) async -> WorkspaceCommandResult {
+        defer {
+            if removeImageInputsAfterRun {
+                for imagePath in imagePaths {
+                    try? fileManager.removeItem(atPath: imagePath)
+                }
+            }
+        }
+
         guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !workspacePath.isEmpty else {
             return WorkspaceCommandResult(summary: "No workspace selected.")
@@ -104,7 +118,13 @@ struct CodexExecutor {
 
         let execution = await commandRunner(
             executableURL,
-            commandArguments(mode: mode, workspacePath: workspacePath, outputPath: outputURL.path, prompt: prompt),
+            commandArguments(
+                mode: mode,
+                workspacePath: workspacePath,
+                outputPath: outputURL.path,
+                prompt: prompt,
+                imagePaths: imagePaths
+            ),
             URL(fileURLWithPath: workspacePath, isDirectory: true),
             commandTimeoutSeconds,
             0,
@@ -137,7 +157,13 @@ struct CodexExecutor {
         }
     }
 
-    func commandArguments(mode: CodexExecutionMode, workspacePath: String, outputPath: String, prompt: String) -> [String] {
+    func commandArguments(
+        mode: CodexExecutionMode,
+        workspacePath: String,
+        outputPath: String,
+        prompt: String,
+        imagePaths: [String] = []
+    ) -> [String] {
         var arguments: [String] = []
 
         if mode == .workspaceWrite {
@@ -147,8 +173,15 @@ struct CodexExecutor {
             ]
         }
 
+        arguments += ["exec"]
+
+        for imagePath in imagePaths {
+            let trimmedImagePath = imagePath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedImagePath.isEmpty else { continue }
+            arguments += ["-i", trimmedImagePath]
+        }
+
         arguments += [
-            "exec",
             "--sandbox",
             mode.sandboxArgument,
             "--cd",

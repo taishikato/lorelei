@@ -288,6 +288,64 @@ struct leanring_buddyTests {
         #expect(recorder.outputLastMessagePath != nil)
     }
 
+    @Test func codexExecutorBuildsReadOnlyCommandWithImageInput() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let imagePath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lorelei-test-\(UUID().uuidString).jpg")
+            .path
+        let recorder = CodexCommandRecorder(finalMessage: "Screen answer")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+
+        let result = await executor.run(
+            .readOnly,
+            prompt: "look at my screen",
+            workspacePath: directoryURL.path,
+            imagePaths: [imagePath]
+        )
+
+        #expect(result.summary == "Screen answer")
+        #expect(recorder.arguments?.starts(with: [
+            "exec",
+            "-i",
+            imagePath,
+            "--sandbox",
+            "read-only",
+            "--cd",
+            directoryURL.path
+        ]) == true)
+        #expect(recorder.arguments?.contains("--output-last-message") == true)
+        #expect(recorder.outputLastMessagePath != nil)
+        #expect(recorder.arguments?.last == "look at my screen")
+    }
+
+    @Test func codexExecutorCleansUpImageInputsWhenRequested() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let imageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lorelei-test-\(UUID().uuidString).jpg")
+        try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: imageURL)
+        let recorder = CodexCommandRecorder(finalMessage: "Screen answer")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+
+        let result = await executor.run(
+            .readOnly,
+            prompt: "look at my screen",
+            workspacePath: directoryURL.path,
+            imagePaths: [imageURL.path],
+            removeImageInputsAfterRun: true
+        )
+
+        #expect(result.summary == "Screen answer")
+        #expect(!FileManager.default.fileExists(atPath: imageURL.path))
+    }
+
     @Test func codexExecutorBuildsWorkspaceWriteCommand() async throws {
         let directoryURL = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directoryURL) }

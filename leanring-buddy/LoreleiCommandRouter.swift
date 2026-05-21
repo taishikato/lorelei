@@ -19,9 +19,9 @@ enum LoreleiCommandAction: Equatable, Sendable {
 
     var requiresWorkspace: Bool {
         switch self {
-        case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite:
+        case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
             return true
-        case .codexScreen, .codexComputerUse, .unsupported:
+        case .codexComputerUse, .unsupported:
             return false
         }
     }

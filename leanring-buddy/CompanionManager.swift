@@ -419,10 +419,12 @@ final class CompanionManager: ObservableObject {
                 currentResponseTask = nil
                 scheduleTransientHideIfNeeded()
                 return
-            case .codexScreen:
-                setPendingConfirmationTitle("Connect screen context?")
-                updateLatestResultSummary("Screen context is not connected yet.")
-                ClickyAnalytics.trackAIResponseReceived(response: "codex screen context not connected")
+            case .codexScreen(let prompt):
+                let result = await runCodexScreenRequest(prompt)
+                guard !Task.isCancelled else { return }
+
+                updateLatestResultSummary(result.summary)
+                ClickyAnalytics.trackAIResponseReceived(response: "codex screen context command")
                 voiceState = .idle
                 currentResponseTask = nil
                 scheduleTransientHideIfNeeded()
@@ -442,6 +444,35 @@ final class CompanionManager: ObservableObject {
             voiceState = .idle
             currentResponseTask = nil
             scheduleTransientHideIfNeeded()
+        }
+    }
+
+    private func runCodexScreenRequest(_ prompt: String) async -> WorkspaceCommandResult {
+        guard let workspacePath = workspaceSettingsStore.selectedWorkspacePath?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !workspacePath.isEmpty else {
+            return WorkspaceCommandResult(summary: "No workspace selected.")
+        }
+
+        do {
+            let captures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            guard let cursorFirstCapture = captures.first else {
+                return WorkspaceCommandResult(summary: "Screen capture failed: no screen image was captured.")
+            }
+
+            let imageURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("lorelei-screen-\(UUID().uuidString).jpg")
+            try cursorFirstCapture.imageData.write(to: imageURL, options: .atomic)
+
+            return await codexExecutor.run(
+                .readOnly,
+                prompt: prompt,
+                workspacePath: workspacePath,
+                imagePaths: [imageURL.path],
+                removeImageInputsAfterRun: true
+            )
+        } catch {
+            return WorkspaceCommandResult(summary: "Screen capture failed: \(error.localizedDescription)")
         }
     }
 
