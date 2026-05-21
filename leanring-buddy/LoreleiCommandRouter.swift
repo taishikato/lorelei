@@ -98,29 +98,43 @@ struct LoreleiCommandRouter {
             return .codexComputerUse(originalCommand)
         }
 
+        if isStatusRequest(command) {
+            return .gitStatus
+        }
+
+        if isDiffRequest(command) {
+            return .gitDiff
+        }
+
+        if isRunTestsRequest(command) {
+            return .runTests
+        }
+
         if isMutatingRequest(command) {
             return .codexWorkspaceWrite(originalCommand)
         }
 
-        if command.contains("git status") || command.contains("status") {
-            return .gitStatus
-        }
+        return .codexReadOnly(originalCommand)
+    }
 
-        if command.contains("what changed")
+    private func isStatusRequest(_ command: String) -> Bool {
+        command.contains("git status") || command.contains("status")
+    }
+
+    private func isDiffRequest(_ command: String) -> Bool {
+        command.contains("what changed")
             || command.contains("diff")
             || command.contains("changes")
-            || command.contains("changed") {
-            return .gitDiff
-        }
+            || command.contains("changed")
+    }
 
-        if command.contains("run tests")
+    private func isRunTestsRequest(_ command: String) -> Bool {
+        command == "test"
+            || command == "tests"
+            || command.hasPrefix("test ")
+            || command.hasPrefix("tests ")
+            || command.contains("run tests")
             || command.contains("run test")
-            || command.contains("tests")
-            || command.contains("test") {
-            return .runTests
-        }
-
-        return .codexReadOnly(originalCommand)
     }
 
     private func isMutatingRequest(_ command: String) -> Bool {

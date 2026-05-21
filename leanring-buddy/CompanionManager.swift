@@ -41,6 +41,22 @@ enum CompanionVoiceState {
     case responding
 }
 
+struct CompanionResponseTaskTracker {
+    private(set) var currentTaskID: UUID?
+
+    mutating func begin() -> UUID {
+        let taskID = UUID()
+        currentTaskID = taskID
+        return taskID
+    }
+
+    mutating func finishIfCurrent(_ taskID: UUID) -> Bool {
+        guard currentTaskID == taskID else { return false }
+        currentTaskID = nil
+        return true
+    }
+}
+
 @MainActor
 final class CompanionManager: ObservableObject {
     @Published private(set) var voiceState: CompanionVoiceState = .idle
@@ -73,6 +89,7 @@ final class CompanionManager: ObservableObject {
     private let codexExecutor = CodexExecutor()
     private let speechOutput: SpeechOutputing
     private var pendingConfirmation = PendingCommandConfirmation()
+    private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
     private var currentResponseTask: Task<Void, Never>?
@@ -412,19 +429,20 @@ final class CompanionManager: ObservableObject {
     /// Routes final transcripts to Lorelei's current local workspace and Codex actions.
     private func handleFinalTranscriptLocally(_ transcript: String) {
         currentResponseTask?.cancel()
+        pendingConfirmation.cancel()
+        setPendingConfirmationTitle(nil)
         lastTranscript = transcript
         let action = commandRouter.route(transcript)
+        let taskID = responseTaskTracker.begin()
 
         currentResponseTask = Task { @MainActor in
+            defer { finishResponseTaskIfCurrent(taskID) }
             voiceState = .processing
-            pendingConfirmation.cancel()
-            setPendingConfirmationTitle(nil)
 
             if case let .unsupported(message) = action {
                 updateLatestResultSummary(message)
                 speechOutput.speak(WorkspaceCommandResult(summary: message, status: .failed).spokenStatus)
                 ClickyAnalytics.trackAIResponseReceived(response: "unsupported local command")
-                finishResponseTask()
                 return
             }
 
@@ -435,7 +453,6 @@ final class CompanionManager: ObservableObject {
                     action: action
                 )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex read-only confirmation required")
-                finishResponseTask()
                 return
             case .codexWorkspaceWrite:
                 requestPendingConfirmation(
@@ -443,7 +460,6 @@ final class CompanionManager: ObservableObject {
                     action: action
                 )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex write confirmation required")
-                finishResponseTask()
                 return
             case .codexComputerUse:
                 requestPendingConfirmation(
@@ -451,7 +467,6 @@ final class CompanionManager: ObservableObject {
                     action: action
                 )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex computer-use confirmation required")
-                finishResponseTask()
                 return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
@@ -460,7 +475,6 @@ final class CompanionManager: ObservableObject {
                 updateLatestResultSummary(result.summary)
                 speechOutput.speak(result.spokenStatus)
                 ClickyAnalytics.trackAIResponseReceived(response: "codex screen context command")
-                finishResponseTask()
                 return
             case .gitStatus, .gitDiff, .runTests, .unsupported:
                 break
@@ -475,7 +489,6 @@ final class CompanionManager: ObservableObject {
             updateLatestResultSummary(result.summary)
             speechOutput.speak(result.spokenStatus)
             ClickyAnalytics.trackAIResponseReceived(response: "local workspace command")
-            finishResponseTask()
         }
     }
 
@@ -492,7 +505,9 @@ final class CompanionManager: ObservableObject {
 
     private func executeConfirmedCommand(_ action: LoreleiCommandAction) {
         currentResponseTask?.cancel()
+        let taskID = responseTaskTracker.begin()
         currentResponseTask = Task { @MainActor in
+            defer { finishResponseTaskIfCurrent(taskID) }
             voiceState = .processing
 
             let result: WorkspaceCommandResult
@@ -529,11 +544,11 @@ final class CompanionManager: ObservableObject {
             updateLatestResultSummary(result.summary)
             speechOutput.speak(result.spokenStatus)
             ClickyAnalytics.trackAIResponseReceived(response: analyticsResponse)
-            finishResponseTask()
         }
     }
 
-    private func finishResponseTask() {
+    private func finishResponseTaskIfCurrent(_ taskID: UUID) {
+        guard responseTaskTracker.finishIfCurrent(taskID) else { return }
         voiceState = .idle
         currentResponseTask = nil
         scheduleTransientHideIfNeeded()

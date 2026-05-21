@@ -169,6 +169,14 @@ struct leanring_buddyTests {
         #expect(router.route("rename file") == .codexWorkspaceWrite("rename file"))
     }
 
+    @Test func routerPreservesClearLocalStatusDiffAndTestCommandsBeforeMutatingWords() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("status update") == .gitStatus)
+        #expect(router.route("diff update") == .gitDiff)
+        #expect(router.route("test update") == .runTests)
+    }
+
     @Test func routerMapsScreenRequestToCodexScreen() async throws {
         let router = LoreleiCommandRouter()
 
@@ -231,6 +239,21 @@ struct leanring_buddyTests {
         #expect(confirmation.confirm() == .codexWorkspaceWrite("fix the test"))
         #expect(confirmation.title == nil)
         #expect(confirmation.action == nil)
+    }
+
+    @Test func responseTaskTrackerIgnoresStaleTaskCleanup() async throws {
+        var tracker = CompanionResponseTaskTracker()
+
+        let oldTaskID = tracker.begin()
+        let newTaskID = tracker.begin()
+        let didFinishOldTask = tracker.finishIfCurrent(oldTaskID)
+        let currentTaskIDAfterOldFinish = tracker.currentTaskID
+        let didFinishNewTask = tracker.finishIfCurrent(newTaskID)
+
+        #expect(!didFinishOldTask)
+        #expect(currentTaskIDAfterOldFinish == newTaskID)
+        #expect(didFinishNewTask)
+        #expect(tracker.currentTaskID == nil)
     }
 
     @Test func speechStatusUsesShortAllowedPhrases() async throws {
