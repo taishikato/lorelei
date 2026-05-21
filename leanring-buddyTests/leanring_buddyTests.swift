@@ -205,6 +205,34 @@ struct leanring_buddyTests {
         #expect(result.summary == "Command cancelled.")
     }
 
+    @Test func workspaceExecutorDoesNotLaunchAfterPrelaunchCancellation() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let launchCounter = LaunchCounter()
+        let executor = WorkspaceCommandExecutor(
+            commandTimeoutSeconds: 5,
+            testCommandOverride: WorkspaceCommandTestHook(
+                executableURL: URL(fileURLWithPath: "/bin/sleep"),
+                arguments: ["1"],
+                prelaunchDelay: 0.3,
+                onLaunch: {
+                    launchCounter.increment()
+                }
+            )
+        )
+
+        let task = Task {
+            await executor.run(.gitStatus, workspacePath: directoryURL.path)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        task.cancel()
+
+        let result = await task.value
+
+        #expect(result.summary == "Command cancelled.")
+        #expect(launchCounter.value == 0)
+    }
+
     private func makeTemporaryGitRepository() throws -> URL {
         let repositoryURL = try makeTemporaryDirectory()
         try runGitTestCommand(["init"], in: repositoryURL)
@@ -228,5 +256,23 @@ struct leanring_buddyTests {
         try process.run()
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)
+    }
+}
+
+private final class LaunchCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.lock()
+        let value = count
+        lock.unlock()
+        return value
+    }
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }

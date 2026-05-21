@@ -97,7 +97,9 @@ struct WorkspaceCommandExecutor {
                 arguments: testCommandOverride.arguments,
                 currentDirectoryURL: URL(fileURLWithPath: workspacePath),
                 emptySuccessSummary: emptySuccessSummary,
-                timeoutSeconds: commandTimeoutSeconds
+                timeoutSeconds: commandTimeoutSeconds,
+                prelaunchDelay: testCommandOverride.prelaunchDelay,
+                onLaunch: testCommandOverride.onLaunch
             )
         }
 #endif
@@ -117,14 +119,18 @@ struct WorkspaceCommandExecutor {
         arguments: [String],
         currentDirectoryURL: URL,
         emptySuccessSummary: String,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        prelaunchDelay: TimeInterval = 0,
+        onLaunch: (@Sendable () -> Void)? = nil
     ) async -> WorkspaceCommandResult {
         let runner = WorkspaceProcessRunner()
         let execution = await runner.run(
             executableURL: executableURL,
             arguments: arguments,
             currentDirectoryURL: currentDirectoryURL,
-            timeoutSeconds: timeoutSeconds
+            timeoutSeconds: timeoutSeconds,
+            prelaunchDelay: prelaunchDelay,
+            onLaunch: onLaunch
         )
 
         switch execution.reason {
@@ -170,10 +176,19 @@ struct WorkspaceCommandExecutor {
 struct WorkspaceCommandTestHook: Sendable {
     let executableURL: URL
     let arguments: [String]
+    let prelaunchDelay: TimeInterval
+    let onLaunch: (@Sendable () -> Void)?
 
-    init(executableURL: URL, arguments: [String]) {
+    init(
+        executableURL: URL,
+        arguments: [String],
+        prelaunchDelay: TimeInterval = 0,
+        onLaunch: (@Sendable () -> Void)? = nil
+    ) {
         self.executableURL = executableURL
         self.arguments = arguments
+        self.prelaunchDelay = prelaunchDelay
+        self.onLaunch = onLaunch
     }
 }
 #endif
@@ -193,8 +208,11 @@ private struct WorkspaceProcessExecution: Sendable {
 
 private final class WorkspaceProcessRunner: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.taishi.lorelei.workspace-process-runner")
+    private let cancellationLock = NSLock()
     nonisolated(unsafe) private var process: Process?
     nonisolated(unsafe) private var didComplete = false
+    nonisolated(unsafe) private var didLaunchProcess = false
+    nonisolated(unsafe) private var cancellationRequested = false
     nonisolated(unsafe) private var continuation: CheckedContinuation<WorkspaceProcessExecution, Never>?
     nonisolated(unsafe) private var stdout: Pipe?
     nonisolated(unsafe) private var stderr: Pipe?
@@ -208,7 +226,9 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
         executableURL: URL,
         arguments: [String],
         currentDirectoryURL: URL,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        prelaunchDelay: TimeInterval = 0,
+        onLaunch: (@Sendable () -> Void)? = nil
     ) async -> WorkspaceProcessExecution {
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -218,7 +238,9 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
                         arguments: arguments,
                         currentDirectoryURL: currentDirectoryURL,
                         timeoutSeconds: timeoutSeconds,
-                        continuation: continuation
+                        continuation: continuation,
+                        prelaunchDelay: prelaunchDelay,
+                        onLaunch: onLaunch
                     )
                 }
             }
@@ -228,6 +250,7 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
     }
 
     nonisolated func cancel() {
+        setCancellationRequested()
         queue.async {
             self.finishOnQueue(reason: .cancelled)
         }
@@ -238,7 +261,9 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
         arguments: [String],
         currentDirectoryURL: URL,
         timeoutSeconds: TimeInterval,
-        continuation: CheckedContinuation<WorkspaceProcessExecution, Never>
+        continuation: CheckedContinuation<WorkspaceProcessExecution, Never>,
+        prelaunchDelay: TimeInterval = 0,
+        onLaunch: (@Sendable () -> Void)? = nil
     ) {
         guard !didComplete else {
             continuation.resume(returning: WorkspaceProcessExecution(reason: .cancelled, stdout: "", stderr: ""))
@@ -246,6 +271,10 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
         }
 
         self.continuation = continuation
+        guard !isCancellationRequested() else {
+            finishOnQueue(reason: .cancelled)
+            return
+        }
 
         let process = Process()
         process.executableURL = executableURL
@@ -285,8 +314,19 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
             }
         }
 
+        if prelaunchDelay > 0 {
+            Thread.sleep(forTimeInterval: prelaunchDelay)
+        }
+
+        guard !isCancellationRequested() else {
+            finishOnQueue(reason: .cancelled)
+            return
+        }
+
         do {
             try process.run()
+            didLaunchProcess = true
+            onLaunch?()
             queue.asyncAfter(deadline: .now() + timeoutSeconds, execute: timeoutWorkItem)
         } catch {
             finishOnQueue(reason: .failedToStart(error))
@@ -310,9 +350,7 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
 
         stdout?.fileHandleForReading.readabilityHandler = nil
         stderr?.fileHandleForReading.readabilityHandler = nil
-        if case .failedToStart = reason {
-            // Nothing was launched, so the pipe write ends may still be open locally.
-        } else {
+        if didLaunchProcess {
             stdoutCollector?.append(stdout?.fileHandleForReading.readDataToEndOfFile() ?? Data())
             stderrCollector?.append(stderr?.fileHandleForReading.readDataToEndOfFile() ?? Data())
         }
@@ -325,6 +363,7 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
         let continuation = continuation
         self.continuation = nil
         self.process = nil
+        self.didLaunchProcess = false
         self.stdout = nil
         self.stderr = nil
         self.stdoutCollector = nil
@@ -342,6 +381,19 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
             kill(process.processIdentifier, SIGKILL)
         }
         process.waitUntilExit()
+    }
+
+    nonisolated private func setCancellationRequested() {
+        cancellationLock.lock()
+        cancellationRequested = true
+        cancellationLock.unlock()
+    }
+
+    nonisolated private func isCancellationRequested() -> Bool {
+        cancellationLock.lock()
+        let value = cancellationRequested
+        cancellationLock.unlock()
+        return value
     }
 }
 
