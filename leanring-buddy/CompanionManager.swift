@@ -485,18 +485,27 @@ final class CompanionManager: ObservableObject {
 struct CodexScreenContextRequestRunner {
     private let fileManager: FileManager
     private let codexExecutor: CodexExecutor
-    private let captureScreens: @MainActor () async throws -> [CompanionScreenCapture]
+    private let captureCursorScreen: @MainActor () async throws -> CompanionScreenCapture?
+    private let isCancelled: () -> Bool
+    private let makeTemporaryImageURL: () -> URL
 
     init(
         fileManager: FileManager = .default,
         codexExecutor: CodexExecutor? = nil,
-        captureScreens: @escaping @MainActor () async throws -> [CompanionScreenCapture] = {
-            try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-        }
+        captureCursorScreen: @escaping @MainActor () async throws -> CompanionScreenCapture? = {
+            try await CompanionScreenCaptureUtility.captureCursorScreenAsJPEG()
+        },
+        isCancelled: @escaping () -> Bool = { Task.isCancelled },
+        makeTemporaryImageURL: (() -> URL)? = nil
     ) {
         self.fileManager = fileManager
         self.codexExecutor = codexExecutor ?? CodexExecutor()
-        self.captureScreens = captureScreens
+        self.captureCursorScreen = captureCursorScreen
+        self.isCancelled = isCancelled
+        self.makeTemporaryImageURL = makeTemporaryImageURL ?? {
+            fileManager.temporaryDirectory
+                .appendingPathComponent("lorelei-screen-\(UUID().uuidString).jpg")
+        }
     }
 
     func run(prompt: String, workspacePath: String?) async -> WorkspaceCommandResult {
@@ -511,14 +520,26 @@ struct CodexScreenContextRequestRunner {
         }
 
         do {
-            let captures = try await captureScreens()
-            guard let cursorFirstCapture = captures.first else {
+            let cursorScreenCapture = try await captureCursorScreen()
+            guard !isCancelled() else {
+                return WorkspaceCommandResult(summary: "Screen capture cancelled.")
+            }
+
+            guard let cursorScreenCapture else {
                 return WorkspaceCommandResult(summary: "Screen capture failed: no screen image was captured.")
             }
 
-            let imageURL = fileManager.temporaryDirectory
-                .appendingPathComponent("lorelei-screen-\(UUID().uuidString).jpg")
-            try cursorFirstCapture.imageData.write(to: imageURL, options: .atomic)
+            let imageURL = makeTemporaryImageURL()
+            guard !isCancelled() else {
+                return WorkspaceCommandResult(summary: "Screen capture cancelled.")
+            }
+
+            try cursorScreenCapture.imageData.write(to: imageURL, options: .atomic)
+
+            guard !isCancelled() else {
+                try? fileManager.removeItem(at: imageURL)
+                return WorkspaceCommandResult(summary: "Screen capture cancelled.")
+            }
 
             return await codexExecutor.run(
                 .readOnly,

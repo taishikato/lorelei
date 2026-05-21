@@ -7,6 +7,7 @@
 
 import Testing
 import Foundation
+import CoreGraphics
 @testable import Lorelei
 
 @MainActor
@@ -377,9 +378,9 @@ struct leanring_buddyTests {
         )
         let runner = CodexScreenContextRequestRunner(
             codexExecutor: executor,
-            captureScreens: {
+            captureCursorScreen: {
                 captureCounter.increment()
-                return []
+                return nil
             }
         )
 
@@ -387,6 +388,47 @@ struct leanring_buddyTests {
 
         #expect(result.summary == "Workspace path is not a valid directory: \(missingWorkspace.path)")
         #expect(captureCounter.value == 0)
+        #expect(recorder.arguments == nil)
+    }
+
+    @Test func screenContextRunnerCancelsBeforeWritingTempImage() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let captureCounter = LaunchCounter()
+        let tempURLCounter = LaunchCounter()
+        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+        let runner = CodexScreenContextRequestRunner(
+            codexExecutor: executor,
+            captureCursorScreen: {
+                captureCounter.increment()
+                return CompanionScreenCapture(
+                    imageData: Data([0xFF, 0xD8, 0xFF, 0xD9]),
+                    label: "user's screen (cursor is here)",
+                    isCursorScreen: true,
+                    displayWidthInPoints: 100,
+                    displayHeightInPoints: 100,
+                    displayFrame: .zero,
+                    screenshotWidthInPixels: 100,
+                    screenshotHeightInPixels: 100
+                )
+            },
+            isCancelled: { true },
+            makeTemporaryImageURL: {
+                tempURLCounter.increment()
+                return FileManager.default.temporaryDirectory
+                    .appendingPathComponent("should-not-be-created-\(UUID().uuidString).jpg")
+            }
+        )
+
+        let result = await runner.run(prompt: "look at my screen", workspacePath: directoryURL.path)
+
+        #expect(result.summary == "Screen capture cancelled.")
+        #expect(captureCounter.value == 1)
+        #expect(tempURLCounter.value == 0)
         #expect(recorder.arguments == nil)
     }
 
