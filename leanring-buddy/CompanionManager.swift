@@ -7,7 +7,6 @@
 //  exposes observable voice state for the panel UI.
 //
 
-import AVFoundation
 import Combine
 import Foundation
 import ScreenCaptureKit
@@ -40,26 +39,6 @@ final class CompanionManager: ObservableObject {
     /// Custom speech bubble text for the pointing animation. When set,
     /// BlueCursorView uses this instead of a random pointer phrase.
     @Published var detectedElementBubbleText: String?
-
-    // MARK: - Onboarding Video State (shared across all screen overlays)
-
-    @Published var onboardingVideoPlayer: AVPlayer?
-    @Published var showOnboardingVideo: Bool = false
-    @Published var onboardingVideoOpacity: Double = 0.0
-    private var onboardingVideoEndObserver: NSObjectProtocol?
-    private var onboardingDemoTimeObserver: Any?
-
-    // MARK: - Onboarding Prompt Bubble
-
-    /// Text streamed character-by-character on the cursor after the onboarding video ends.
-    @Published var onboardingPromptText: String = ""
-    @Published var onboardingPromptOpacity: Double = 0.0
-    @Published var showOnboardingPrompt: Bool = false
-
-    // MARK: - Onboarding Music
-
-    private var onboardingMusicPlayer: AVAudioPlayer?
-    private var onboardingMusicFadeTimer: Timer?
 
     let buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
@@ -145,18 +124,6 @@ final class CompanionManager: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "hasCompletedOnboarding") }
     }
 
-    /// Whether the user has submitted their email during onboarding.
-    @Published var hasSubmittedEmail: Bool = UserDefaults.standard.bool(forKey: "hasSubmittedEmail")
-
-    /// Stores that the user passed the email step without sending it anywhere.
-    func submitEmail(_ email: String) {
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedEmail.isEmpty else { return }
-
-        hasSubmittedEmail = true
-        UserDefaults.standard.set(true, forKey: "hasSubmittedEmail")
-    }
-
     func start() {
         refreshAllPermissions()
         print("🔑 Lorelei start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
@@ -195,57 +162,6 @@ final class CompanionManager: ObservableObject {
 
         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
-    }
-
-    private func stopOnboardingMusic() {
-        onboardingMusicFadeTimer?.invalidate()
-        onboardingMusicFadeTimer = nil
-        onboardingMusicPlayer?.stop()
-        onboardingMusicPlayer = nil
-    }
-
-    private func startOnboardingMusic() {
-        stopOnboardingMusic()
-        guard let musicURL = Bundle.main.url(forResource: "ff", withExtension: "mp3") else {
-            print("⚠️ Lorelei: ff.mp3 not found in bundle")
-            return
-        }
-
-        do {
-            let player = try AVAudioPlayer(contentsOf: musicURL)
-            player.volume = 0.3
-            player.play()
-            self.onboardingMusicPlayer = player
-
-            // After 1m 30s, fade the music out over 3s
-            onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: 90.0, repeats: false) { [weak self] _ in
-                self?.fadeOutOnboardingMusic()
-            }
-        } catch {
-            print("⚠️ Lorelei: Failed to play onboarding music: \(error)")
-        }
-    }
-
-    private func fadeOutOnboardingMusic() {
-        guard let player = onboardingMusicPlayer else { return }
-
-        let fadeSteps = 30
-        let fadeDuration: Double = 3.0
-        let stepInterval = fadeDuration / Double(fadeSteps)
-        let volumeDecrement = player.volume / Float(fadeSteps)
-        var stepsRemaining = fadeSteps
-
-        onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak self] timer in
-            stepsRemaining -= 1
-            player.volume -= volumeDecrement
-
-            if stepsRemaining <= 0 {
-                timer.invalidate()
-                player.stop()
-                self?.onboardingMusicPlayer = nil
-                self?.onboardingMusicFadeTimer = nil
-            }
-        }
     }
 
     func clearDetectedElementLocation() {
@@ -441,8 +357,6 @@ final class CompanionManager: ObservableObject {
         switch transition {
         case .pressed:
             guard !buddyDictationManager.isDictationInProgress else { return }
-            // Don't register push-to-talk while the onboarding video is playing
-            guard !showOnboardingVideo else { return }
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
@@ -462,18 +376,6 @@ final class CompanionManager: ObservableObject {
             currentResponseTask?.cancel()
             elevenLabsTTSClient.stopPlayback()
             clearDetectedElementLocation()
-
-            // Dismiss the onboarding prompt if it's showing
-            if showOnboardingPrompt {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    onboardingPromptOpacity = 0.0
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    self.showOnboardingPrompt = false
-                    self.onboardingPromptText = ""
-                }
-            }
-    
 
             ClickyAnalytics.trackPushToTalkStarted()
 
@@ -787,79 +689,6 @@ final class CompanionManager: ObservableObject {
             elementLabel: elementLabel,
             screenNumber: screenNumber
         )
-    }
-
-    // MARK: - Onboarding Video
-
-    /// Remote onboarding media is disabled for the Lorelei bootstrap.
-    func setupOnboardingVideo() {
-        tearDownOnboardingVideo()
-    }
-
-    func tearDownOnboardingVideo() {
-        showOnboardingVideo = false
-        if let timeObserver = onboardingDemoTimeObserver {
-            onboardingVideoPlayer?.removeTimeObserver(timeObserver)
-            onboardingDemoTimeObserver = nil
-        }
-        onboardingVideoPlayer?.pause()
-        onboardingVideoPlayer = nil
-        if let observer = onboardingVideoEndObserver {
-            NotificationCenter.default.removeObserver(observer)
-            onboardingVideoEndObserver = nil
-        }
-    }
-
-    private func startOnboardingPromptStream() {
-        let message = "press control + option and introduce yourself"
-        onboardingPromptText = ""
-        showOnboardingPrompt = true
-        onboardingPromptOpacity = 0.0
-
-        withAnimation(.easeIn(duration: 0.4)) {
-            onboardingPromptOpacity = 1.0
-        }
-
-        var currentIndex = 0
-        Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { timer in
-            guard currentIndex < message.count else {
-                timer.invalidate()
-                // Auto-dismiss after 10 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    guard self.showOnboardingPrompt else { return }
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        self.onboardingPromptOpacity = 0.0
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        self.showOnboardingPrompt = false
-                        self.onboardingPromptText = ""
-                    }
-                }
-                return
-            }
-            let index = message.index(message.startIndex, offsetBy: currentIndex)
-            self.onboardingPromptText.append(message[index])
-            currentIndex += 1
-        }
-    }
-
-    /// Gradually raises an AVPlayer's volume from its current level to the
-    /// target over the specified duration, creating a smooth audio fade-in.
-    private func fadeInVideoAudio(player: AVPlayer, targetVolume: Float, duration: Double) {
-        let steps = 20
-        let stepInterval = duration / Double(steps)
-        let volumeIncrement = (targetVolume - player.volume) / Float(steps)
-        var stepsRemaining = steps
-
-        Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { timer in
-            stepsRemaining -= 1
-            player.volume += volumeIncrement
-
-            if stepsRemaining <= 0 {
-                timer.invalidate()
-                player.volume = targetVolume
-            }
-        }
     }
 
 }
