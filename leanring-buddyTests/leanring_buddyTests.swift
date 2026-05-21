@@ -6,6 +6,7 @@
 //
 
 import Testing
+import Foundation
 @testable import Lorelei
 
 @MainActor
@@ -54,5 +55,16 @@ struct leanring_buddyTests {
         )
 
         #expect(shouldUseOpenAI)
+    }
+
+    @Test func workspaceSelectionPersistsOnePath() async throws {
+        let defaults = UserDefaults(suiteName: "WorkspaceSettingsStoreTests")!
+        defaults.removePersistentDomain(forName: "WorkspaceSettingsStoreTests")
+
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = "/Users/example/Project"
+
+        let reloadedStore = WorkspaceSettingsStore(defaults: defaults)
+        #expect(reloadedStore.selectedWorkspacePath == "/Users/example/Project")
     }
 }

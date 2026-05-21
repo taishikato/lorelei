@@ -28,6 +28,8 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var hasScreenRecordingPermission = false
     @Published private(set) var hasMicrophonePermission = false
     @Published private(set) var hasScreenContentPermission = false
+    @Published var latestResultSummary: String?
+    @Published var pendingConfirmationTitle: String?
 
     /// Screen location (global AppKit coords) of a detected UI element the
     /// buddy should fly to and point at. Parsed from Claude's response;
@@ -398,6 +400,8 @@ final class CompanionManager: ObservableObject {
 
             print("🗣️ Lorelei placeholder received transcript: \(transcript)")
             ClickyAnalytics.trackAIResponseReceived(response: "local placeholder")
+            latestResultSummary = "Transcript captured. Command execution is not connected yet."
+            pendingConfirmationTitle = nil
             voiceState = .idle
             currentResponseTask = nil
             scheduleTransientHideIfNeeded()

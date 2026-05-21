@@ -2,69 +2,47 @@
 //  CompanionPanelView.swift
 //  leanring-buddy
 //
-//  The SwiftUI content hosted inside the menu bar panel. Shows the companion
-//  voice status, push-to-talk shortcut, and quick settings. Designed to feel
-//  like Loom's recording panel — dark, rounded, minimal, and special.
+//  Compact menu bar control panel for Lorelei.
 //
 
+import AppKit
 import AVFoundation
 import SwiftUI
 
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
+    @StateObject private var workspaceStore: WorkspaceSettingsStore
+
+    @MainActor
+    init(companionManager: CompanionManager) {
+        self.companionManager = companionManager
+        _workspaceStore = StateObject(wrappedValue: WorkspaceSettingsStore())
+    }
+
+    @MainActor
+    init(companionManager: CompanionManager, workspaceStore: WorkspaceSettingsStore) {
+        self.companionManager = companionManager
+        _workspaceStore = StateObject(wrappedValue: workspaceStore)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader
-            Divider()
-                .background(DS.Colors.borderSubtle)
-                .padding(.horizontal, 16)
-
-            permissionsCopySection
-                .padding(.top, 16)
-                .padding(.horizontal, 16)
-
-            if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-                Spacer()
-                    .frame(height: 12)
-
-                modelPickerRow
-                    .padding(.horizontal, 16)
-            }
-
-            if !companionManager.allPermissionsGranted {
-                Spacer()
-                    .frame(height: 16)
-
-                settingsSection
-                    .padding(.horizontal, 16)
-            }
-
-            if !companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-                Spacer()
-                    .frame(height: 16)
-
-                startButton
-                    .padding(.horizontal, 16)
-            }
-
-            // Show Clicky toggle — hidden for now
-            // if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            //     Spacer()
-            //         .frame(height: 16)
-            //
-            //     showClickyCursorToggleRow
-            //         .padding(.horizontal, 16)
-            // }
-
-            Spacer()
-                .frame(height: 12)
+            header
 
             Divider()
                 .background(DS.Colors.borderSubtle)
-                .padding(.horizontal, 16)
 
-            footerSection
+            VStack(alignment: .leading, spacing: 16) {
+                workspaceSection
+                voiceSection
+                runSection
+            }
+            .padding(16)
+
+            Divider()
+                .background(DS.Colors.borderSubtle)
+
+            footer
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
         }
@@ -72,39 +50,24 @@ struct CompanionPanelView: View {
         .background(panelBackground)
     }
 
-    // MARK: - Header
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text("Lorelei")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(DS.Colors.textPrimary)
 
-    private var panelHeader: some View {
-        HStack {
-            HStack(spacing: 8) {
-                // Animated status dot
-                Circle()
-                    .fill(statusDotColor)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: statusDotColor.opacity(0.6), radius: 4)
-
-                Text("Lorelei")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(DS.Colors.textPrimary)
-            }
+            statusChip
 
             Spacer()
 
-            Text(statusText)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
-
-            Button(action: {
+            Button {
                 NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-            }) {
+            } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(DS.Colors.textTertiary)
-                    .frame(width: 20, height: 20)
-                    .background(
-                        Circle()
-                            .fill(Color.white.opacity(0.08))
-                    )
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.white.opacity(0.08)))
             }
             .buttonStyle(.plain)
             .pointerCursor()
@@ -113,499 +76,259 @@ struct CompanionPanelView: View {
         .padding(.vertical, 14)
     }
 
-    // MARK: - Permissions Copy
+    private var statusChip: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(statusDotColor)
+                .frame(width: 6, height: 6)
 
-    @ViewBuilder
-    private var permissionsCopySection: some View {
-        if companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            Text("Hold Control+Option to talk.")
-                .font(.system(size: 12, weight: .medium))
+            Text(statusText)
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(DS.Colors.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if companionManager.allPermissionsGranted {
-            Text("You're all set. Hit Start to meet Lorelei.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(DS.Colors.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else if companionManager.hasCompletedOnboarding {
-            // Permissions were revoked after onboarding — tell user to re-grant
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Permissions needed")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(DS.Colors.textSecondary)
-
-                Text("Some permissions were revoked. Grant all four below to keep using Lorelei.")
-                    .font(.system(size: 11))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Hi, I'm Lorelei.")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(DS.Colors.textSecondary)
-
-                Text("A side project I made for fun to help me learn stuff as I use my computer.")
-                    .font(.system(size: 11))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text("Nothing runs in the background. Lorelei will only take a screenshot when you press the hot key.")
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(red: 0.9, green: 0.4, blue: 0.4))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(DS.Colors.surface2)
+        )
+        .overlay(
+            Capsule()
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
+        )
     }
 
-    // MARK: - Start Button
-
-    @ViewBuilder
-    private var startButton: some View {
-        if !companionManager.hasCompletedOnboarding && companionManager.allPermissionsGranted {
-            Button(action: {
-                companionManager.triggerOnboarding()
-            }) {
-                Text("Start")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(DS.Colors.textOnAccent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+    private var workspaceSection: some View {
+        section("Workspace") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(workspaceStore.selectedWorkspacePath ?? "No workspace selected")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(workspaceStore.selectedWorkspacePath == nil ? DS.Colors.textTertiary : DS.Colors.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
                     .background(
-                        RoundedRectangle(cornerRadius: DS.CornerRadius.large, style: .continuous)
-                            .fill(DS.Colors.accent)
+                        RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                            .fill(DS.Colors.surface1)
                     )
-            }
-            .buttonStyle(.plain)
-            .pointerCursor()
-        }
-    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                            .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
+                    )
 
-    // MARK: - Permissions
-
-    private var settingsSection: some View {
-        VStack(spacing: 2) {
-            Text("PERMISSIONS")
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundColor(DS.Colors.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 6)
-
-            microphonePermissionRow
-
-            accessibilityPermissionRow
-
-            screenRecordingPermissionRow
-
-            if companionManager.hasScreenRecordingPermission {
-                screenContentPermissionRow
-            }
-
-        }
-    }
-
-    private var accessibilityPermissionRow: some View {
-        let isGranted = companionManager.hasAccessibilityPermission
-        return HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "hand.raised")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
-                    .frame(width: 16)
-
-                Text("Accessibility")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            if isGranted {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(DS.Colors.success)
-                        .frame(width: 6, height: 6)
-                    Text("Granted")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(DS.Colors.success)
-                }
-            } else {
-                HStack(spacing: 6) {
-                    Button(action: {
-                        // Triggers the system accessibility prompt (AXIsProcessTrustedWithOptions)
-                        // on first attempt, then opens System Settings on subsequent attempts.
-                        WindowPositionManager.requestAccessibilityPermission()
-                    }) {
-                        Text("Grant")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(DS.Colors.textOnAccent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                Capsule()
-                                    .fill(DS.Colors.accent)
-                            )
+                HStack(spacing: 8) {
+                    Button("Choose") {
+                        chooseWorkspace()
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PanelButtonStyle(kind: .primary))
                     .pointerCursor()
 
-                    Button(action: {
-                        // Reveals the app in Finder so the user can drag it into
-                        // the Accessibility list if it doesn't appear automatically
-                        // (common with unsigned dev builds).
-                        WindowPositionManager.revealAppInFinder()
-                        WindowPositionManager.openAccessibilitySettings()
-                    }) {
-                        Text("Find App")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(DS.Colors.textSecondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                Capsule()
-                                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.8)
-                            )
+                    Button("Open") {
+                        openWorkspaceInFinder()
                     }
-                    .buttonStyle(.plain)
-                    .pointerCursor()
+                    .buttonStyle(PanelButtonStyle(kind: .secondary))
+                    .disabled(workspaceStore.selectedWorkspacePath == nil)
+                    .pointerCursor(isEnabled: workspaceStore.selectedWorkspacePath != nil)
                 }
             }
         }
-        .padding(.vertical, 6)
     }
 
-    private var screenRecordingPermissionRow: some View {
-        let isGranted = companionManager.hasScreenRecordingPermission
-        return HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "rectangle.dashed.badge.record")
+    private var voiceSection: some View {
+        section("Voice") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Hold Control+Option to talk.")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
-                    .frame(width: 16)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Screen Recording")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(DS.Colors.textSecondary)
-
-                    Text(isGranted
-                         ? "Only takes a screenshot when you use the hotkey"
-                         : "Quit and reopen after granting")
-                        .font(.system(size: 10))
-                        .foregroundColor(DS.Colors.textTertiary)
-                }
-            }
-
-            Spacer()
-
-            if isGranted {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(DS.Colors.success)
-                        .frame(width: 6, height: 6)
-                    Text("Granted")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(DS.Colors.success)
-                }
-            } else {
-                Button(action: {
-                    // Triggers the native macOS screen recording prompt on first
-                    // attempt (auto-adds app to the list), then opens System Settings
-                    // on subsequent attempts.
-                    WindowPositionManager.requestScreenRecordingPermission()
-                }) {
-                    Text("Grant")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(DS.Colors.textOnAccent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(DS.Colors.accent)
-                        )
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var screenContentPermissionRow: some View {
-        let isGranted = companionManager.hasScreenContentPermission
-        return HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "eye")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
-                    .frame(width: 16)
-
-                Text("Screen Content")
-                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(DS.Colors.textSecondary)
-            }
 
-            Spacer()
+                VStack(spacing: 2) {
+                    microphonePermissionRow
+                    accessibilityPermissionRow
+                    screenRecordingPermissionRow
 
-            if isGranted {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(DS.Colors.success)
-                        .frame(width: 6, height: 6)
-                    Text("Granted")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(DS.Colors.success)
-                }
-            } else {
-                Button(action: {
-                    companionManager.requestScreenContentPermission()
-                }) {
-                    Text("Grant")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(DS.Colors.textOnAccent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(DS.Colors.accent)
-                        )
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    private var microphonePermissionRow: some View {
-        let isGranted = companionManager.hasMicrophonePermission
-        return HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "mic")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
-                    .frame(width: 16)
-
-                Text("Microphone")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            if isGranted {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(DS.Colors.success)
-                        .frame(width: 6, height: 6)
-                    Text("Granted")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(DS.Colors.success)
-                }
-            } else {
-                Button(action: {
-                    // Triggers the native macOS microphone permission dialog on
-                    // first attempt. If already denied, opens System Settings.
-                    let status = AVCaptureDevice.authorizationStatus(for: .audio)
-                    if status == .notDetermined {
-                        AVCaptureDevice.requestAccess(for: .audio) { _ in }
-                    } else {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                            NSWorkspace.shared.open(url)
-                        }
+                    if companionManager.hasScreenRecordingPermission {
+                        screenContentPermissionRow
                     }
-                }) {
-                    Text("Grant")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(DS.Colors.textOnAccent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(DS.Colors.accent)
-                        )
                 }
-                .buttonStyle(.plain)
-                .pointerCursor()
-            }
-        }
-        .padding(.vertical, 6)
-    }
 
-    private func permissionRow(
-        label: String,
-        iconName: String,
-        isGranted: Bool,
-        settingsURL: String
-    ) -> some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: iconName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
-                    .frame(width: 16)
-
-                Text(label)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            if isGranted {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(DS.Colors.success)
-                        .frame(width: 6, height: 6)
-                    Text("Granted")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(DS.Colors.success)
-                }
-            } else {
-                Button(action: {
-                    if let url = URL(string: settingsURL) {
-                        NSWorkspace.shared.open(url)
-                    }
-                }) {
-                    Text("Grant")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(DS.Colors.textOnAccent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(DS.Colors.accent)
-                        )
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-
-
-    // MARK: - Show Clicky Cursor Toggle
-
-    private var showClickyCursorToggleRow: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "cursorarrow")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .frame(width: 16)
-
-                Text("Show Lorelei")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            Toggle("", isOn: Binding(
-                get: { companionManager.isClickyCursorEnabled },
-                set: { companionManager.setClickyCursorEnabled($0) }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .tint(DS.Colors.accent)
-            .scaleEffect(0.8)
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var speechToTextProviderRow: some View {
-        HStack {
-            HStack(spacing: 8) {
-                Image(systemName: "mic.badge.waveform")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .frame(width: 16)
-
-                Text("Speech to Text")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            Text(companionManager.buddyDictationManager.transcriptionProviderDisplayName)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
-        }
-        .padding(.vertical, 4)
-    }
-
-    // MARK: - Model Picker
-
-    private var modelPickerRow: some View {
-        HStack {
-            Text("Model")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(DS.Colors.textSecondary)
-
-            Spacer()
-
-            HStack(spacing: 0) {
-                modelOptionButton(label: "Sonnet", modelID: "claude-sonnet-4-6")
-                modelOptionButton(label: "Opus", modelID: "claude-opus-4-6")
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
-            )
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func modelOptionButton(label: String, modelID: String) -> some View {
-        let isSelected = companionManager.selectedModel == modelID
-        return Button(action: {
-            companionManager.setSelectedModel(modelID)
-        }) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
+                fieldBlock(
+                    title: "Last Transcript",
+                    value: companionManager.lastTranscript ?? "No transcript yet"
                 )
+            }
         }
-        .buttonStyle(.plain)
-        .pointerCursor()
     }
 
-    // MARK: - Footer
+    private var runSection: some View {
+        section("Run") {
+            VStack(alignment: .leading, spacing: 10) {
+                fieldBlock(
+                    title: "Latest Result",
+                    value: companionManager.latestResultSummary ?? "No result yet"
+                )
 
-    private var footerSection: some View {
+                fieldBlock(
+                    title: "Pending Confirmation",
+                    value: companionManager.pendingConfirmationTitle ?? "No pending confirmation"
+                )
+            }
+        }
+    }
+
+    private var footer: some View {
         HStack {
-            Button(action: {
+            Spacer()
+
+            Button {
                 NSApp.terminate(nil)
-            }) {
+            } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "power")
                         .font(.system(size: 11, weight: .medium))
-                    Text("Quit Lorelei")
+                    Text("Quit")
                         .font(.system(size: 12, weight: .medium))
                 }
                 .foregroundColor(DS.Colors.textTertiary)
             }
             .buttonStyle(.plain)
             .pointerCursor()
-
         }
     }
 
-    // MARK: - Visual Helpers
+    private var microphonePermissionRow: some View {
+        permissionRow(
+            title: "Microphone",
+            iconName: "mic",
+            isGranted: companionManager.hasMicrophonePermission
+        ) {
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            if status == .notDetermined {
+                AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    private var accessibilityPermissionRow: some View {
+        permissionRow(
+            title: "Accessibility",
+            iconName: "hand.raised",
+            isGranted: companionManager.hasAccessibilityPermission
+        ) {
+            WindowPositionManager.requestAccessibilityPermission()
+        }
+    }
+
+    private var screenRecordingPermissionRow: some View {
+        permissionRow(
+            title: "Screen Recording",
+            iconName: "rectangle.dashed.badge.record",
+            isGranted: companionManager.hasScreenRecordingPermission
+        ) {
+            WindowPositionManager.requestScreenRecordingPermission()
+        }
+    }
+
+    private var screenContentPermissionRow: some View {
+        permissionRow(
+            title: "Screen Content",
+            iconName: "eye",
+            isGranted: companionManager.hasScreenContentPermission
+        ) {
+            companionManager.requestScreenContentPermission()
+        }
+    }
+
+    private func section<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(DS.Colors.textTertiary)
+
+            content()
+        }
+    }
+
+    private func fieldBlock(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(DS.Colors.textTertiary)
+
+            Text(value)
+                .font(.system(size: 12))
+                .foregroundColor(DS.Colors.textSecondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .fill(DS.Colors.surface1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
+        )
+    }
+
+    private func permissionRow(
+        title: String,
+        iconName: String,
+        isGranted: Bool,
+        grantAction: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
+                .frame(width: 16)
+
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(DS.Colors.textSecondary)
+
+            Spacer()
+
+            if isGranted {
+                Text("Granted")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.success)
+            } else {
+                Button("Grant") {
+                    grantAction()
+                }
+                .buttonStyle(PanelButtonStyle(kind: .small))
+                .pointerCursor()
+            }
+        }
+        .padding(.vertical, 5)
+    }
+
+    private func chooseWorkspace() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Workspace"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+
+        if panel.runModal() == .OK {
+            workspaceStore.selectedWorkspacePath = panel.url?.path
+        }
+    }
+
+    private func openWorkspaceInFinder() {
+        guard let selectedWorkspacePath = workspaceStore.selectedWorkspacePath else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: selectedWorkspacePath, isDirectory: true))
+    }
 
     private var panelBackground: some View {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -615,12 +338,9 @@ struct CompanionPanelView: View {
     }
 
     private var statusDotColor: Color {
-        if !companionManager.isOverlayVisible {
-            return DS.Colors.textTertiary
-        }
         switch companionManager.voiceState {
         case .idle:
-            return DS.Colors.success
+            return companionManager.allPermissionsGranted ? DS.Colors.success : DS.Colors.warning
         case .listening:
             return DS.Colors.blue400
         case .processing, .responding:
@@ -629,15 +349,11 @@ struct CompanionPanelView: View {
     }
 
     private var statusText: String {
-        if !companionManager.hasCompletedOnboarding || !companionManager.allPermissionsGranted {
-            return "Setup"
-        }
-        if !companionManager.isOverlayVisible {
-            return "Ready"
-        }
+        guard companionManager.allPermissionsGranted else { return "Setup" }
+
         switch companionManager.voiceState {
         case .idle:
-            return "Active"
+            return "Ready"
         case .listening:
             return "Listening"
         case .processing:
@@ -646,5 +362,54 @@ struct CompanionPanelView: View {
             return "Responding"
         }
     }
+}
 
+private struct PanelButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    enum Kind {
+        case primary
+        case secondary
+        case small
+    }
+
+    let kind: Kind
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: kind == .small ? 11 : 12, weight: .semibold))
+            .foregroundColor(foregroundColor)
+            .padding(.horizontal, kind == .small ? 10 : 12)
+            .padding(.vertical, kind == .small ? 4 : 7)
+            .frame(maxWidth: kind == .small ? nil : .infinity)
+            .background(background(configuration: configuration))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.82 : 1) : 0.45)
+    }
+
+    private var foregroundColor: Color {
+        switch kind {
+        case .primary, .small:
+            return DS.Colors.textOnAccent
+        case .secondary:
+            return DS.Colors.textSecondary
+        }
+    }
+
+    private func background(configuration: Configuration) -> some View {
+        RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+            .fill(fillColor)
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                    .stroke(kind == .secondary ? DS.Colors.borderSubtle : Color.clear, lineWidth: 0.7)
+            )
+    }
+
+    private var fillColor: Color {
+        switch kind {
+        case .primary, .small:
+            return DS.Colors.accent
+        case .secondary:
+            return DS.Colors.surface2
+        }
+    }
 }
