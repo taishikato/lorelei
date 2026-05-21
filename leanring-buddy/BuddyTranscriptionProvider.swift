@@ -41,6 +41,17 @@ enum BuddyTranscriptionProviderFactory {
         return provider
     }
 
+    static func shouldUseOpenAIProvider(
+        preferredProviderRawValue: String?,
+        openAIIsConfigured: Bool
+    ) -> Bool {
+        let preferredProvider = preferredProviderRawValue
+            .map { $0.lowercased() }
+            .flatMap(PreferredProvider.init(rawValue:))
+
+        return preferredProvider == .openAI && openAIIsConfigured
+    }
+
     private static func resolveProvider() -> any BuddyTranscriptionProvider {
         let preferredProviderRawValue = AppBundleConfiguration
             .stringValue(forKey: "VoiceTranscriptionProvider")?
@@ -53,18 +64,17 @@ enum BuddyTranscriptionProviderFactory {
             return AppleSpeechTranscriptionProvider()
         }
 
-        if preferredProvider == .openAI {
-            if openAIProvider.isConfigured {
-                return openAIProvider
-            }
-
+        if preferredProvider == .openAI && !openAIProvider.isConfigured {
             print("⚠️ Transcription: OpenAI preferred but not configured, falling back")
 
             print("⚠️ Transcription: using Apple Speech as fallback")
             return AppleSpeechTranscriptionProvider()
         }
 
-        if openAIProvider.isConfigured {
+        if shouldUseOpenAIProvider(
+            preferredProviderRawValue: preferredProviderRawValue,
+            openAIIsConfigured: openAIProvider.isConfigured
+        ) {
             return openAIProvider
         }
 

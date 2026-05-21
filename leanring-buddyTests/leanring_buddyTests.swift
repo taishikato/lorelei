@@ -38,4 +38,21 @@ struct leanring_buddyTests {
         #expect(shouldTreatPermissionAsGranted)
     }
 
+    @Test func openAITranscriptionIsNotDefaultWhenConfigured() async throws {
+        let shouldUseOpenAI = BuddyTranscriptionProviderFactory.shouldUseOpenAIProvider(
+            preferredProviderRawValue: nil,
+            openAIIsConfigured: true
+        )
+
+        #expect(!shouldUseOpenAI)
+    }
+
+    @Test func openAITranscriptionCanBeExplicitlySelectedWhenConfigured() async throws {
+        let shouldUseOpenAI = BuddyTranscriptionProviderFactory.shouldUseOpenAIProvider(
+            preferredProviderRawValue: "openai",
+            openAIIsConfigured: true
+        )
+
+        #expect(shouldUseOpenAI)
+    }
 }
