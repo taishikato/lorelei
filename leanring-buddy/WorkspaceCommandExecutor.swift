@@ -15,11 +15,26 @@ struct WorkspaceCommandResult: Equatable, Sendable {
 struct WorkspaceCommandExecutor {
     private let fileManager: FileManager
     private let commandTimeoutSeconds: TimeInterval
+#if DEBUG
+    private let testCommandOverride: WorkspaceCommandTestHook?
+#endif
 
+#if DEBUG
+    init(
+        fileManager: FileManager = .default,
+        commandTimeoutSeconds: TimeInterval = 10,
+        testCommandOverride: WorkspaceCommandTestHook? = nil
+    ) {
+        self.fileManager = fileManager
+        self.commandTimeoutSeconds = commandTimeoutSeconds
+        self.testCommandOverride = testCommandOverride
+    }
+#else
     init(fileManager: FileManager = .default, commandTimeoutSeconds: TimeInterval = 10) {
         self.fileManager = fileManager
         self.commandTimeoutSeconds = commandTimeoutSeconds
     }
+#endif
 
     func run(_ action: LoreleiCommandAction, workspacePath: String?) async -> WorkspaceCommandResult {
         guard action.requiresWorkspace else {
@@ -74,6 +89,18 @@ struct WorkspaceCommandExecutor {
         guard commandTimeoutSeconds > 0 else {
             return WorkspaceCommandResult(summary: "Command timed out.")
         }
+
+#if DEBUG
+        if let testCommandOverride {
+            return await Self.runProcess(
+                executableURL: testCommandOverride.executableURL,
+                arguments: testCommandOverride.arguments,
+                currentDirectoryURL: URL(fileURLWithPath: workspacePath),
+                emptySuccessSummary: emptySuccessSummary,
+                timeoutSeconds: commandTimeoutSeconds
+            )
+        }
+#endif
 
         let invocation = Self.gitInvocation(arguments: arguments)
         return await Self.runProcess(
@@ -139,6 +166,18 @@ struct WorkspaceCommandExecutor {
     }
 }
 
+#if DEBUG
+struct WorkspaceCommandTestHook: Sendable {
+    let executableURL: URL
+    let arguments: [String]
+
+    init(executableURL: URL, arguments: [String]) {
+        self.executableURL = executableURL
+        self.arguments = arguments
+    }
+}
+#endif
+
 private struct WorkspaceProcessExecution: Sendable {
     enum Reason: Sendable {
         case exited(Int32)
@@ -153,11 +192,15 @@ private struct WorkspaceProcessExecution: Sendable {
 }
 
 private final class WorkspaceProcessRunner: @unchecked Sendable {
-    private let lock = NSLock()
     private let queue = DispatchQueue(label: "dev.taishi.lorelei.workspace-process-runner")
     nonisolated(unsafe) private var process: Process?
     nonisolated(unsafe) private var didComplete = false
-    nonisolated(unsafe) private var completion: ((WorkspaceProcessExecution.Reason) -> Void)?
+    nonisolated(unsafe) private var continuation: CheckedContinuation<WorkspaceProcessExecution, Never>?
+    nonisolated(unsafe) private var stdout: Pipe?
+    nonisolated(unsafe) private var stderr: Pipe?
+    nonisolated(unsafe) private var stdoutCollector: WorkspaceOutputCollector?
+    nonisolated(unsafe) private var stderrCollector: WorkspaceOutputCollector?
+    nonisolated(unsafe) private var timeoutWorkItem: DispatchWorkItem?
 
     nonisolated init() {}
 
@@ -185,23 +228,24 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
     }
 
     nonisolated func cancel() {
-        finish(reason: .cancelled)
+        queue.async {
+            self.finishOnQueue(reason: .cancelled)
+        }
     }
 
-    nonisolated private func start(
+    private func start(
         executableURL: URL,
         arguments: [String],
         currentDirectoryURL: URL,
         timeoutSeconds: TimeInterval,
         continuation: CheckedContinuation<WorkspaceProcessExecution, Never>
     ) {
-        lock.lock()
         guard !didComplete else {
-            lock.unlock()
             continuation.resume(returning: WorkspaceProcessExecution(reason: .cancelled, stdout: "", stderr: ""))
             return
         }
-        lock.unlock()
+
+        self.continuation = continuation
 
         let process = Process()
         process.executableURL = executableURL
@@ -215,6 +259,11 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
 
         process.standardOutput = stdout
         process.standardError = stderr
+        self.process = process
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stdoutCollector = stdoutCollector
+        self.stderrCollector = stderrCollector
 
         stdout.fileHandleForReading.readabilityHandler = { handle in
             stdoutCollector.append(handle.availableData)
@@ -224,93 +273,68 @@ private final class WorkspaceProcessRunner: @unchecked Sendable {
         }
 
         let timeoutWorkItem = DispatchWorkItem { [weak self] in
-            self?.finish(reason: .timedOut)
+            self?.queue.async {
+                self?.finishOnQueue(reason: .timedOut)
+            }
         }
+        self.timeoutWorkItem = timeoutWorkItem
 
         process.terminationHandler = { [weak self] terminatedProcess in
-            self?.finish(reason: .exited(terminatedProcess.terminationStatus))
-        }
-
-        let completion: (WorkspaceProcessExecution.Reason) -> Void = { [weak self] reason in
-            timeoutWorkItem.cancel()
-
-            if case .timedOut = reason {
-                self?.terminateRunningProcess()
-            } else if case .cancelled = reason {
-                self?.terminateRunningProcess()
+            self?.queue.async {
+                self?.finishOnQueue(reason: .exited(terminatedProcess.terminationStatus))
             }
-
-            stdout.fileHandleForReading.readabilityHandler = nil
-            stderr.fileHandleForReading.readabilityHandler = nil
-            if case .failedToStart = reason {
-                // Nothing was launched, so the pipe write ends may still be open locally.
-            } else {
-                stdoutCollector.append(stdout.fileHandleForReading.readDataToEndOfFile())
-                stderrCollector.append(stderr.fileHandleForReading.readDataToEndOfFile())
-            }
-
-            continuation.resume(returning: WorkspaceProcessExecution(
-                reason: reason,
-                stdout: stdoutCollector.stringValue(),
-                stderr: stderrCollector.stringValue()
-            ))
         }
-
-        lock.lock()
-        self.process = process
-        self.completion = completion
-        lock.unlock()
 
         do {
             try process.run()
             queue.asyncAfter(deadline: .now() + timeoutSeconds, execute: timeoutWorkItem)
         } catch {
-            finish(reason: .failedToStart(error))
+            finishOnQueue(reason: .failedToStart(error))
         }
     }
 
-    nonisolated private func finish(
-        reason: WorkspaceProcessExecution.Reason,
-        stdoutCollector: WorkspaceOutputCollector? = nil,
-        stderrCollector: WorkspaceOutputCollector? = nil,
-        continuation: CheckedContinuation<WorkspaceProcessExecution, Never>? = nil,
-        timeoutWorkItem: DispatchWorkItem? = nil
-    ) {
-        let completionToCall: ((WorkspaceProcessExecution.Reason) -> Void)?
-
-        lock.lock()
+    private func finishOnQueue(reason: WorkspaceProcessExecution.Reason) {
         guard !didComplete else {
-            lock.unlock()
             return
         }
         didComplete = true
-        completionToCall = completion
-        lock.unlock()
-
-        if let completionToCall {
-            completionToCall(reason)
-            return
-        }
 
         timeoutWorkItem?.cancel()
+        timeoutWorkItem = nil
+
         if case .timedOut = reason {
-            terminateRunningProcess()
+            terminateProcessOnQueue()
         } else if case .cancelled = reason {
-            terminateRunningProcess()
+            terminateProcessOnQueue()
         }
-        continuation?.resume(returning: WorkspaceProcessExecution(
+
+        stdout?.fileHandleForReading.readabilityHandler = nil
+        stderr?.fileHandleForReading.readabilityHandler = nil
+        if case .failedToStart = reason {
+            // Nothing was launched, so the pipe write ends may still be open locally.
+        } else {
+            stdoutCollector?.append(stdout?.fileHandleForReading.readDataToEndOfFile() ?? Data())
+            stderrCollector?.append(stderr?.fileHandleForReading.readDataToEndOfFile() ?? Data())
+        }
+
+        let execution = WorkspaceProcessExecution(
             reason: reason,
             stdout: stdoutCollector?.stringValue() ?? "",
             stderr: stderrCollector?.stringValue() ?? ""
-        ))
+        )
+        let continuation = continuation
+        self.continuation = nil
+        self.process = nil
+        self.stdout = nil
+        self.stderr = nil
+        self.stdoutCollector = nil
+        self.stderrCollector = nil
+
+        continuation?.resume(returning: execution)
     }
 
-    nonisolated private func terminateRunningProcess() {
-        lock.lock()
+    private func terminateProcessOnQueue() {
         let process = process
-        self.process = nil
-        lock.unlock()
-
         guard let process, process.isRunning else { return }
         process.terminate()
         Thread.sleep(forTimeInterval: 0.2)

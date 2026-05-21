@@ -167,22 +167,55 @@ struct leanring_buddyTests {
         #expect(result.summary.localizedCaseInsensitiveContains("not a git repository"))
     }
 
-    @Test func workspaceExecutorReportsImmediateTimeoutWithoutRunningProcess() async throws {
-        let repositoryURL = try makeTemporaryGitRepository()
-        defer { try? FileManager.default.removeItem(at: repositoryURL) }
-        let executor = WorkspaceCommandExecutor(commandTimeoutSeconds: 0)
+    @Test func workspaceExecutorReportsRunningCommandTimeout() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let executor = WorkspaceCommandExecutor(
+            commandTimeoutSeconds: 0.1,
+            testCommandOverride: WorkspaceCommandTestHook(
+                executableURL: URL(fileURLWithPath: "/bin/sleep"),
+                arguments: ["5"]
+            )
+        )
 
-        let result = await executor.run(.gitStatus, workspacePath: repositoryURL.path)
+        let result = await executor.run(.gitStatus, workspacePath: directoryURL.path)
 
         #expect(result.summary == "Command timed out.")
     }
 
+    @Test func workspaceExecutorCancelsRunningCommand() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let executor = WorkspaceCommandExecutor(
+            commandTimeoutSeconds: 5,
+            testCommandOverride: WorkspaceCommandTestHook(
+                executableURL: URL(fileURLWithPath: "/bin/sleep"),
+                arguments: ["5"]
+            )
+        )
+
+        let task = Task {
+            await executor.run(.gitStatus, workspacePath: directoryURL.path)
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+
+        let result = await task.value
+
+        #expect(result.summary == "Command cancelled.")
+    }
+
     private func makeTemporaryGitRepository() throws -> URL {
-        let repositoryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: repositoryURL, withIntermediateDirectories: true)
+        let repositoryURL = try makeTemporaryDirectory()
         try runGitTestCommand(["init"], in: repositoryURL)
         return repositoryURL
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return directoryURL
     }
 
     private func runGitTestCommand(_ arguments: [String], in directoryURL: URL) throws {
