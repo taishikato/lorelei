@@ -83,8 +83,8 @@ final class CompanionManager: ObservableObject {
     let buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
+    let workspaceSettingsStore: WorkspaceSettingsStore
     private let commandRouter = LoreleiCommandRouter()
-    private let workspaceSettingsStore = WorkspaceSettingsStore()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexExecutor = CodexExecutor()
     private let speechOutput: SpeechOutputing
@@ -116,8 +116,12 @@ final class CompanionManager: ObservableObject {
     /// The Claude model used for voice responses. Persisted to UserDefaults.
     @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
 
-    init(speechOutput: SpeechOutputing? = nil) {
+    init(
+        speechOutput: SpeechOutputing? = nil,
+        workspaceSettingsStore: WorkspaceSettingsStore? = nil
+    ) {
         self.speechOutput = speechOutput ?? SpeechOutputClient()
+        self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
     }
 
     func setSelectedModel(_ model: String) {

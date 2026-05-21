@@ -90,7 +90,7 @@ struct WorkspaceCommandExecutor {
         case .gitDiff:
             return await runGitDiff(workspacePath: workspacePath)
         case .runTests:
-            return WorkspaceCommandResult(summary: "No test command configured")
+            return WorkspaceCommandResult(summary: "No test command configured.", status: .failed)
         case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexComputerUse:
             return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
         case .unsupported(let message):
@@ -389,8 +389,8 @@ final class WorkspaceProcessRunner: @unchecked Sendable {
         stdout?.fileHandleForReading.readabilityHandler = nil
         stderr?.fileHandleForReading.readabilityHandler = nil
         if didLaunchProcess {
-            stdoutCollector?.append(stdout?.fileHandleForReading.readDataToEndOfFile() ?? Data())
-            stderrCollector?.append(stderr?.fileHandleForReading.readDataToEndOfFile() ?? Data())
+            stdoutCollector?.append(Self.readAvailableDataWithoutBlocking(from: stdout?.fileHandleForReading) ?? Data())
+            stderrCollector?.append(Self.readAvailableDataWithoutBlocking(from: stderr?.fileHandleForReading) ?? Data())
         }
 
         let execution = WorkspaceProcessExecution(
@@ -413,12 +413,84 @@ final class WorkspaceProcessRunner: @unchecked Sendable {
     private func terminateProcessOnQueue() {
         let process = process
         guard let process, process.isRunning else { return }
+        let processIdentifier = process.processIdentifier
+        let descendantProcessIdentifiers = Self.descendantProcessIdentifiers(of: processIdentifier)
+        for descendantProcessIdentifier in descendantProcessIdentifiers {
+            kill(descendantProcessIdentifier, SIGTERM)
+        }
+
         process.terminate()
         Thread.sleep(forTimeInterval: 0.2)
+
+        let remainingDescendantProcessIdentifiers = Self.uniqueProcessIdentifiers(
+            descendantProcessIdentifiers + Self.descendantProcessIdentifiers(of: processIdentifier)
+        )
+        for descendantProcessIdentifier in remainingDescendantProcessIdentifiers {
+            kill(descendantProcessIdentifier, SIGKILL)
+        }
+
         if process.isRunning {
-            kill(process.processIdentifier, SIGKILL)
+            kill(processIdentifier, SIGKILL)
         }
         process.waitUntilExit()
+    }
+
+    nonisolated private static func readAvailableDataWithoutBlocking(from fileHandle: FileHandle?) -> Data? {
+        guard let fileHandle else { return nil }
+        let fileDescriptor = fileHandle.fileDescriptor
+        let existingFlags = fcntl(fileDescriptor, F_GETFL)
+        if existingFlags >= 0 {
+            _ = fcntl(fileDescriptor, F_SETFL, existingFlags | O_NONBLOCK)
+        }
+        defer {
+            if existingFlags >= 0 {
+                _ = fcntl(fileDescriptor, F_SETFL, existingFlags)
+            }
+        }
+
+        var output = Data()
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        while true {
+            let bytesRead = Darwin.read(fileDescriptor, &buffer, buffer.count)
+            if bytesRead > 0 {
+                output.append(buffer, count: bytesRead)
+                continue
+            }
+            break
+        }
+        return output
+    }
+
+    nonisolated private static func descendantProcessIdentifiers(of parentProcessIdentifier: pid_t) -> [pid_t] {
+        let children = childProcessIdentifiers(of: parentProcessIdentifier)
+        return children + children.flatMap { descendantProcessIdentifiers(of: $0) }
+    }
+
+    nonisolated private static func childProcessIdentifiers(of parentProcessIdentifier: pid_t) -> [pid_t] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-P", String(parentProcessIdentifier)]
+
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return []
+        }
+
+        guard process.terminationStatus == 0 else { return [] }
+        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { pid_t(String($0)) }
+    }
+
+    nonisolated private static func uniqueProcessIdentifiers(_ processIdentifiers: [pid_t]) -> [pid_t] {
+        Array(Set(processIdentifiers))
     }
 
     nonisolated private func setCancellationRequested() {

@@ -11,18 +11,18 @@ import SwiftUI
 
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
-    @StateObject private var workspaceStore: WorkspaceSettingsStore
+    @ObservedObject private var workspaceStore: WorkspaceSettingsStore
 
     @MainActor
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
-        _workspaceStore = StateObject(wrappedValue: WorkspaceSettingsStore())
+        _workspaceStore = ObservedObject(wrappedValue: companionManager.workspaceSettingsStore)
     }
 
     @MainActor
     init(companionManager: CompanionManager, workspaceStore: WorkspaceSettingsStore) {
         self.companionManager = companionManager
-        _workspaceStore = StateObject(wrappedValue: workspaceStore)
+        _workspaceStore = ObservedObject(wrappedValue: workspaceStore)
     }
 
     var body: some View {

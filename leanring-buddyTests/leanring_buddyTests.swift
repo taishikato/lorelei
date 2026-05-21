@@ -113,6 +113,30 @@ struct leanring_buddyTests {
         #expect(!store.canOpenSelectedWorkspace)
     }
 
+    @Test func companionManagerUsesInjectedWorkspaceSettingsStore() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerWorkspaceSettingsStoreTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerWorkspaceSettingsStoreTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store
+        )
+        store.selectedWorkspacePath = "/Users/example/SharedProject"
+
+        #expect(manager.workspaceSettingsStore.selectedWorkspacePath == "/Users/example/SharedProject")
+    }
+
+    @Test func loginItemRegistrationIsOptInByDefault() async throws {
+        let defaults = UserDefaults(suiteName: "LoginItemRegistrationPolicyTests")!
+        defaults.removePersistentDomain(forName: "LoginItemRegistrationPolicyTests")
+
+        #expect(!LoginItemRegistrationPolicy.shouldRegisterOnLaunch(defaults: defaults))
+
+        defaults.set(true, forKey: LoginItemRegistrationPolicy.enabledDefaultsKey)
+        #expect(LoginItemRegistrationPolicy.shouldRegisterOnLaunch(defaults: defaults))
+    }
+
     @Test func routerMapsShowGitStatusToStatus() async throws {
         let router = LoreleiCommandRouter()
 
@@ -310,6 +334,25 @@ struct leanring_buddyTests {
         #expect(result.summary == "Command timed out.")
     }
 
+    @Test func workspaceProcessRunnerTimeoutCompletesWhenChildKeepsPipeOpen() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let runner = WorkspaceProcessRunner()
+
+        let execution = await withTimeout(seconds: 1.0) {
+            await runner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "sleep 3 & wait"],
+                currentDirectoryURL: directoryURL,
+                timeoutSeconds: 0.1
+            )
+        }
+
+        #expect(execution != nil)
+        guard let execution else { return }
+        #expect(isTimedOut(execution.reason))
+    }
+
     @Test func workspaceExecutorCancelsRunningCommand() async throws {
         let directoryURL = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
@@ -358,6 +401,18 @@ struct leanring_buddyTests {
 
         #expect(result.summary == "Command cancelled.")
         #expect(launchCounter.value == 0)
+    }
+
+    @Test func workspaceExecutorReportsMissingTestCommandAsFailure() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let executor = WorkspaceCommandExecutor()
+
+        let result = await executor.run(.runTests, workspacePath: directoryURL.path)
+
+        #expect(result.summary == "No test command configured.")
+        #expect(result.status == .failed)
+        #expect(result.spokenStatus == "Failed")
     }
 
     @Test func codexExecutorBuildsReadOnlyCommand() async throws {
@@ -581,6 +636,32 @@ struct leanring_buddyTests {
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)
     }
+
+    private func withTimeout<T: Sendable>(
+        seconds: TimeInterval,
+        operation: @escaping @Sendable () async -> T
+    ) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask {
+                await operation()
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(seconds))
+                return nil
+            }
+
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func isTimedOut(_ reason: WorkspaceProcessExecution.Reason) -> Bool {
+        if case .timedOut = reason {
+            return true
+        }
+        return false
+    }
 }
 
 @MainActor
@@ -639,4 +720,9 @@ private final class LaunchCounter: @unchecked Sendable {
         count += 1
         lock.unlock()
     }
+}
+
+@MainActor
+private final class SilentSpeechOutput: SpeechOutputing {
+    func speak(_ text: String) {}
 }

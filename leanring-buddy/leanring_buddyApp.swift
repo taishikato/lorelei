@@ -24,6 +24,14 @@ struct leanring_buddyApp: App {
     }
 }
 
+enum LoginItemRegistrationPolicy {
+    static let enabledDefaultsKey = "registerAsLoginItemOnLaunch"
+
+    static func shouldRegisterOnLaunch(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: enabledDefaultsKey)
+    }
+}
+
 /// Manages the companion lifecycle: creates the menu bar panel and starts
 /// the companion voice pipeline on launch.
 @MainActor
@@ -46,7 +54,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         if !companionManager.allPermissionsGranted {
             menuBarPanelManager?.showPanelOnLaunch()
         }
-        registerAsLoginItemIfNeeded()
+        if LoginItemRegistrationPolicy.shouldRegisterOnLaunch() {
+            registerAsLoginItemIfNeeded()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
