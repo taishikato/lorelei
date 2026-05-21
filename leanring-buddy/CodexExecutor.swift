@@ -86,16 +86,19 @@ struct CodexExecutor {
 
         guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !workspacePath.isEmpty else {
-            return WorkspaceCommandResult(summary: "No workspace selected.")
+            return WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace)
         }
 
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: workspacePath, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return WorkspaceCommandResult(summary: "Workspace path is not a valid directory: \(workspacePath)")
+            return WorkspaceCommandResult(
+                summary: "Workspace path is not a valid directory: \(workspacePath)",
+                status: .failed
+            )
         }
 
         guard commandTimeoutSeconds > 0 else {
-            return WorkspaceCommandResult(summary: "Codex command timed out.")
+            return WorkspaceCommandResult(summary: "Codex command timed out.", status: .failed)
         }
 
         let resolvedExecutableURL: URL?
@@ -109,7 +112,8 @@ struct CodexExecutor {
             return WorkspaceCommandResult(
                 summary: """
                 Codex executable was not found. Set UserDefaults key \(Self.executablePathDefaultsKey) to the Codex binary path, or install codex in PATH, /opt/homebrew/bin, /usr/local/bin, or ~/.nvm/versions/node/*/bin.
-                """
+                """,
+                status: .failed
             )
         }
 
@@ -138,11 +142,14 @@ struct CodexExecutor {
 
         switch execution.reason {
         case .cancelled:
-            return WorkspaceCommandResult(summary: "Codex command cancelled.")
+            return WorkspaceCommandResult(summary: "Codex command cancelled.", status: .cancelled)
         case .timedOut:
-            return WorkspaceCommandResult(summary: "Codex command timed out.")
+            return WorkspaceCommandResult(summary: "Codex command timed out.", status: .failed)
         case .failedToStart(let error):
-            return WorkspaceCommandResult(summary: "Codex failed to start: \(error.localizedDescription)")
+            return WorkspaceCommandResult(
+                summary: "Codex failed to start: \(error.localizedDescription)",
+                status: .failed
+            )
         case .exited(let status):
             if status == 0 {
                 return WorkspaceCommandResult(
@@ -155,7 +162,10 @@ struct CodexExecutor {
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n")
             let failure = combinedOutput.isEmpty ? "No output." : concise(combinedOutput)
-            return WorkspaceCommandResult(summary: "Codex failed with exit code \(status):\n\(failure)")
+            return WorkspaceCommandResult(
+                summary: "Codex failed with exit code \(status):\n\(failure)",
+                status: .failed
+            )
         }
     }
 

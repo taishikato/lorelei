@@ -191,6 +191,40 @@ struct leanring_buddyTests {
         #expect(router.route("click the submit button") == .codexComputerUse("click the submit button"))
     }
 
+    @Test func confirmationPolicyAllowsSafeReadOnlyCommandsImmediately() async throws {
+        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitStatus))
+        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitDiff))
+        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .runTests))
+        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .codexReadOnly("explain this")))
+        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .codexScreen("look at my screen")))
+    }
+
+    @Test func confirmationPolicyRequiresPanelConfirmationForBroadWriteAndComputerUseCommands() async throws {
+        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexWorkspaceWrite("fix the test")))
+        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexComputerUse("click submit")))
+    }
+
+    @Test func pendingConfirmationStoresAndClearsAction() async throws {
+        var confirmation = PendingCommandConfirmation()
+        confirmation.request(
+            title: "Run Codex with workspace write access?",
+            action: .codexWorkspaceWrite("fix the test")
+        )
+
+        #expect(confirmation.title == "Run Codex with workspace write access?")
+        #expect(confirmation.action == .codexWorkspaceWrite("fix the test"))
+        #expect(confirmation.confirm() == .codexWorkspaceWrite("fix the test"))
+        #expect(confirmation.title == nil)
+        #expect(confirmation.action == nil)
+    }
+
+    @Test func speechStatusUsesShortAllowedPhrases() async throws {
+        #expect(WorkspaceCommandResult(summary: "OK", status: .succeeded).spokenStatus == "Done")
+        #expect(WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace).spokenStatus == "No workspace selected")
+        #expect(WorkspaceCommandResult(summary: "Failed", status: .failed).spokenStatus == "Failed")
+        #expect(WorkspaceCommandResult(summary: "Needs confirmation.", status: .needsConfirmation).spokenStatus == "Needs confirmation")
+    }
+
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {
         let executor = WorkspaceCommandExecutor()
 

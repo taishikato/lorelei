@@ -9,8 +9,30 @@
 
 import Combine
 import Foundation
+import AVFoundation
 import ScreenCaptureKit
 import SwiftUI
+
+@MainActor
+protocol SpeechOutputing: AnyObject {
+    func speak(_ text: String)
+}
+
+@MainActor
+final class SpeechOutputClient: SpeechOutputing {
+    private let synthesizer: AVSpeechSynthesizer
+
+    init(synthesizer: AVSpeechSynthesizer = AVSpeechSynthesizer()) {
+        self.synthesizer = synthesizer
+    }
+
+    func speak(_ text: String) {
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        synthesizer.speak(AVSpeechUtterance(string: text))
+    }
+}
 
 enum CompanionVoiceState {
     case idle
@@ -49,6 +71,8 @@ final class CompanionManager: ObservableObject {
     private let workspaceSettingsStore = WorkspaceSettingsStore()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexExecutor = CodexExecutor()
+    private let speechOutput: SpeechOutputing
+    private var pendingConfirmation = PendingCommandConfirmation()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
     private var currentResponseTask: Task<Void, Never>?
@@ -74,6 +98,10 @@ final class CompanionManager: ObservableObject {
 
     /// The Claude model used for voice responses. Persisted to UserDefaults.
     @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
+
+    init(speechOutput: SpeechOutputing? = nil) {
+        self.speechOutput = speechOutput ?? SpeechOutputClient()
+    }
 
     func setSelectedModel(_ model: String) {
         selectedModel = model
@@ -129,6 +157,18 @@ final class CompanionManager: ObservableObject {
 
     func setPendingConfirmationTitle(_ title: String?) {
         pendingConfirmationTitle = title
+    }
+
+    func confirmPendingCommand() {
+        guard let action = pendingConfirmation.confirm() else { return }
+        pendingConfirmationTitle = nil
+        executeConfirmedCommand(action)
+    }
+
+    func cancelPendingCommand() {
+        pendingConfirmation.cancel()
+        pendingConfirmationTitle = nil
+        updateLatestResultSummary("Cancelled.")
     }
 
     func stop() {
@@ -377,14 +417,14 @@ final class CompanionManager: ObservableObject {
 
         currentResponseTask = Task { @MainActor in
             voiceState = .processing
+            pendingConfirmation.cancel()
             setPendingConfirmationTitle(nil)
 
             if case let .unsupported(message) = action {
                 updateLatestResultSummary(message)
+                speechOutput.speak(WorkspaceCommandResult(summary: message, status: .failed).spokenStatus)
                 ClickyAnalytics.trackAIResponseReceived(response: "unsupported local command")
-                voiceState = .idle
-                currentResponseTask = nil
-                scheduleTransientHideIfNeeded()
+                finishResponseTask()
                 return
             }
 
@@ -398,36 +438,34 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 updateLatestResultSummary(result.summary)
+                speechOutput.speak(result.spokenStatus)
                 ClickyAnalytics.trackAIResponseReceived(response: "codex read-only command")
-                voiceState = .idle
-                currentResponseTask = nil
-                scheduleTransientHideIfNeeded()
+                finishResponseTask()
                 return
             case .codexWorkspaceWrite:
-                setPendingConfirmationTitle("Run Codex with workspace write access?")
-                updateLatestResultSummary("Needs confirmation before running Codex.")
+                requestPendingConfirmation(
+                    title: "Run Codex with workspace write access?",
+                    action: action
+                )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex write confirmation required")
-                voiceState = .idle
-                currentResponseTask = nil
-                scheduleTransientHideIfNeeded()
+                finishResponseTask()
                 return
             case .codexComputerUse:
-                setPendingConfirmationTitle("Run Codex computer-use action?")
-                updateLatestResultSummary("Needs confirmation before running Codex.")
+                requestPendingConfirmation(
+                    title: "Run Codex computer-use action?",
+                    action: action
+                )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex computer-use confirmation required")
-                voiceState = .idle
-                currentResponseTask = nil
-                scheduleTransientHideIfNeeded()
+                finishResponseTask()
                 return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
                 guard !Task.isCancelled else { return }
 
                 updateLatestResultSummary(result.summary)
+                speechOutput.speak(result.spokenStatus)
                 ClickyAnalytics.trackAIResponseReceived(response: "codex screen context command")
-                voiceState = .idle
-                currentResponseTask = nil
-                scheduleTransientHideIfNeeded()
+                finishResponseTask()
                 return
             case .gitStatus, .gitDiff, .runTests, .unsupported:
                 break
@@ -440,11 +478,72 @@ final class CompanionManager: ObservableObject {
             guard !Task.isCancelled else { return }
 
             updateLatestResultSummary(result.summary)
+            speechOutput.speak(result.spokenStatus)
             ClickyAnalytics.trackAIResponseReceived(response: "local workspace command")
-            voiceState = .idle
-            currentResponseTask = nil
-            scheduleTransientHideIfNeeded()
+            finishResponseTask()
         }
+    }
+
+    private func requestPendingConfirmation(title: String, action: LoreleiCommandAction) {
+        pendingConfirmation.request(title: title, action: action)
+        pendingConfirmationTitle = title
+        let result = WorkspaceCommandResult(
+            summary: "Needs confirmation before running Codex.",
+            status: .needsConfirmation
+        )
+        updateLatestResultSummary(result.summary)
+        speechOutput.speak(result.spokenStatus)
+    }
+
+    private func executeConfirmedCommand(_ action: LoreleiCommandAction) {
+        currentResponseTask?.cancel()
+        currentResponseTask = Task { @MainActor in
+            voiceState = .processing
+
+            let result: WorkspaceCommandResult
+            let analyticsResponse: String
+            switch action {
+            case .codexWorkspaceWrite(let prompt):
+                result = await codexExecutor.run(
+                    .workspaceWrite,
+                    prompt: prompt,
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                )
+                analyticsResponse = "confirmed codex workspace-write command"
+            case .codexComputerUse(let prompt):
+                result = await codexExecutor.run(
+                    .workspaceWrite,
+                    prompt: computerUseCodexPrompt(for: prompt),
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                )
+                analyticsResponse = "confirmed codex computer-use command"
+            default:
+                result = WorkspaceCommandResult(summary: "Unsupported confirmed command.", status: .failed)
+                analyticsResponse = "unsupported confirmed command"
+            }
+
+            guard !Task.isCancelled else { return }
+
+            updateLatestResultSummary(result.summary)
+            speechOutput.speak(result.spokenStatus)
+            ClickyAnalytics.trackAIResponseReceived(response: analyticsResponse)
+            finishResponseTask()
+        }
+    }
+
+    private func computerUseCodexPrompt(for prompt: String) -> String {
+        """
+        The user requested a computer-use action through Lorelei. Use available computer-use capabilities if needed. Do not commit changes.
+
+        User request:
+        \(prompt)
+        """
+    }
+
+    private func finishResponseTask() {
+        voiceState = .idle
+        currentResponseTask = nil
+        scheduleTransientHideIfNeeded()
     }
 
     private func runCodexScreenRequest(_ prompt: String) async -> WorkspaceCommandResult {
@@ -511,34 +610,40 @@ struct CodexScreenContextRequestRunner {
     func run(prompt: String, workspacePath: String?) async -> WorkspaceCommandResult {
         guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !workspacePath.isEmpty else {
-            return WorkspaceCommandResult(summary: "No workspace selected.")
+            return WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace)
         }
 
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: workspacePath, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return WorkspaceCommandResult(summary: "Workspace path is not a valid directory: \(workspacePath)")
+            return WorkspaceCommandResult(
+                summary: "Workspace path is not a valid directory: \(workspacePath)",
+                status: .failed
+            )
         }
 
         do {
             let cursorScreenCapture = try await captureCursorScreen()
             guard !isCancelled() else {
-                return WorkspaceCommandResult(summary: "Screen capture cancelled.")
+                return WorkspaceCommandResult(summary: "Screen capture cancelled.", status: .cancelled)
             }
 
             guard let cursorScreenCapture else {
-                return WorkspaceCommandResult(summary: "Screen capture failed: no screen image was captured.")
+                return WorkspaceCommandResult(
+                    summary: "Screen capture failed: no screen image was captured.",
+                    status: .failed
+                )
             }
 
             let imageURL = makeTemporaryImageURL()
             guard !isCancelled() else {
-                return WorkspaceCommandResult(summary: "Screen capture cancelled.")
+                return WorkspaceCommandResult(summary: "Screen capture cancelled.", status: .cancelled)
             }
 
             try cursorScreenCapture.imageData.write(to: imageURL, options: .atomic)
 
             guard !isCancelled() else {
                 try? fileManager.removeItem(at: imageURL)
-                return WorkspaceCommandResult(summary: "Screen capture cancelled.")
+                return WorkspaceCommandResult(summary: "Screen capture cancelled.", status: .cancelled)
             }
 
             return await codexExecutor.run(
@@ -550,7 +655,10 @@ struct CodexScreenContextRequestRunner {
                 ephemeral: true
             )
         } catch {
-            return WorkspaceCommandResult(summary: "Screen capture failed: \(error.localizedDescription)")
+            return WorkspaceCommandResult(
+                summary: "Screen capture failed: \(error.localizedDescription)",
+                status: .failed
+            )
         }
     }
 }

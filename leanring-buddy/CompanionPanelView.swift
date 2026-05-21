@@ -168,10 +168,32 @@ struct CompanionPanelView: View {
                     value: companionManager.latestResultSummary ?? "No result yet"
                 )
 
-                fieldBlock(
-                    title: "Pending Confirmation",
-                    value: companionManager.pendingConfirmationTitle ?? "No pending confirmation"
-                )
+                pendingConfirmationBlock
+            }
+        }
+    }
+
+    private var pendingConfirmationBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            fieldBlock(
+                title: "Pending Confirmation",
+                value: companionManager.pendingConfirmationTitle ?? "No pending confirmation"
+            )
+
+            if companionManager.pendingConfirmationTitle != nil {
+                HStack(spacing: 8) {
+                    Button("Confirm") {
+                        companionManager.confirmPendingCommand()
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .primary))
+                    .pointerCursor()
+
+                    Button("Cancel") {
+                        companionManager.cancelPendingCommand()
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .secondary))
+                    .pointerCursor()
+                }
             }
         }
     }

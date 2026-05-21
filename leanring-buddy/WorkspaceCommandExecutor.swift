@@ -8,8 +8,35 @@
 import Foundation
 import Darwin
 
+enum WorkspaceCommandResultStatus: Equatable, Sendable {
+    case succeeded
+    case failed
+    case cancelled
+    case missingWorkspace
+    case needsConfirmation
+}
+
 struct WorkspaceCommandResult: Equatable, Sendable {
     let summary: String
+    let status: WorkspaceCommandResultStatus
+
+    nonisolated init(summary: String, status: WorkspaceCommandResultStatus = .succeeded) {
+        self.summary = summary
+        self.status = status
+    }
+
+    nonisolated var spokenStatus: String {
+        switch status {
+        case .succeeded:
+            return "Done"
+        case .failed, .cancelled:
+            return "Failed"
+        case .missingWorkspace:
+            return "No workspace selected"
+        case .needsConfirmation:
+            return "Needs confirmation"
+        }
+    }
 }
 
 struct WorkspaceCommandExecutor {
@@ -46,12 +73,15 @@ struct WorkspaceCommandExecutor {
 
         guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !workspacePath.isEmpty else {
-            return WorkspaceCommandResult(summary: "No workspace selected.")
+            return WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace)
         }
 
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: workspacePath, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return WorkspaceCommandResult(summary: "Workspace path is not a valid directory: \(workspacePath)")
+            return WorkspaceCommandResult(
+                summary: "Workspace path is not a valid directory: \(workspacePath)",
+                status: .failed
+            )
         }
 
         switch action {
@@ -89,7 +119,7 @@ struct WorkspaceCommandExecutor {
         emptySuccessSummary: String = "No output."
     ) async -> WorkspaceCommandResult {
         guard commandTimeoutSeconds > 0 else {
-            return WorkspaceCommandResult(summary: "Command timed out.")
+            return WorkspaceCommandResult(summary: "Command timed out.", status: .failed)
         }
 
 #if DEBUG
@@ -137,11 +167,14 @@ struct WorkspaceCommandExecutor {
 
         switch execution.reason {
         case .cancelled:
-            return WorkspaceCommandResult(summary: "Command cancelled.")
+            return WorkspaceCommandResult(summary: "Command cancelled.", status: .cancelled)
         case .timedOut:
-            return WorkspaceCommandResult(summary: "Command timed out.")
+            return WorkspaceCommandResult(summary: "Command timed out.", status: .failed)
         case .failedToStart(let error):
-            return WorkspaceCommandResult(summary: "Command failed to start: \(error.localizedDescription)")
+            return WorkspaceCommandResult(
+                summary: "Command failed to start: \(error.localizedDescription)",
+                status: .failed
+            )
         case .exited(let status):
             let combined = [execution.stdout, execution.stderr]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -155,7 +188,10 @@ struct WorkspaceCommandExecutor {
 
             let command = ([executableURL.path] + arguments).joined(separator: " ")
             let failure = conciseOutput.isEmpty ? "No output." : conciseOutput
-            return WorkspaceCommandResult(summary: "\(command) failed with exit code \(status):\n\(failure)")
+            return WorkspaceCommandResult(
+                summary: "\(command) failed with exit code \(status):\n\(failure)",
+                status: .failed
+            )
         }
     }
 
