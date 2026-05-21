@@ -24,8 +24,10 @@ final class AssemblyAIStreamingTranscriptionProvider: BuddyTranscriptionProvider
     let displayName = "AssemblyAI"
     let requiresSpeechRecognitionPermission = false
 
-    var isConfigured: Bool { true }
-    var unavailableExplanation: String? { nil }
+    var isConfigured: Bool { false }
+    var unavailableExplanation: String? {
+        "AssemblyAI is disabled until a real local or direct configuration is provided."
+    }
 
     /// Single long-lived URLSession shared across all streaming sessions.
     /// Creating and invalidating a URLSession per session corrupts the OS
