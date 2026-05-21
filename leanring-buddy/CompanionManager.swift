@@ -448,32 +448,11 @@ final class CompanionManager: ObservableObject {
     }
 
     private func runCodexScreenRequest(_ prompt: String) async -> WorkspaceCommandResult {
-        guard let workspacePath = workspaceSettingsStore.selectedWorkspacePath?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !workspacePath.isEmpty else {
-            return WorkspaceCommandResult(summary: "No workspace selected.")
-        }
-
-        do {
-            let captures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-            guard let cursorFirstCapture = captures.first else {
-                return WorkspaceCommandResult(summary: "Screen capture failed: no screen image was captured.")
-            }
-
-            let imageURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("lorelei-screen-\(UUID().uuidString).jpg")
-            try cursorFirstCapture.imageData.write(to: imageURL, options: .atomic)
-
-            return await codexExecutor.run(
-                .readOnly,
-                prompt: prompt,
-                workspacePath: workspacePath,
-                imagePaths: [imageURL.path],
-                removeImageInputsAfterRun: true
-            )
-        } catch {
-            return WorkspaceCommandResult(summary: "Screen capture failed: \(error.localizedDescription)")
-        }
+        let runner = CodexScreenContextRequestRunner(codexExecutor: codexExecutor)
+        return await runner.run(
+            prompt: prompt,
+            workspacePath: workspaceSettingsStore.selectedWorkspacePath
+        )
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
@@ -500,4 +479,57 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+}
+
+@MainActor
+struct CodexScreenContextRequestRunner {
+    private let fileManager: FileManager
+    private let codexExecutor: CodexExecutor
+    private let captureScreens: @MainActor () async throws -> [CompanionScreenCapture]
+
+    init(
+        fileManager: FileManager = .default,
+        codexExecutor: CodexExecutor? = nil,
+        captureScreens: @escaping @MainActor () async throws -> [CompanionScreenCapture] = {
+            try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+        }
+    ) {
+        self.fileManager = fileManager
+        self.codexExecutor = codexExecutor ?? CodexExecutor()
+        self.captureScreens = captureScreens
+    }
+
+    func run(prompt: String, workspacePath: String?) async -> WorkspaceCommandResult {
+        guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !workspacePath.isEmpty else {
+            return WorkspaceCommandResult(summary: "No workspace selected.")
+        }
+
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: workspacePath, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return WorkspaceCommandResult(summary: "Workspace path is not a valid directory: \(workspacePath)")
+        }
+
+        do {
+            let captures = try await captureScreens()
+            guard let cursorFirstCapture = captures.first else {
+                return WorkspaceCommandResult(summary: "Screen capture failed: no screen image was captured.")
+            }
+
+            let imageURL = fileManager.temporaryDirectory
+                .appendingPathComponent("lorelei-screen-\(UUID().uuidString).jpg")
+            try cursorFirstCapture.imageData.write(to: imageURL, options: .atomic)
+
+            return await codexExecutor.run(
+                .readOnly,
+                prompt: prompt,
+                workspacePath: workspacePath,
+                imagePaths: [imageURL.path],
+                removeImageInputsAfterRun: true,
+                ephemeral: true
+            )
+        } catch {
+            return WorkspaceCommandResult(summary: "Screen capture failed: \(error.localizedDescription)")
+        }
+    }
 }

@@ -172,6 +172,18 @@ struct leanring_buddyTests {
         #expect(router.route("what do you see in this error?") == .codexReadOnly("what do you see in this error?"))
     }
 
+    @Test func routerDoesNotMapAppWindowCommandToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("open the app window") == .codexComputerUse("open the app window"))
+    }
+
+    @Test func routerDoesNotMapDesktopCommandToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("switch desktop") == .codexReadOnly("switch desktop"))
+    }
+
     @Test func routerMapsComputerUseRequestToCodexComputerUse() async throws {
         let router = LoreleiCommandRouter()
 
@@ -310,12 +322,14 @@ struct leanring_buddyTests {
             .readOnly,
             prompt: "look at my screen",
             workspacePath: directoryURL.path,
-            imagePaths: [imagePath]
+            imagePaths: [imagePath],
+            ephemeral: true
         )
 
         #expect(result.summary == "Screen answer")
         #expect(recorder.arguments?.starts(with: [
             "exec",
+            "--ephemeral",
             "-i",
             imagePath,
             "--sandbox",
@@ -350,6 +364,30 @@ struct leanring_buddyTests {
 
         #expect(result.summary == "Screen answer")
         #expect(!FileManager.default.fileExists(atPath: imageURL.path))
+    }
+
+    @Test func screenContextRunnerDoesNotCaptureForInvalidWorkspace() async throws {
+        let captureCounter = LaunchCounter()
+        let missingWorkspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString)", isDirectory: true)
+        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+        let runner = CodexScreenContextRequestRunner(
+            codexExecutor: executor,
+            captureScreens: {
+                captureCounter.increment()
+                return []
+            }
+        )
+
+        let result = await runner.run(prompt: "look at my screen", workspacePath: missingWorkspace.path)
+
+        #expect(result.summary == "Workspace path is not a valid directory: \(missingWorkspace.path)")
+        #expect(captureCounter.value == 0)
+        #expect(recorder.arguments == nil)
     }
 
     @Test func codexExecutorBuildsWorkspaceWriteCommand() async throws {

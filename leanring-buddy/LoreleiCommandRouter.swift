@@ -101,10 +101,9 @@ struct LoreleiCommandRouter {
         command.contains("look at my screen")
             || command.contains("look at the screen")
             || command.contains("see my screen")
+            || command.contains("capture my screen")
             || command.contains("screen context")
             || command.contains("screenshot")
-            || command.contains("desktop")
-            || command.contains("window")
             || command.contains("visual context")
     }
 

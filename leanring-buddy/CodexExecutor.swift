@@ -73,7 +73,8 @@ struct CodexExecutor {
         prompt: String,
         workspacePath: String?,
         imagePaths: [String] = [],
-        removeImageInputsAfterRun: Bool = false
+        removeImageInputsAfterRun: Bool = false,
+        ephemeral: Bool = false
     ) async -> WorkspaceCommandResult {
         defer {
             if removeImageInputsAfterRun {
@@ -123,7 +124,8 @@ struct CodexExecutor {
                 workspacePath: workspacePath,
                 outputPath: outputURL.path,
                 prompt: prompt,
-                imagePaths: imagePaths
+                imagePaths: imagePaths,
+                ephemeral: ephemeral
             ),
             URL(fileURLWithPath: workspacePath, isDirectory: true),
             commandTimeoutSeconds,
@@ -162,7 +164,8 @@ struct CodexExecutor {
         workspacePath: String,
         outputPath: String,
         prompt: String,
-        imagePaths: [String] = []
+        imagePaths: [String] = [],
+        ephemeral: Bool = false
     ) -> [String] {
         var arguments: [String] = []
 
@@ -174,6 +177,10 @@ struct CodexExecutor {
         }
 
         arguments += ["exec"]
+
+        if ephemeral {
+            arguments += ["--ephemeral"]
+        }
 
         for imagePath in imagePaths {
             let trimmedImagePath = imagePath.trimmingCharacters(in: .whitespacesAndNewlines)
