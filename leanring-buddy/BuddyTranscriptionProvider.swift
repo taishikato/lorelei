@@ -31,7 +31,6 @@ protocol BuddyTranscriptionProvider {
 
 enum BuddyTranscriptionProviderFactory {
     private enum PreferredProvider: String {
-        case assemblyAI = "assemblyai"
         case openAI = "openai"
         case appleSpeech = "apple"
     }
@@ -51,16 +50,6 @@ enum BuddyTranscriptionProviderFactory {
         let openAIProvider = OpenAIAudioTranscriptionProvider()
 
         if preferredProvider == .appleSpeech {
-            return AppleSpeechTranscriptionProvider()
-        }
-
-        if preferredProvider == .assemblyAI {
-            let assemblyAIProvider = AssemblyAIStreamingTranscriptionProvider()
-            if assemblyAIProvider.isConfigured {
-                return assemblyAIProvider
-            }
-
-            print("⚠️ Transcription: using Apple Speech as fallback")
             return AppleSpeechTranscriptionProvider()
         }
 
