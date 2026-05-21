@@ -130,6 +130,18 @@ struct leanring_buddyTests {
         #expect(router.route("run tests") == .runTests)
     }
 
+    @Test func routerMapsTestToTests() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("test") == .runTests)
+    }
+
+    @Test func routerMapsTestsToTests() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("tests") == .runTests)
+    }
+
     @Test func routerReturnsUnsupportedForUnknownText() async throws {
         let router = LoreleiCommandRouter()
 
@@ -139,7 +151,7 @@ struct leanring_buddyTests {
     @Test func routerMapsGenericReadOnlyQuestionToCodexReadOnly() async throws {
         let router = LoreleiCommandRouter()
 
-        #expect(router.route("why is the auth test failing?") == .codexReadOnly("why is the auth test failing?"))
+        #expect(router.route("why is auth failing?") == .codexReadOnly("why is auth failing?"))
     }
 
     @Test func routerMapsMutatingRequestToCodexWorkspaceWrite() async throws {

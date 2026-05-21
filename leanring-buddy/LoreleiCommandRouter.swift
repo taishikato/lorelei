@@ -63,7 +63,9 @@ struct LoreleiCommandRouter {
         }
 
         if command.contains("run tests")
-            || command.contains("run test") {
+            || command.contains("run test")
+            || command.contains("tests")
+            || command.contains("test") {
             return .runTests
         }
 
