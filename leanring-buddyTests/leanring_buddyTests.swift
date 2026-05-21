@@ -143,4 +143,57 @@ struct leanring_buddyTests {
 
         #expect(result.summary == "No workspace selected.")
     }
+
+    @Test func workspaceExecutorRunsStatusInTemporaryGitRepo() async throws {
+        let repositoryURL = try makeTemporaryGitRepository()
+        defer { try? FileManager.default.removeItem(at: repositoryURL) }
+        let executor = WorkspaceCommandExecutor()
+
+        let result = await executor.run(.gitStatus, workspacePath: repositoryURL.path)
+
+        #expect(result.summary.contains("##"))
+    }
+
+    @Test func workspaceExecutorReportsNonGitWorkspaceFailure() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let executor = WorkspaceCommandExecutor()
+
+        let result = await executor.run(.gitStatus, workspacePath: directoryURL.path)
+
+        #expect(result.summary.contains("failed with exit code"))
+        #expect(result.summary.localizedCaseInsensitiveContains("not a git repository"))
+    }
+
+    @Test func workspaceExecutorReportsImmediateTimeoutWithoutRunningProcess() async throws {
+        let repositoryURL = try makeTemporaryGitRepository()
+        defer { try? FileManager.default.removeItem(at: repositoryURL) }
+        let executor = WorkspaceCommandExecutor(commandTimeoutSeconds: 0)
+
+        let result = await executor.run(.gitStatus, workspacePath: repositoryURL.path)
+
+        #expect(result.summary == "Command timed out.")
+    }
+
+    private func makeTemporaryGitRepository() throws -> URL {
+        let repositoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: repositoryURL, withIntermediateDirectories: true)
+        try runGitTestCommand(["init"], in: repositoryURL)
+        return repositoryURL
+    }
+
+    private func runGitTestCommand(_ arguments: [String], in directoryURL: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = arguments
+        process.currentDirectoryURL = directoryURL
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
 }
