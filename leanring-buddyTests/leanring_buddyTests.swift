@@ -301,11 +301,11 @@ struct leanring_buddyTests {
 
         #expect(result.summary == "Write-mode answer")
         #expect(recorder.arguments?.starts(with: [
+            "--ask-for-approval",
+            "never",
             "exec",
             "--sandbox",
             "workspace-write",
-            "--ask-for-approval",
-            "never",
             "--cd",
             directoryURL.path
         ]) == true)

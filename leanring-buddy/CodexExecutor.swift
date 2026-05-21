@@ -138,11 +138,7 @@ struct CodexExecutor {
     }
 
     func commandArguments(mode: CodexExecutionMode, workspacePath: String, outputPath: String, prompt: String) -> [String] {
-        var arguments = [
-            "exec",
-            "--sandbox",
-            mode.sandboxArgument
-        ]
+        var arguments: [String] = []
 
         if mode == .workspaceWrite {
             arguments += [
@@ -152,6 +148,9 @@ struct CodexExecutor {
         }
 
         arguments += [
+            "exec",
+            "--sandbox",
+            mode.sandboxArgument,
             "--cd",
             workspacePath,
             "--output-last-message",
