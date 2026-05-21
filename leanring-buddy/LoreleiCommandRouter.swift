@@ -103,7 +103,9 @@ struct LoreleiCommandRouter {
             || command.contains("see my screen")
             || command.contains("screen context")
             || command.contains("screenshot")
-            || command.contains("what do you see")
+            || command.contains("desktop")
+            || command.contains("window")
+            || command.contains("visual context")
     }
 
     private func containsAnyWord(in command: String, words: [String]) -> Bool {

@@ -166,6 +166,12 @@ struct leanring_buddyTests {
         #expect(router.route("look at my screen") == .codexScreen("look at my screen"))
     }
 
+    @Test func routerDoesNotMapAmbiguousWhatDoYouSeeToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("what do you see in this error?") == .codexReadOnly("what do you see in this error?"))
+    }
+
     @Test func routerMapsComputerUseRequestToCodexComputerUse() async throws {
         let router = LoreleiCommandRouter()
 
