@@ -429,17 +429,12 @@ final class CompanionManager: ObservableObject {
             }
 
             switch action {
-            case .codexReadOnly(let prompt):
-                let result = await codexExecutor.run(
-                    .readOnly,
-                    prompt: prompt,
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+            case .codexReadOnly:
+                requestPendingConfirmation(
+                    title: "Run Codex read-only?",
+                    action: action
                 )
-                guard !Task.isCancelled else { return }
-
-                updateLatestResultSummary(result.summary)
-                speechOutput.speak(result.spokenStatus)
-                ClickyAnalytics.trackAIResponseReceived(response: "codex read-only command")
+                ClickyAnalytics.trackAIResponseReceived(response: "codex read-only confirmation required")
                 finishResponseTask()
                 return
             case .codexWorkspaceWrite:
@@ -503,17 +498,24 @@ final class CompanionManager: ObservableObject {
             let result: WorkspaceCommandResult
             let analyticsResponse: String
             switch action {
+            case .codexReadOnly(let prompt):
+                result = await codexExecutor.run(
+                    .readOnly,
+                    prompt: prompt,
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                )
+                analyticsResponse = "confirmed codex read-only command"
             case .codexWorkspaceWrite(let prompt):
                 result = await codexExecutor.run(
                     .workspaceWrite,
-                    prompt: prompt,
+                    prompt: CodexPromptBuilder.workspaceWritePrompt(for: prompt),
                     workspacePath: workspaceSettingsStore.selectedWorkspacePath
                 )
                 analyticsResponse = "confirmed codex workspace-write command"
             case .codexComputerUse(let prompt):
                 result = await codexExecutor.run(
                     .workspaceWrite,
-                    prompt: computerUseCodexPrompt(for: prompt),
+                    prompt: CodexPromptBuilder.computerUsePrompt(for: prompt),
                     workspacePath: workspaceSettingsStore.selectedWorkspacePath
                 )
                 analyticsResponse = "confirmed codex computer-use command"
@@ -529,15 +531,6 @@ final class CompanionManager: ObservableObject {
             ClickyAnalytics.trackAIResponseReceived(response: analyticsResponse)
             finishResponseTask()
         }
-    }
-
-    private func computerUseCodexPrompt(for prompt: String) -> String {
-        """
-        The user requested a computer-use action through Lorelei. Use available computer-use capabilities if needed. Do not commit changes.
-
-        User request:
-        \(prompt)
-        """
     }
 
     private func finishResponseTask() {

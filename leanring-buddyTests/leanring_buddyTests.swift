@@ -161,6 +161,14 @@ struct leanring_buddyTests {
         #expect(router.route("fix the failing test") == .codexWorkspaceWrite("fix the failing test"))
     }
 
+    @Test func routerMapsAdditionalMutatingRequestsToCodexWorkspaceWrite() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("update docs") == .codexWorkspaceWrite("update docs"))
+        #expect(router.route("add a test") == .codexWorkspaceWrite("add a test"))
+        #expect(router.route("rename file") == .codexWorkspaceWrite("rename file"))
+    }
+
     @Test func routerMapsScreenRequestToCodexScreen() async throws {
         let router = LoreleiCommandRouter()
 
@@ -191,17 +199,24 @@ struct leanring_buddyTests {
         #expect(router.route("click the submit button") == .codexComputerUse("click the submit button"))
     }
 
-    @Test func confirmationPolicyAllowsSafeReadOnlyCommandsImmediately() async throws {
+    @Test func confirmationPolicyAllowsOnlySafeLocalAndScopedScreenCommandsImmediately() async throws {
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitStatus))
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitDiff))
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .runTests))
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .codexReadOnly("explain this")))
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .codexScreen("look at my screen")))
     }
 
-    @Test func confirmationPolicyRequiresPanelConfirmationForBroadWriteAndComputerUseCommands() async throws {
+    @Test func confirmationPolicyRequiresPanelConfirmationForBroadCodexWriteAndComputerUseCommands() async throws {
+        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexReadOnly("explain this")))
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexWorkspaceWrite("fix the test")))
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexComputerUse("click submit")))
+    }
+
+    @Test func workspaceWritePromptIncludesNoCommitGuard() async throws {
+        let prompt = CodexPromptBuilder.workspaceWritePrompt(for: "fix the test")
+
+        #expect(prompt.contains("Do not commit changes."))
+        #expect(prompt.contains("fix the test"))
     }
 
     @Test func pendingConfirmationStoresAndClearsAction() async throws {

@@ -30,11 +30,31 @@ enum LoreleiCommandAction: Equatable, Sendable {
 struct LoreleiConfirmationPolicy {
     static func requiresConfirmation(for action: LoreleiCommandAction) -> Bool {
         switch action {
-        case .codexWorkspaceWrite, .codexComputerUse:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexComputerUse:
             return true
-        case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexScreen, .unsupported:
+        case .gitStatus, .gitDiff, .runTests, .codexScreen, .unsupported:
             return false
         }
+    }
+}
+
+struct CodexPromptBuilder {
+    static func workspaceWritePrompt(for prompt: String) -> String {
+        """
+        Do not commit changes.
+
+        User request:
+        \(prompt)
+        """
+    }
+
+    static func computerUsePrompt(for prompt: String) -> String {
+        """
+        The user requested a computer-use action through Lorelei. Use available computer-use capabilities if needed. Do not commit changes.
+
+        User request:
+        \(prompt)
+        """
     }
 }
 
@@ -112,8 +132,19 @@ struct LoreleiCommandRouter {
             "delete",
             "change",
             "refactor",
-            "install"
-        ])
+            "install",
+            "update",
+            "add",
+            "remove",
+            "rename",
+            "move",
+            "modify",
+            "apply",
+            "implement",
+            "replace",
+            "configure",
+            "setup"
+        ]) || command.contains("set up")
     }
 
     private func isComputerUseRequest(_ command: String) -> Bool {
