@@ -132,7 +132,7 @@ final class CompanionManager: ObservableObject {
         bindAudioPowerLevel()
         bindShortcutTransitions()
         // Eagerly touch the Claude API so its TLS warmup handshake completes
-        // well before the onboarding demo fires at ~40s into the video.
+        // before the first voice interaction.
         _ = claudeAPI
 
         // If the user already completed onboarding AND all permissions are
@@ -148,8 +148,8 @@ final class CompanionManager: ObservableObject {
 
     /// Called by BlueCursorView after the buddy finishes its pointing
     /// animation and returns to cursor-following mode.
-    /// Triggers the onboarding sequence — dismisses the panel and restarts
-    /// the overlay so the welcome animation and intro video play.
+    /// Triggers the onboarding sequence by dismissing the panel and showing
+    /// the overlay cursor.
     func triggerOnboarding() {
         // Post notification so the panel manager can dismiss the panel
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
