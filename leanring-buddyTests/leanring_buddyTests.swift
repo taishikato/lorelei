@@ -67,4 +67,48 @@ struct leanring_buddyTests {
         let reloadedStore = WorkspaceSettingsStore(defaults: defaults)
         #expect(reloadedStore.selectedWorkspacePath == "/Users/example/Project")
     }
+
+    @Test func workspaceStoreLoadsExistingValueFromDefaults() async throws {
+        let defaults = UserDefaults(suiteName: "WorkspaceSettingsStoreExistingValueTests")!
+        defaults.removePersistentDomain(forName: "WorkspaceSettingsStoreExistingValueTests")
+        defaults.set("/Users/example/ExistingProject", forKey: WorkspaceSettingsStore.selectedWorkspacePathDefaultsKey)
+
+        let store = WorkspaceSettingsStore(defaults: defaults)
+
+        #expect(store.selectedWorkspacePath == "/Users/example/ExistingProject")
+    }
+
+    @Test func clearingWorkspaceSelectionRemovesPersistedValue() async throws {
+        let defaults = UserDefaults(suiteName: "WorkspaceSettingsStoreClearingTests")!
+        defaults.removePersistentDomain(forName: "WorkspaceSettingsStoreClearingTests")
+
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = "/Users/example/Project"
+        store.clearSelectedWorkspacePath()
+
+        let reloadedStore = WorkspaceSettingsStore(defaults: defaults)
+        #expect(defaults.string(forKey: WorkspaceSettingsStore.selectedWorkspacePathDefaultsKey) == nil)
+        #expect(reloadedStore.selectedWorkspacePath == nil)
+    }
+
+    @Test func workspacePathStatusRequiresExistingDirectory() async throws {
+        let defaults = UserDefaults(suiteName: "WorkspaceSettingsStoreDirectoryStatusTests")!
+        defaults.removePersistentDomain(forName: "WorkspaceSettingsStoreDirectoryStatusTests")
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = temporaryDirectory.path
+        #expect(store.selectedWorkspaceStatus == .validDirectory(temporaryDirectory.path))
+        #expect(store.canOpenSelectedWorkspace)
+
+        store.selectedWorkspacePath = temporaryDirectory.appendingPathComponent("missing").path
+        #expect(store.selectedWorkspaceStatus == .invalidDirectory(store.selectedWorkspacePath!))
+        #expect(!store.canOpenSelectedWorkspace)
+    }
 }

@@ -28,8 +28,8 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var hasScreenRecordingPermission = false
     @Published private(set) var hasMicrophonePermission = false
     @Published private(set) var hasScreenContentPermission = false
-    @Published var latestResultSummary: String?
-    @Published var pendingConfirmationTitle: String?
+    @Published private(set) var latestResultSummary: String?
+    @Published private(set) var pendingConfirmationTitle: String?
 
     /// Screen location (global AppKit coords) of a detected UI element the
     /// buddy should fly to and point at. Parsed from Claude's response;
@@ -99,53 +99,32 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Whether the user has completed onboarding at least once. Persisted
-    /// to UserDefaults so the Start button only appears on first launch.
-    var hasCompletedOnboarding: Bool {
-        get { UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") }
-        set { UserDefaults.standard.set(newValue, forKey: "hasCompletedOnboarding") }
-    }
-
     func start() {
         refreshAllPermissions()
-        print("🔑 Lorelei start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
+        print("🔑 Lorelei start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
-        // If the user already completed onboarding AND all permissions are
-        // still granted, show the cursor overlay immediately. If permissions
-        // were revoked (e.g. signing change), don't show the cursor — the
-        // panel will show the permissions UI instead.
-        if hasCompletedOnboarding && allPermissionsGranted && isClickyCursorEnabled {
+        if allPermissionsGranted && isClickyCursorEnabled {
             overlayWindowManager.hasShownOverlayBefore = true
             overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
         }
     }
 
-    /// Called by BlueCursorView after the buddy finishes its pointing
-    /// animation and returns to cursor-following mode.
-    /// Triggers the onboarding sequence by dismissing the panel and showing
-    /// the overlay cursor.
-    func triggerOnboarding() {
-        // Post notification so the panel manager can dismiss the panel
-        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-
-        // Mark onboarding as completed so the Start button won't appear
-        // again on future launches — the cursor will auto-show instead
-        hasCompletedOnboarding = true
-
-        ClickyAnalytics.trackOnboardingStarted()
-
-        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-        isOverlayVisible = true
-    }
-
     func clearDetectedElementLocation() {
         detectedElementScreenLocation = nil
         detectedElementDisplayFrame = nil
         detectedElementBubbleText = nil
+    }
+
+    func updateLatestResultSummary(_ summary: String?) {
+        latestResultSummary = summary
+    }
+
+    func setPendingConfirmationTitle(_ title: String?) {
+        pendingConfirmationTitle = title
     }
 
     func stop() {
@@ -242,8 +221,7 @@ final class CompanionManager: ObservableObject {
                     UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
                     ClickyAnalytics.trackPermissionGranted(permission: "screen_content")
 
-                    // If onboarding was already completed, show the cursor overlay now
-                    if hasCompletedOnboarding && allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
+                    if allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
                         overlayWindowManager.hasShownOverlayBefore = true
                         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                         isOverlayVisible = true
@@ -400,8 +378,8 @@ final class CompanionManager: ObservableObject {
 
             print("🗣️ Lorelei placeholder received transcript: \(transcript)")
             ClickyAnalytics.trackAIResponseReceived(response: "local placeholder")
-            latestResultSummary = "Transcript captured. Command execution is not connected yet."
-            pendingConfirmationTitle = nil
+            updateLatestResultSummary("Transcript captured. Command execution is not connected yet.")
+            setPendingConfirmationTitle(nil)
             voiceState = .idle
             currentResponseTask = nil
             scheduleTransientHideIfNeeded()

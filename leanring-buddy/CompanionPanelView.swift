@@ -101,9 +101,9 @@ struct CompanionPanelView: View {
     private var workspaceSection: some View {
         section("Workspace") {
             VStack(alignment: .leading, spacing: 10) {
-                Text(workspaceStore.selectedWorkspacePath ?? "No workspace selected")
+                Text(workspaceStatusText)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(workspaceStore.selectedWorkspacePath == nil ? DS.Colors.textTertiary : DS.Colors.textSecondary)
+                    .foregroundColor(workspaceStatusColor)
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -128,8 +128,8 @@ struct CompanionPanelView: View {
                         openWorkspaceInFinder()
                     }
                     .buttonStyle(PanelButtonStyle(kind: .secondary))
-                    .disabled(workspaceStore.selectedWorkspacePath == nil)
-                    .pointerCursor(isEnabled: workspaceStore.selectedWorkspacePath != nil)
+                    .disabled(!workspaceStore.canOpenSelectedWorkspace)
+                    .pointerCursor(isEnabled: workspaceStore.canOpenSelectedWorkspace)
                 }
             }
         }
@@ -326,8 +326,30 @@ struct CompanionPanelView: View {
     }
 
     private func openWorkspaceInFinder() {
-        guard let selectedWorkspacePath = workspaceStore.selectedWorkspacePath else { return }
-        NSWorkspace.shared.open(URL(fileURLWithPath: selectedWorkspacePath, isDirectory: true))
+        guard case let .validDirectory(path) = workspaceStore.selectedWorkspaceStatus else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true))
+    }
+
+    private var workspaceStatusText: String {
+        switch workspaceStore.selectedWorkspaceStatus {
+        case .notSelected:
+            return "No workspace selected"
+        case let .validDirectory(path):
+            return path
+        case let .invalidDirectory(path):
+            return "Missing folder: \(path)"
+        }
+    }
+
+    private var workspaceStatusColor: Color {
+        switch workspaceStore.selectedWorkspaceStatus {
+        case .notSelected:
+            return DS.Colors.textTertiary
+        case .validDirectory:
+            return DS.Colors.textSecondary
+        case .invalidDirectory:
+            return DS.Colors.warningText
+        }
     }
 
     private var panelBackground: some View {
