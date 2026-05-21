@@ -48,6 +48,7 @@ final class CompanionManager: ObservableObject {
     private let commandRouter = LoreleiCommandRouter()
     private let workspaceSettingsStore = WorkspaceSettingsStore()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
+    private let codexExecutor = CodexExecutor()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
     private var currentResponseTask: Task<Void, Never>?
@@ -368,7 +369,7 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Local Command Routing Pipeline
 
-    /// Routes final transcripts to Lorelei's current read-only workspace actions.
+    /// Routes final transcripts to Lorelei's current local workspace and Codex actions.
     private func handleFinalTranscriptLocally(_ transcript: String) {
         currentResponseTask?.cancel()
         lastTranscript = transcript
@@ -385,6 +386,49 @@ final class CompanionManager: ObservableObject {
                 currentResponseTask = nil
                 scheduleTransientHideIfNeeded()
                 return
+            }
+
+            switch action {
+            case .codexReadOnly(let prompt):
+                let result = await codexExecutor.run(
+                    .readOnly,
+                    prompt: prompt,
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                )
+                guard !Task.isCancelled else { return }
+
+                updateLatestResultSummary(result.summary)
+                ClickyAnalytics.trackAIResponseReceived(response: "codex read-only command")
+                voiceState = .idle
+                currentResponseTask = nil
+                scheduleTransientHideIfNeeded()
+                return
+            case .codexWorkspaceWrite:
+                setPendingConfirmationTitle("Run Codex with workspace write access?")
+                updateLatestResultSummary("Needs confirmation before running Codex.")
+                ClickyAnalytics.trackAIResponseReceived(response: "codex write confirmation required")
+                voiceState = .idle
+                currentResponseTask = nil
+                scheduleTransientHideIfNeeded()
+                return
+            case .codexComputerUse:
+                setPendingConfirmationTitle("Run Codex computer-use action?")
+                updateLatestResultSummary("Needs confirmation before running Codex.")
+                ClickyAnalytics.trackAIResponseReceived(response: "codex computer-use confirmation required")
+                voiceState = .idle
+                currentResponseTask = nil
+                scheduleTransientHideIfNeeded()
+                return
+            case .codexScreen:
+                setPendingConfirmationTitle("Connect screen context?")
+                updateLatestResultSummary("Screen context is not connected yet.")
+                ClickyAnalytics.trackAIResponseReceived(response: "codex screen context not connected")
+                voiceState = .idle
+                currentResponseTask = nil
+                scheduleTransientHideIfNeeded()
+                return
+            case .gitStatus, .gitDiff, .runTests, .unsupported:
+                break
             }
 
             let result = await workspaceCommandExecutor.run(

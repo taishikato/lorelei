@@ -61,6 +61,8 @@ struct WorkspaceCommandExecutor {
             return await runGitDiff(workspacePath: workspacePath)
         case .runTests:
             return WorkspaceCommandResult(summary: "No test command configured")
+        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexComputerUse:
+            return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
         case .unsupported(let message):
             return WorkspaceCommandResult(summary: message)
         }
@@ -193,7 +195,7 @@ struct WorkspaceCommandTestHook: Sendable {
 }
 #endif
 
-private struct WorkspaceProcessExecution: Sendable {
+struct WorkspaceProcessExecution: Sendable {
     enum Reason: Sendable {
         case exited(Int32)
         case timedOut
@@ -206,7 +208,7 @@ private struct WorkspaceProcessExecution: Sendable {
     let stderr: String
 }
 
-private final class WorkspaceProcessRunner: @unchecked Sendable {
+final class WorkspaceProcessRunner: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.taishi.lorelei.workspace-process-runner")
     private let cancellationLock = NSLock()
     nonisolated(unsafe) private var process: Process?

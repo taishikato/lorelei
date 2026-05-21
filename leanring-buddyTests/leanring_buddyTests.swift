@@ -133,7 +133,31 @@ struct leanring_buddyTests {
     @Test func routerReturnsUnsupportedForUnknownText() async throws {
         let router = LoreleiCommandRouter()
 
-        #expect(router.route("open the project") == .unsupported("Only status, diff, and test are wired yet."))
+        #expect(router.route("") == .unsupported("I didn't catch a command."))
+    }
+
+    @Test func routerMapsGenericReadOnlyQuestionToCodexReadOnly() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("why is the auth test failing?") == .codexReadOnly("why is the auth test failing?"))
+    }
+
+    @Test func routerMapsMutatingRequestToCodexWorkspaceWrite() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("fix the failing test") == .codexWorkspaceWrite("fix the failing test"))
+    }
+
+    @Test func routerMapsScreenRequestToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("look at my screen") == .codexScreen("look at my screen"))
+    }
+
+    @Test func routerMapsComputerUseRequestToCodexComputerUse() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("click the submit button") == .codexComputerUse("click the submit button"))
     }
 
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {
@@ -233,6 +257,78 @@ struct leanring_buddyTests {
         #expect(launchCounter.value == 0)
     }
 
+    @Test func codexExecutorBuildsReadOnlyCommand() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let recorder = CodexCommandRecorder(finalMessage: "Read-only answer")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+
+        let result = await executor.run(.readOnly, prompt: "explain the diff", workspacePath: directoryURL.path)
+
+        #expect(result.summary == "Read-only answer")
+        #expect(recorder.executableURL?.path == "/usr/local/bin/codex")
+        #expect(recorder.currentDirectoryURL == directoryURL)
+        #expect(recorder.arguments?.starts(with: ["exec", "--sandbox", "read-only", "--cd", directoryURL.path]) == true)
+        #expect(recorder.arguments?.contains("--output-last-message") == true)
+        #expect(recorder.outputLastMessagePath != nil)
+    }
+
+    @Test func codexExecutorBuildsWorkspaceWriteCommand() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let recorder = CodexCommandRecorder(finalMessage: "Write-mode answer")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+
+        let result = await executor.run(.workspaceWrite, prompt: "fix the test", workspacePath: directoryURL.path)
+
+        #expect(result.summary == "Write-mode answer")
+        #expect(recorder.arguments?.starts(with: [
+            "exec",
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "never",
+            "--cd",
+            directoryURL.path
+        ]) == true)
+        #expect(recorder.arguments?.contains("--output-last-message") == true)
+        #expect(recorder.outputLastMessagePath != nil)
+    }
+
+    @Test func codexExecutorReportsMissingWorkspace() async throws {
+        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+
+        let result = await executor.run(.readOnly, prompt: "explain this", workspacePath: nil)
+
+        #expect(result.summary == "No workspace selected.")
+        #expect(recorder.arguments == nil)
+    }
+
+    @Test func codexExecutorReportsMissingExecutable() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { nil },
+            commandRunner: recorder.run
+        )
+
+        let result = await executor.run(.readOnly, prompt: "explain this", workspacePath: directoryURL.path)
+
+        #expect(result.summary.contains("Codex executable was not found."))
+        #expect(recorder.arguments == nil)
+    }
+
     private func makeTemporaryGitRepository() throws -> URL {
         let repositoryURL = try makeTemporaryDirectory()
         try runGitTestCommand(["init"], in: repositoryURL)
@@ -256,6 +352,46 @@ struct leanring_buddyTests {
         try process.run()
         process.waitUntilExit()
         #expect(process.terminationStatus == 0)
+    }
+}
+
+@MainActor
+private final class CodexCommandRecorder {
+    private let finalMessage: String
+    private(set) var executableURL: URL?
+    private(set) var arguments: [String]?
+    private(set) var currentDirectoryURL: URL?
+
+    init(finalMessage: String) {
+        self.finalMessage = finalMessage
+    }
+
+    var outputLastMessagePath: String? {
+        guard let arguments,
+              let optionIndex = arguments.firstIndex(of: "--output-last-message"),
+              arguments.indices.contains(optionIndex + 1) else {
+            return nil
+        }
+        return arguments[optionIndex + 1]
+    }
+
+    func run(
+        executableURL: URL,
+        arguments: [String],
+        currentDirectoryURL: URL,
+        timeoutSeconds: TimeInterval,
+        prelaunchDelay: TimeInterval,
+        onLaunch: (@Sendable () -> Void)?
+    ) async -> WorkspaceProcessExecution {
+        self.executableURL = executableURL
+        self.arguments = arguments
+        self.currentDirectoryURL = currentDirectoryURL
+
+        if let outputPath = outputLastMessagePath {
+            try? finalMessage.write(toFile: outputPath, atomically: true, encoding: .utf8)
+        }
+
+        return WorkspaceProcessExecution(reason: .exited(0), stdout: "", stderr: "")
     }
 }
 
