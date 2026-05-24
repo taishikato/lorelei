@@ -87,6 +87,7 @@ final class CompanionManager: ObservableObject {
     private let commandRouter = LoreleiCommandRouter()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexExecutor = CodexExecutor()
+    private let chromeBridgeExecutor = ChromeBridgeExecutor()
     private let browserOperationClassifier = BrowserOperationClassifier()
     private let speechOutput: SpeechOutputing
     private var pendingConfirmation = PendingCommandConfirmation()
@@ -488,7 +489,7 @@ final class CompanionManager: ObservableObject {
                 return
             case .codexChrome:
                 requestPendingConfirmation(
-                    title: "Run Codex Chrome action?",
+                    title: "Run Chrome action?",
                     action: action
                 )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex chrome confirmation required")
@@ -560,14 +561,8 @@ final class CompanionManager: ObservableObject {
                 )
                 analyticsResponse = "confirmed codex computer-use command"
             case .codexChrome(let prompt):
-                result = await codexExecutor.run(
-                    .workspaceWrite,
-                    prompt: CodexPromptBuilder.chromePrompt(for: prompt),
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath,
-                    fallbackWorkingDirectoryPath: FileManager.default.homeDirectoryForCurrentUser.path,
-                    skipGitRepoCheck: true
-                )
-                analyticsResponse = "confirmed codex chrome command"
+                result = await chromeBridgeExecutor.run(prompt: prompt)
+                analyticsResponse = "confirmed chrome bridge command"
             default:
                 result = WorkspaceCommandResult(summary: "Unsupported confirmed command.", status: .failed)
                 analyticsResponse = "unsupported confirmed command"

@@ -815,6 +815,28 @@ struct leanring_buddyTests {
         #expect(response.summary == "Chrome Google search opened: Lorelei voice control smoke test")
     }
 
+    @Test func chromeBridgeExecutorReturnsUnsupportedForUnknownPrompt() async throws {
+        let executor = ChromeBridgeExecutor(client: StubChromeBridgeClient(responseLine: ""))
+
+        let result = await executor.run(prompt: "click the first result")
+
+        #expect(result.status == .failed)
+        #expect(result.summary == "Chrome bridge does not support that browser action yet.")
+    }
+
+    @Test func chromeBridgeExecutorSendsGoogleSearchToClient() async throws {
+        let client = StubChromeBridgeClient(
+            responseLine: #"{"id":"stub","ok":true,"type":"googleSearch","title":"Lorelei voice control smoke test - Google Search","url":"https://www.google.com/search?q=Lorelei%20voice%20control%20smoke%20test","searchValue":"Lorelei voice control smoke test"}"#
+        )
+        let executor = ChromeBridgeExecutor(client: client, idGenerator: { "stub" })
+
+        let result = await executor.run(prompt: "search Google for Lorelei voice control smoke test")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Chrome Google search opened: Lorelei voice control smoke test")
+        #expect(client.lastSentLine == #"{"id":"stub","query":"Lorelei voice control smoke test","type":"googleSearch"}"# + "\n")
+    }
+
     private func jsonDictionary(from line: String) throws -> [String: Any]? {
         let trimmedLine = line.trimmingCharacters(in: .newlines)
         let data = try #require(trimmedLine.data(using: .utf8))
@@ -883,4 +905,18 @@ private final class LaunchCounter: @unchecked Sendable {
 @MainActor
 private final class SilentSpeechOutput: SpeechOutputing {
     func speak(_ text: String) {}
+}
+
+private final class StubChromeBridgeClient: ChromeBridgeClienting, @unchecked Sendable {
+    private let responseLine: String
+    private(set) var lastSentLine: String?
+
+    init(responseLine: String) {
+        self.responseLine = responseLine
+    }
+
+    func send(line: String) async throws -> String {
+        lastSentLine = line
+        return responseLine
+    }
 }
