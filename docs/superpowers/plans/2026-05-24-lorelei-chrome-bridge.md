@@ -31,7 +31,7 @@
 - Create: `leanring-buddy/ChromeBridgeExecutor.swift`
 - Modify: `leanring-buddyTests/leanring_buddyTests.swift`
 
-- [ ] **Step 1: Write the failing planner tests**
+- [x] **Step 1: Write the failing planner tests**
 
 Append these tests to `leanring-buddyTests/leanring_buddyTests.swift`:
 
@@ -76,7 +76,7 @@ Append these tests to `leanring-buddyTests/leanring_buddyTests.swift`:
 }
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -86,7 +86,7 @@ xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configurati
 
 Expected: FAIL because `ChromeBridgeCommandPlanner`, `ChromeBridgeRequest`, `ChromeBridgeLineCodec`, and `ChromeBridgeResponse` do not exist.
 
-- [ ] **Step 3: Implement minimal Swift bridge contract**
+- [x] **Step 3: Implement minimal Swift bridge contract**
 
 Create `leanring-buddy/ChromeBridgeExecutor.swift` with:
 
@@ -193,7 +193,7 @@ enum ChromeBridgeExecutorError: Error, Equatable {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify GREEN**
+- [x] **Step 4: Run tests to verify GREEN**
 
 Run:
 
@@ -203,7 +203,7 @@ xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configurati
 
 Expected: PASS for the new planner/codec tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add leanring-buddy/ChromeBridgeExecutor.swift leanring-buddyTests/leanring_buddyTests.swift
@@ -220,7 +220,7 @@ git commit -m "feat: add Chrome bridge command contract"
 - Modify: `leanring-buddy/LoreleiCommandRouter.swift`
 - Modify: `leanring-buddyTests/leanring_buddyTests.swift`
 
-- [ ] **Step 1: Write the failing executor tests**
+- [x] **Step 1: Write the failing executor tests**
 
 Append these tests to `leanring-buddyTests/leanring_buddyTests.swift`:
 
@@ -266,7 +266,7 @@ private final class StubChromeBridgeClient: ChromeBridgeClienting, @unchecked Se
 }
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -276,7 +276,7 @@ xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configurati
 
 Expected: FAIL because `ChromeBridgeExecutor` and `ChromeBridgeClienting` do not exist yet.
 
-- [ ] **Step 3: Implement minimal socket executor**
+- [x] **Step 3: Implement minimal socket executor**
 
 Extend `leanring-buddy/ChromeBridgeExecutor.swift` with:
 
@@ -426,7 +426,7 @@ struct ChromeBridgeSocketClient: ChromeBridgeClienting {
 }
 ```
 
-- [ ] **Step 4: Wire `.codexChrome` to the bridge**
+- [x] **Step 4: Wire `.codexChrome` to the bridge**
 
 In `leanring-buddy/CompanionManager.swift`, add:
 
@@ -454,7 +454,7 @@ to:
 title: "Run Chrome action?"
 ```
 
-- [ ] **Step 5: Run tests to verify GREEN**
+- [x] **Step 5: Run tests to verify GREEN**
 
 Run:
 
@@ -464,7 +464,7 @@ xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configurati
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add leanring-buddy/ChromeBridgeExecutor.swift leanring-buddy/CompanionManager.swift leanring-buddy/LoreleiCommandRouter.swift leanring-buddyTests/leanring_buddyTests.swift
@@ -480,7 +480,7 @@ git commit -m "feat: execute Chrome actions through Lorelei bridge"
 - Create: `native-host/install-dev-host.sh`
 - Create: `native-host/README.md`
 
-- [ ] **Step 1: Write a failing host smoke check**
+- [x] **Step 1: Write a failing host smoke check**
 
 Run:
 
@@ -490,7 +490,7 @@ node native-host/lorelei_chrome_native_host.js --check
 
 Expected: FAIL with `MODULE_NOT_FOUND` because the host file does not exist.
 
-- [ ] **Step 2: Implement the native host**
+- [x] **Step 2: Implement the native host**
 
 Create `native-host/lorelei_chrome_native_host.js`:
 
@@ -609,7 +609,7 @@ process.on("SIGTERM", () => {
 });
 ```
 
-- [ ] **Step 3: Add dev host installer**
+- [x] **Step 3: Add dev host installer**
 
 Create `native-host/install-dev-host.sh`:
 
@@ -640,7 +640,7 @@ JSON
 echo "$MANIFEST_PATH"
 ```
 
-- [ ] **Step 4: Add native host README**
+- [x] **Step 4: Add native host README**
 
 Create `native-host/README.md`:
 
@@ -663,7 +663,7 @@ node native-host/lorelei_chrome_native_host.js --check
 ```
 ```
 
-- [ ] **Step 5: Run host smoke check**
+- [x] **Step 5: Run host smoke check**
 
 Run:
 
@@ -673,7 +673,7 @@ node native-host/lorelei_chrome_native_host.js --check
 
 Expected: PASS with JSON containing `"ok":true`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add native-host/lorelei_chrome_native_host.js native-host/install-dev-host.sh native-host/README.md
@@ -688,7 +688,7 @@ git commit -m "feat: add Lorelei Chrome native host"
 - Create: `chrome-extension/lorelei-bridge/manifest.json`
 - Create: `chrome-extension/lorelei-bridge/background.js`
 
-- [ ] **Step 1: Write a failing manifest validation**
+- [x] **Step 1: Write a failing manifest validation**
 
 Run:
 
@@ -698,7 +698,7 @@ node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync("chrome-exte
 
 Expected: FAIL because the manifest does not exist.
 
-- [ ] **Step 2: Create manifest**
+- [x] **Step 2: Create manifest**
 
 Create `chrome-extension/lorelei-bridge/manifest.json`:
 
@@ -723,7 +723,7 @@ Create `chrome-extension/lorelei-bridge/manifest.json`:
 }
 ```
 
-- [ ] **Step 3: Create background service worker**
+- [x] **Step 3: Create background service worker**
 
 Create `chrome-extension/lorelei-bridge/background.js`:
 
@@ -825,7 +825,7 @@ function waitForTabComplete(tabId, timeoutMs) {
 connectNativeHost();
 ```
 
-- [ ] **Step 4: Run manifest validation**
+- [x] **Step 4: Run manifest validation**
 
 Run:
 
@@ -835,7 +835,7 @@ node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync("chrome-exte
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add chrome-extension/lorelei-bridge/manifest.json chrome-extension/lorelei-bridge/background.js
@@ -850,7 +850,7 @@ git commit -m "feat: add Lorelei Chrome extension"
 - Create: `native-host/e2e-google-smoke.mjs`
 - Modify: `native-host/README.md`
 
-- [ ] **Step 1: Write a failing E2E script check**
+- [x] **Step 1: Write a failing E2E script check**
 
 Run:
 
@@ -860,7 +860,7 @@ node native-host/e2e-google-smoke.mjs --help
 
 Expected: FAIL because the script does not exist.
 
-- [ ] **Step 2: Create E2E script**
+- [x] **Step 2: Create E2E script**
 
 Create `native-host/e2e-google-smoke.mjs`:
 
@@ -977,7 +977,7 @@ try {
 }
 ```
 
-- [ ] **Step 3: Update README E2E section**
+- [x] **Step 3: Update README E2E section**
 
 Append to `native-host/README.md`:
 
@@ -991,7 +991,7 @@ node native-host/e2e-google-smoke.mjs
 The script launches Chrome with a temporary profile and the local unpacked extension, sends a single Google search command, and verifies the returned title or search box value.
 ```
 
-- [ ] **Step 4: Run E2E**
+- [x] **Step 4: Run E2E**
 
 Run:
 
@@ -1001,7 +1001,7 @@ node native-host/e2e-google-smoke.mjs
 
 Expected: PASS with JSON containing `"ok": true` and `"searchValue": "Lorelei voice control smoke test"` or a title containing the same query.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add native-host/e2e-google-smoke.mjs native-host/README.md
@@ -1012,31 +1012,31 @@ git commit -m "test: add Chrome bridge Google smoke test"
 
 ## Final Verification
 
-- [ ] Run full tests:
+- [x] Run full tests:
 
 ```bash
 xcodebuild -project leanring-buddy.xcodeproj -scheme leanring-buddy -configuration Debug CODE_SIGNING_ALLOWED=NO test
 ```
 
-- [ ] Run host check:
+- [x] Run host check:
 
 ```bash
 node native-host/lorelei_chrome_native_host.js --check
 ```
 
-- [ ] Run Google-only E2E:
+- [x] Run Google-only E2E:
 
 ```bash
 node native-host/e2e-google-smoke.mjs
 ```
 
-- [ ] Confirm no stray processes:
+- [x] Confirm no stray processes:
 
 ```bash
 ps -A -o pid=,ppid=,stat=,command= | grep -E 'lorelei_chrome_native_host|Google Chrome.*lorelei-chrome-e2e' | grep -v grep
 ```
 
-- [ ] Confirm git status:
+- [x] Confirm git status:
 
 ```bash
 git status --short --branch
