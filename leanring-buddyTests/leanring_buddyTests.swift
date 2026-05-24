@@ -8,6 +8,7 @@
 import Testing
 import Foundation
 import CoreGraphics
+import Darwin
 @testable import Lorelei
 
 @MainActor
@@ -837,6 +838,64 @@ struct leanring_buddyTests {
         #expect(client.lastSentLine == #"{"id":"stub","query":"Lorelei voice control smoke test","type":"googleSearch"}"# + "\n")
     }
 
+    @Test func chromeBridgeErrorDescriptionIncludesUnderlyingSocketMessage() async throws {
+        #expect(
+            ChromeBridgeExecutorError.socketUnavailable("Chrome bridge is not running").localizedDescription
+                == "Chrome bridge is not running"
+        )
+    }
+
+    @Test func chromeBridgeSocketClientTimesOutWhenBridgeDoesNotRespond() async throws {
+        let server = try UnixSocketTestServer { _ in
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        let client = ChromeBridgeSocketClient(
+            socketPath: server.socketPath,
+            timeoutSeconds: 0.2,
+            maxResponseBytes: 1024
+        )
+
+        var caughtError: Error?
+        do {
+            _ = try await client.send(line: "{}\n")
+        } catch {
+            caughtError = error
+        }
+
+        let error = try #require(caughtError)
+        #expect(
+            (error as? ChromeBridgeExecutorError) == .timedOut
+                || error.localizedDescription.contains("Chrome bridge timed out.")
+        )
+    }
+
+    @Test func chromeBridgeSocketClientRejectsOversizedResponse() async throws {
+        let server = try UnixSocketTestServer { clientFileDescriptor in
+            let bytes = Array("response-without-newline".utf8)
+            _ = bytes.withUnsafeBytes { buffer in
+                write(clientFileDescriptor, buffer.baseAddress, buffer.count)
+            }
+        }
+        let client = ChromeBridgeSocketClient(
+            socketPath: server.socketPath,
+            timeoutSeconds: 1,
+            maxResponseBytes: 8
+        )
+
+        var caughtError: Error?
+        do {
+            _ = try await client.send(line: "{}\n")
+        } catch {
+            caughtError = error
+        }
+
+        let error = try #require(caughtError)
+        #expect(
+            (error as? ChromeBridgeExecutorError) == .responseTooLarge
+                || error.localizedDescription == "Chrome bridge response was too large."
+        )
+    }
+
     private func jsonDictionary(from line: String) throws -> [String: Any]? {
         let trimmedLine = line.trimmingCharacters(in: .newlines)
         let data = try #require(trimmedLine.data(using: .utf8))
@@ -918,5 +977,68 @@ private final class StubChromeBridgeClient: ChromeBridgeClienting, @unchecked Se
     func send(line: String) async throws -> String {
         lastSentLine = line
         return responseLine
+    }
+}
+
+private final class UnixSocketTestServer: @unchecked Sendable {
+    let socketPath: String
+    private let serverFileDescriptor: Int32
+    private let queue = DispatchQueue(label: "dev.taishi.lorelei.chrome-bridge-test-server")
+
+    init(handler: @escaping @Sendable (Int32) -> Void) throws {
+        socketPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lorelei-test-\(UUID().uuidString).sock")
+            .path
+
+        serverFileDescriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard serverFileDescriptor >= 0 else {
+            throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
+        }
+
+        unlink(socketPath)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketPath.utf8)
+        let pathCapacity = MemoryLayout.size(ofValue: address.sun_path)
+        guard pathBytes.count < pathCapacity else {
+            close(serverFileDescriptor)
+            throw ChromeBridgeExecutorError.socketUnavailable("Socket path is too long.")
+        }
+
+        withUnsafeMutablePointer(to: &address.sun_path) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: pathCapacity) { buffer in
+                for index in 0..<pathBytes.count {
+                    buffer[index] = CChar(bitPattern: pathBytes[index])
+                }
+                buffer[pathBytes.count] = 0
+            }
+        }
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                bind(serverFileDescriptor, socketAddress, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            close(serverFileDescriptor)
+            throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
+        }
+
+        guard listen(serverFileDescriptor, 1) == 0 else {
+            close(serverFileDescriptor)
+            throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
+        }
+
+        queue.async { [serverFileDescriptor] in
+            let clientFileDescriptor = accept(serverFileDescriptor, nil, nil)
+            guard clientFileDescriptor >= 0 else { return }
+            handler(clientFileDescriptor)
+            close(clientFileDescriptor)
+        }
+    }
+
+    deinit {
+        close(serverFileDescriptor)
+        unlink(socketPath)
     }
 }

@@ -110,6 +110,27 @@ enum ChromeBridgeExecutorError: Error, Equatable {
     case unsupportedCommand
     case socketUnavailable(String)
     case responseDecodingFailed
+    case timedOut
+    case responseTooLarge
+}
+
+extension ChromeBridgeExecutorError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .encodingFailed:
+            return "Chrome bridge request could not be encoded."
+        case .unsupportedCommand:
+            return "Chrome bridge does not support that browser action yet."
+        case .socketUnavailable(let message):
+            return message
+        case .responseDecodingFailed:
+            return "Chrome bridge response could not be decoded."
+        case .timedOut:
+            return "Chrome bridge timed out."
+        case .responseTooLarge:
+            return "Chrome bridge response was too large."
+        }
+    }
 }
 
 protocol ChromeBridgeClienting: Sendable {
@@ -160,17 +181,30 @@ struct ChromeBridgeSocketClient: ChromeBridgeClienting {
     }
 
     private let socketPath: String
+    private let timeoutSeconds: TimeInterval
+    private let maxResponseBytes: Int
     private let queue = DispatchQueue(label: "dev.taishi.lorelei.chrome-bridge-socket")
 
-    init(socketPath: String = ChromeBridgeSocketClient.defaultSocketPath) {
+    init(
+        socketPath: String = ChromeBridgeSocketClient.defaultSocketPath,
+        timeoutSeconds: TimeInterval = 20,
+        maxResponseBytes: Int = 1_048_576
+    ) {
         self.socketPath = socketPath
+        self.timeoutSeconds = timeoutSeconds
+        self.maxResponseBytes = maxResponseBytes
     }
 
     func send(line: String) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 do {
-                    continuation.resume(returning: try sendBlocking(line: line, socketPath: socketPath))
+                    continuation.resume(returning: try sendBlocking(
+                        line: line,
+                        socketPath: socketPath,
+                        timeoutSeconds: timeoutSeconds,
+                        maxResponseBytes: maxResponseBytes
+                    ))
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -179,12 +213,19 @@ struct ChromeBridgeSocketClient: ChromeBridgeClienting {
     }
 }
 
-private func sendBlocking(line: String, socketPath: String) throws -> String {
+private func sendBlocking(
+    line: String,
+    socketPath: String,
+    timeoutSeconds: TimeInterval,
+    maxResponseBytes: Int
+) throws -> String {
     let fileDescriptor = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fileDescriptor >= 0 else {
         throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
     }
     defer { close(fileDescriptor) }
+
+    try setSocketTimeout(timeoutSeconds, on: fileDescriptor)
 
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
@@ -213,7 +254,39 @@ private func sendBlocking(line: String, socketPath: String) throws -> String {
     }
 
     try writeAll(line, to: fileDescriptor)
-    return try readResponseLine(from: fileDescriptor)
+    return try readResponseLine(from: fileDescriptor, maxResponseBytes: maxResponseBytes)
+}
+
+private func setSocketTimeout(_ timeoutSeconds: TimeInterval, on fileDescriptor: Int32) throws {
+    let safeTimeout = max(timeoutSeconds, 0.001)
+    let seconds = floor(safeTimeout)
+    let microseconds = (safeTimeout - seconds) * 1_000_000
+    var timeout = timeval(
+        tv_sec: __darwin_time_t(seconds),
+        tv_usec: __darwin_suseconds_t(microseconds)
+    )
+
+    let receiveResult = setsockopt(
+        fileDescriptor,
+        SOL_SOCKET,
+        SO_RCVTIMEO,
+        &timeout,
+        socklen_t(MemoryLayout<timeval>.size)
+    )
+    guard receiveResult == 0 else {
+        throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
+    }
+
+    let sendResult = setsockopt(
+        fileDescriptor,
+        SOL_SOCKET,
+        SO_SNDTIMEO,
+        &timeout,
+        socklen_t(MemoryLayout<timeval>.size)
+    )
+    guard sendResult == 0 else {
+        throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
+    }
 }
 
 private func writeAll(_ line: String, to fileDescriptor: Int32) throws {
@@ -227,20 +300,49 @@ private func writeAll(_ line: String, to fileDescriptor: Int32) throws {
                 baseAddress.advanced(by: bytesWritten),
                 bytes.count - bytesWritten
             )
-            guard result > 0 else {
+            if result > 0 {
+                bytesWritten += result
+                continue
+            }
+
+            if result == 0 {
+                throw ChromeBridgeExecutorError.socketUnavailable("Chrome bridge closed the connection.")
+            }
+
+            switch errno {
+            case EINTR:
+                continue
+            case EAGAIN, EWOULDBLOCK:
+                throw ChromeBridgeExecutorError.timedOut
+            default:
                 throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
             }
-            bytesWritten += result
         }
     }
 }
 
-private func readResponseLine(from fileDescriptor: Int32) throws -> String {
+private func readResponseLine(from fileDescriptor: Int32, maxResponseBytes: Int) throws -> String {
     var collectedBytes: [UInt8] = []
     var buffer = [UInt8](repeating: 0, count: 4096)
 
     while true {
         let bytesRead = read(fileDescriptor, &buffer, buffer.count)
+
+        if bytesRead == 0 {
+            throw ChromeBridgeExecutorError.socketUnavailable("Chrome bridge closed the connection.")
+        }
+
+        if bytesRead < 0 {
+            switch errno {
+            case EINTR:
+                continue
+            case EAGAIN, EWOULDBLOCK:
+                throw ChromeBridgeExecutorError.timedOut
+            default:
+                throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
+            }
+        }
+
         guard bytesRead > 0 else {
             throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
         }
@@ -250,6 +352,9 @@ private func readResponseLine(from fileDescriptor: Int32) throws -> String {
                 return String(decoding: collectedBytes, as: UTF8.self)
             }
             collectedBytes.append(byte)
+            if collectedBytes.count > maxResponseBytes {
+                throw ChromeBridgeExecutorError.responseTooLarge
+            }
         }
     }
 }
