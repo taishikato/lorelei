@@ -745,6 +745,45 @@ struct leanring_buddyTests {
         }
         return false
     }
+
+    @Test func chromeBridgePlannerBuildsGoogleSearchCommand() async throws {
+        let command = ChromeBridgeCommandPlanner.command(for: "search Google for Lorelei voice control smoke test")
+
+        #expect(command == .googleSearch(query: "Lorelei voice control smoke test"))
+    }
+
+    @Test func chromeBridgePlannerRejectsUnsupportedChromeCommands() async throws {
+        let command = ChromeBridgeCommandPlanner.command(for: "click the first result")
+
+        #expect(command == nil)
+    }
+
+    @Test func chromeBridgeRequestEncodesSingleJSONLine() async throws {
+        let request = ChromeBridgeRequest(
+            id: "test-id",
+            command: .googleSearch(query: "Lorelei voice control smoke test")
+        )
+
+        let line = try ChromeBridgeLineCodec.encode(request)
+
+        #expect(line.hasSuffix("\n"))
+        #expect(line.contains("\"type\":\"googleSearch\""))
+        #expect(line.contains("\"query\":\"Lorelei voice control smoke test\""))
+    }
+
+    @Test func chromeBridgeResponseSummaryReportsGoogleSearchState() async throws {
+        let response = ChromeBridgeResponse(
+            id: "test-id",
+            ok: true,
+            type: "googleSearch",
+            title: "Lorelei voice control smoke test - Google Search",
+            url: "https://www.google.com/search?q=Lorelei%20voice%20control%20smoke%20test",
+            searchValue: "Lorelei voice control smoke test",
+            error: nil
+        )
+
+        #expect(response.summary == "Chrome Google search opened: Lorelei voice control smoke test")
+    }
 }
 
 @MainActor
