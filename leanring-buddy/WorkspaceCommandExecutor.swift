@@ -91,7 +91,7 @@ struct WorkspaceCommandExecutor {
             return await runGitDiff(workspacePath: workspacePath)
         case .runTests:
             return WorkspaceCommandResult(summary: "No test command configured.", status: .failed)
-        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexComputerUse:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexComputerUse, .codexChrome:
             return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
         case .unsupported(let message):
             return WorkspaceCommandResult(summary: message)

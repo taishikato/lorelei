@@ -87,6 +87,7 @@ final class CompanionManager: ObservableObject {
     private let commandRouter = LoreleiCommandRouter()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexExecutor = CodexExecutor()
+    private let browserOperationClassifier = BrowserOperationClassifier()
     private let speechOutput: SpeechOutputing
     private var pendingConfirmation = PendingCommandConfirmation()
     private var responseTaskTracker = CompanionResponseTaskTracker()
@@ -436,12 +437,25 @@ final class CompanionManager: ObservableObject {
         pendingConfirmation.cancel()
         setPendingConfirmationTitle(nil)
         lastTranscript = transcript
-        let action = commandRouter.route(transcript)
         let taskID = responseTaskTracker.begin()
 
         currentResponseTask = Task { @MainActor in
             defer { finishResponseTaskIfCurrent(taskID) }
             voiceState = .processing
+            let browserClassification: BrowserOperationClassification?
+            if BrowserOperationClassifier.shouldClassify(transcript) {
+                browserClassification = await browserOperationClassifier.classify(
+                    transcript,
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                )
+            } else {
+                browserClassification = nil
+            }
+            guard !Task.isCancelled else { return }
+            let action = commandRouter.route(
+                transcript,
+                browserClassification: browserClassification
+            )
 
             if case let .unsupported(message) = action {
                 updateLatestResultSummary(message)
@@ -471,6 +485,13 @@ final class CompanionManager: ObservableObject {
                     action: action
                 )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex computer-use confirmation required")
+                return
+            case .codexChrome:
+                requestPendingConfirmation(
+                    title: "Run Codex Chrome action?",
+                    action: action
+                )
+                ClickyAnalytics.trackAIResponseReceived(response: "codex chrome confirmation required")
                 return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
@@ -538,6 +559,15 @@ final class CompanionManager: ObservableObject {
                     workspacePath: workspaceSettingsStore.selectedWorkspacePath
                 )
                 analyticsResponse = "confirmed codex computer-use command"
+            case .codexChrome(let prompt):
+                result = await codexExecutor.run(
+                    .workspaceWrite,
+                    prompt: CodexPromptBuilder.chromePrompt(for: prompt),
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath,
+                    fallbackWorkingDirectoryPath: FileManager.default.homeDirectoryForCurrentUser.path,
+                    skipGitRepoCheck: true
+                )
+                analyticsResponse = "confirmed codex chrome command"
             default:
                 result = WorkspaceCommandResult(summary: "Unsupported confirmed command.", status: .failed)
                 analyticsResponse = "unsupported confirmed command"

@@ -74,7 +74,9 @@ struct CodexExecutor {
         workspacePath: String?,
         imagePaths: [String] = [],
         removeImageInputsAfterRun: Bool = false,
-        ephemeral: Bool = false
+        ephemeral: Bool = false,
+        fallbackWorkingDirectoryPath: String? = nil,
+        skipGitRepoCheck: Bool = false
     ) async -> WorkspaceCommandResult {
         defer {
             if removeImageInputsAfterRun {
@@ -84,15 +86,21 @@ struct CodexExecutor {
             }
         }
 
-        guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !workspacePath.isEmpty else {
+        let trimmedWorkspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedFallbackWorkingDirectoryPath = fallbackWorkingDirectoryPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let usesFallbackWorkingDirectory = trimmedWorkspacePath?.isEmpty != false
+        guard let workingDirectoryPath = usesFallbackWorkingDirectory
+            ? trimmedFallbackWorkingDirectoryPath
+            : trimmedWorkspacePath,
+              !workingDirectoryPath.isEmpty else {
             return WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace)
         }
 
         var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: workspacePath, isDirectory: &isDirectory), isDirectory.boolValue else {
+        guard fileManager.fileExists(atPath: workingDirectoryPath, isDirectory: &isDirectory), isDirectory.boolValue else {
             return WorkspaceCommandResult(
-                summary: "Workspace path is not a valid directory: \(workspacePath)",
+                summary: "Workspace path is not a valid directory: \(workingDirectoryPath)",
                 status: .failed
             )
         }
@@ -125,13 +133,14 @@ struct CodexExecutor {
             executableURL,
             commandArguments(
                 mode: mode,
-                workspacePath: workspacePath,
+                workspacePath: workingDirectoryPath,
                 outputPath: outputURL.path,
                 prompt: prompt,
                 imagePaths: imagePaths,
-                ephemeral: ephemeral
+                ephemeral: ephemeral,
+                skipGitRepoCheck: skipGitRepoCheck || usesFallbackWorkingDirectory
             ),
-            URL(fileURLWithPath: workspacePath, isDirectory: true),
+            URL(fileURLWithPath: workingDirectoryPath, isDirectory: true),
             commandTimeoutSeconds,
             0,
             nil
@@ -175,7 +184,8 @@ struct CodexExecutor {
         outputPath: String,
         prompt: String,
         imagePaths: [String] = [],
-        ephemeral: Bool = false
+        ephemeral: Bool = false,
+        skipGitRepoCheck: Bool = false
     ) -> [String] {
         var arguments: [String] = []
 
@@ -190,6 +200,10 @@ struct CodexExecutor {
 
         if ephemeral {
             arguments += ["--ephemeral"]
+        }
+
+        if skipGitRepoCheck {
+            arguments += ["--skip-git-repo-check"]
         }
 
         for imagePath in imagePaths {

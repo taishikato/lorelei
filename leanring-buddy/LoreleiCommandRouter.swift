@@ -15,13 +15,14 @@ enum LoreleiCommandAction: Equatable, Sendable {
     case codexWorkspaceWrite(String)
     case codexScreen(String)
     case codexComputerUse(String)
+    case codexChrome(String)
     case unsupported(String)
 
     var requiresWorkspace: Bool {
         switch self {
         case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
             return true
-        case .codexComputerUse, .unsupported:
+        case .codexComputerUse, .codexChrome, .unsupported:
             return false
         }
     }
@@ -30,7 +31,7 @@ enum LoreleiCommandAction: Equatable, Sendable {
 struct LoreleiConfirmationPolicy {
     static func requiresConfirmation(for action: LoreleiCommandAction) -> Bool {
         switch action {
-        case .codexReadOnly, .codexWorkspaceWrite, .codexComputerUse:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexComputerUse, .codexChrome:
             return true
         case .gitStatus, .gitDiff, .runTests, .codexScreen, .unsupported:
             return false
@@ -56,6 +57,129 @@ struct CodexPromptBuilder {
         \(prompt)
         """
     }
+
+    static func chromePrompt(for prompt: String) -> String {
+        """
+        @chrome Use the existing Chrome browser/profile/session through the Codex Chrome Extension. If a suitable open tab already exists, use or claim that existing tab; otherwise open a new tab in the existing Chrome session. Do not use AppleScript, shell browser automation, or a non-Chrome fallback. Do not commit changes.
+
+        User browser operation:
+        \(prompt)
+        """
+    }
+}
+
+struct BrowserOperationClassification: Codable, Equatable, Sendable {
+    let isBrowserOperation: Bool
+    let operation: String
+    let confidence: Double
+}
+
+struct BrowserOperationClassifier {
+    private let codexExecutor: CodexExecutor
+    private let fallbackWorkingDirectoryPath: String
+
+    init(
+        codexExecutor: CodexExecutor = CodexExecutor(),
+        fallbackWorkingDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) {
+        self.codexExecutor = codexExecutor
+        self.fallbackWorkingDirectoryPath = fallbackWorkingDirectoryPath
+    }
+
+    func classify(_ transcript: String, workspacePath: String?) async -> BrowserOperationClassification? {
+        let result = await codexExecutor.run(
+            .readOnly,
+            prompt: Self.classificationPrompt(for: transcript),
+            workspacePath: workspacePath,
+            ephemeral: true,
+            fallbackWorkingDirectoryPath: fallbackWorkingDirectoryPath,
+            skipGitRepoCheck: true
+        )
+
+        guard result.status == WorkspaceCommandResultStatus.succeeded else { return nil }
+        return Self.parseClassificationResponse(result.summary)
+    }
+
+    static func shouldClassify(_ transcript: String) -> Bool {
+        let command = transcript
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !command.isEmpty else { return false }
+        guard !command.contains("@chrome") else { return false }
+
+        let phraseCues = [
+            "go to",
+            "look up",
+            "open link",
+            "open page",
+            "open site",
+            "open tab",
+            "open url",
+            "search for",
+            "use chrome",
+            "use the browser"
+        ]
+        if phraseCues.contains(where: { command.contains($0) }) {
+            return true
+        }
+
+        if command.range(
+            of: #"\b[a-z0-9-]+\.(ai|app|co|com|dev|io|jp|net|org)\b"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        let wordCues: Set<String> = [
+            "browser",
+            "chrome",
+            "google",
+            "link",
+            "navigate",
+            "page",
+            "search",
+            "site",
+            "tab",
+            "url",
+            "web",
+            "website"
+        ]
+        let separators = CharacterSet.alphanumerics.inverted
+        let tokens = command
+            .components(separatedBy: separators)
+            .filter { !$0.isEmpty }
+        return tokens.contains { wordCues.contains($0) }
+    }
+
+    static func classificationPrompt(for transcript: String) -> String {
+        """
+        Classify whether this Lorelei voice transcript asks to operate the user's web browser or Chrome. Browser operations include navigating to a site, searching Google, using a webpage, clicking or typing in a browser tab, reading an existing browser page, managing tabs, or interacting with a web app. Do not perform the operation.
+
+        Return JSON only using this exact shape:
+        {"isBrowserOperation": true, "operation": "concise browser task", "confidence": 0.0}
+
+        Use false with an empty operation when the transcript is about code, files, git, tests, the desktop outside a browser, or general Q&A.
+
+        Transcript:
+        \(transcript)
+        """
+    }
+
+    static func parseClassificationResponse(_ response: String) -> BrowserOperationClassification? {
+        let trimmedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        let jsonText = extractJSONObjectText(from: trimmedResponse)
+        guard let data = jsonText.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(BrowserOperationClassification.self, from: data)
+    }
+
+    private static func extractJSONObjectText(from response: String) -> String {
+        guard let startIndex = response.firstIndex(of: "{"),
+              let endIndex = response.lastIndex(of: "}") else {
+            return response
+        }
+
+        return String(response[startIndex...endIndex])
+    }
 }
 
 struct PendingCommandConfirmation {
@@ -79,7 +203,10 @@ struct PendingCommandConfirmation {
 }
 
 struct LoreleiCommandRouter {
-    func route(_ transcript: String) -> LoreleiCommandAction {
+    func route(
+        _ transcript: String,
+        browserClassification: BrowserOperationClassification? = nil
+    ) -> LoreleiCommandAction {
         let originalCommand = transcript
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let command = originalCommand
@@ -88,6 +215,18 @@ struct LoreleiCommandRouter {
 
         guard !command.isEmpty else {
             return .unsupported("I didn't catch a command.")
+        }
+
+        if let browserClassification,
+           browserClassification.isBrowserOperation,
+           browserClassification.confidence >= 0.65 {
+            let browserOperation = browserClassification.operation
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .codexChrome(browserOperation.isEmpty ? originalCommand : browserOperation)
+        }
+
+        if command.contains("@chrome") {
+            return .codexChrome(originalCommand)
         }
 
         if isScreenRequest(command) {

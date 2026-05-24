@@ -231,6 +231,22 @@ struct leanring_buddyTests {
         #expect(router.route("click the submit button") == .codexComputerUse("click the submit button"))
     }
 
+    @Test func routerUsesAIBrowserClassificationForChromeAction() async throws {
+        let router = LoreleiCommandRouter()
+        let classification = BrowserOperationClassification(
+            isBrowserOperation: true,
+            operation: "search Google for weather in Tokyo",
+            confidence: 0.94
+        )
+
+        #expect(
+            router.route(
+                "search Google for weather in Tokyo",
+                browserClassification: classification
+            ) == .codexChrome("search Google for weather in Tokyo")
+        )
+    }
+
     @Test func confirmationPolicyAllowsOnlySafeLocalAndScopedScreenCommandsImmediately() async throws {
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitStatus))
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitDiff))
@@ -242,6 +258,7 @@ struct leanring_buddyTests {
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexReadOnly("explain this")))
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexWorkspaceWrite("fix the test")))
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexComputerUse("click submit")))
+        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexChrome("search Google for OpenAI")))
     }
 
     @Test func workspaceWritePromptIncludesNoCommitGuard() async throws {
@@ -249,6 +266,48 @@ struct leanring_buddyTests {
 
         #expect(prompt.contains("Do not commit changes."))
         #expect(prompt.contains("fix the test"))
+    }
+
+    @Test func chromePromptTargetsCodexChromeAndExistingSession() async throws {
+        let prompt = CodexPromptBuilder.chromePrompt(for: "search Google for Lorelei app")
+
+        #expect(prompt.contains("@chrome"))
+        #expect(prompt.contains("existing Chrome browser/profile/session"))
+        #expect(prompt.contains("search Google for Lorelei app"))
+        #expect(prompt.contains("Do not use AppleScript"))
+    }
+
+    @Test func browserClassifierPromptRequestsStrictJSONDecision() async throws {
+        let prompt = BrowserOperationClassifier.classificationPrompt(
+            for: "search Google for Lorelei app"
+        )
+
+        #expect(prompt.contains("Return JSON only"))
+        #expect(prompt.contains("isBrowserOperation"))
+        #expect(prompt.contains("operation"))
+        #expect(prompt.contains("search Google for Lorelei app"))
+    }
+
+    @Test func browserClassifierOnlyRunsForPossibleBrowserOperations() async throws {
+        #expect(BrowserOperationClassifier.shouldClassify("search Google for Lorelei app"))
+        #expect(BrowserOperationClassifier.shouldClassify("open the dashboard in Chrome"))
+        #expect(!BrowserOperationClassifier.shouldClassify("@chrome search Google for Lorelei app"))
+        #expect(!BrowserOperationClassifier.shouldClassify("git status"))
+        #expect(!BrowserOperationClassifier.shouldClassify("explain this Swift file"))
+    }
+
+    @Test func browserClassifierParsesJSONDecision() async throws {
+        let classification = BrowserOperationClassifier.parseClassificationResponse(
+            """
+            {"isBrowserOperation":true,"operation":"search Google for Lorelei app","confidence":0.91}
+            """
+        )
+
+        #expect(classification == BrowserOperationClassification(
+            isBrowserOperation: true,
+            operation: "search Google for Lorelei app",
+            confidence: 0.91
+        ))
     }
 
     @Test func pendingConfirmationStoresAndClearsAction() async throws {
@@ -582,6 +641,28 @@ struct leanring_buddyTests {
         ]) == true)
         #expect(recorder.arguments?.contains("--output-last-message") == true)
         #expect(recorder.outputLastMessagePath != nil)
+    }
+
+    @Test func codexExecutorUsesFallbackWorkingDirectoryWhenWorkspaceIsMissing() async throws {
+        let fallbackDirectoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: fallbackDirectoryURL) }
+        let recorder = CodexCommandRecorder(finalMessage: "Chrome answer")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+
+        let result = await executor.run(
+            .workspaceWrite,
+            prompt: "@chrome search Google for Lorelei",
+            workspacePath: nil,
+            fallbackWorkingDirectoryPath: fallbackDirectoryURL.path
+        )
+
+        #expect(result.summary == "Chrome answer")
+        #expect(recorder.currentDirectoryURL == fallbackDirectoryURL)
+        #expect(recorder.arguments?.contains(fallbackDirectoryURL.path) == true)
+        #expect(recorder.arguments?.contains("--skip-git-repo-check") == true)
     }
 
     @Test func codexExecutorReportsMissingWorkspace() async throws {
