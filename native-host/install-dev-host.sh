@@ -12,6 +12,11 @@ if [[ -z "$EXTENSION_ID" ]]; then
   exit 1
 fi
 
+if [[ ! "$EXTENSION_ID" =~ ^[a-p]{32}$ ]]; then
+  echo "Invalid Chrome extension id" >&2
+  exit 1
+fi
+
 chmod +x "$HOST_PATH"
 mkdir -p "$MANIFEST_DIR"
 
