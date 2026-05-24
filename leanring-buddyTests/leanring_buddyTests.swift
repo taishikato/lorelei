@@ -273,6 +273,8 @@ struct leanring_buddyTests {
 
         #expect(prompt.contains("@chrome"))
         #expect(prompt.contains("existing Chrome browser/profile/session"))
+        #expect(prompt.contains("Codex Chrome Extension backend only"))
+        #expect(prompt.contains("Do not use chrome-devtools"))
         #expect(prompt.contains("search Google for Lorelei app"))
         #expect(prompt.contains("Do not use AppleScript"))
     }

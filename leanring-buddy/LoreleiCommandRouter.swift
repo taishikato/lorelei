@@ -60,7 +60,7 @@ struct CodexPromptBuilder {
 
     static func chromePrompt(for prompt: String) -> String {
         """
-        @chrome Use the existing Chrome browser/profile/session through the Codex Chrome Extension. If a suitable open tab already exists, use or claim that existing tab; otherwise open a new tab in the existing Chrome session. Do not use AppleScript, shell browser automation, or a non-Chrome fallback. Do not commit changes.
+        @chrome Use the existing Chrome browser/profile/session through the Codex Chrome Extension backend only. If a suitable open tab already exists, use or claim that existing tab; otherwise open a new tab in the existing Chrome session. Do not use chrome-devtools, CDP, shell browser automation, an in-app browser, or any non-Chrome fallback. Do not use AppleScript. Do not commit changes.
 
         User browser operation:
         \(prompt)
