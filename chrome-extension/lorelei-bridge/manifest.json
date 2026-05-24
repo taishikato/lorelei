@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Lorelei Chrome Bridge",
+  "version": "0.1.0",
+  "description": "Lets Lorelei execute supported browser actions in Chrome.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvRWSWtDZDMkavvPk8qexexcrGWCXBopbYebKYElPVFz2+2jDfGOVl7Qh67pQDLK+dQNEX9U06s3JABuUQQw+2u6jqZwvX3M7ICNC2zHNaMhh2vOHHTS+Fqhcop4Z/t3E3vHnq7X7VBwZHSscU/160jx88LG5TUW5YtmvDR7Nx4Jr+1tuuFyxqUOmYaUsFh/iV77MNYDoZ88ExJVoSbRmLhWHCIAUbhPWeHoCUmxP61pprydNghHjGeTXQH1uAAGbOf0gBlDYMJF+k/uDdTxBS92Or1/TadW2N0T5cgzR6/4hroqnQRMafDITMPFcXCAVS+WU3vC2fAs1z0fw6vkVFQIDAQAB",
+  "permissions": ["nativeMessaging", "scripting", "tabs"],
+  "host_permissions": ["https://www.google.com/*"],
+  "background": { "service_worker": "background.js" }
+}
