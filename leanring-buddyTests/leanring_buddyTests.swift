@@ -896,6 +896,26 @@ struct leanring_buddyTests {
         )
     }
 
+    @Test func chromeBridgeSocketClientReportsPeerCloseDuringWriteWithoutCrashing() async throws {
+        let server = try UnixSocketTestServer { _ in }
+        let client = ChromeBridgeSocketClient(
+            socketPath: server.socketPath,
+            timeoutSeconds: 0.5,
+            maxResponseBytes: 1024
+        )
+        let largeRequestLine = String(repeating: "x", count: 1_000_000) + "\n"
+
+        var caughtError: Error?
+        do {
+            _ = try await client.send(line: largeRequestLine)
+        } catch {
+            caughtError = error
+        }
+
+        let error = try #require(caughtError)
+        #expect(error is ChromeBridgeExecutorError)
+    }
+
     private func jsonDictionary(from line: String) throws -> [String: Any]? {
         let trimmedLine = line.trimmingCharacters(in: .newlines)
         let data = try #require(trimmedLine.data(using: .utf8))

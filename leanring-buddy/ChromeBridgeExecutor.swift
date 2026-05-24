@@ -225,6 +225,7 @@ private func sendBlocking(
     }
     defer { close(fileDescriptor) }
 
+    try setNoSigPipe(on: fileDescriptor)
     try setSocketTimeout(timeoutSeconds, on: fileDescriptor)
 
     var address = sockaddr_un()
@@ -255,6 +256,20 @@ private func sendBlocking(
 
     try writeAll(line, to: fileDescriptor)
     return try readResponseLine(from: fileDescriptor, maxResponseBytes: maxResponseBytes)
+}
+
+private func setNoSigPipe(on fileDescriptor: Int32) throws {
+    var noSigPipe: Int32 = 1
+    let result = setsockopt(
+        fileDescriptor,
+        SOL_SOCKET,
+        SO_NOSIGPIPE,
+        &noSigPipe,
+        socklen_t(MemoryLayout<Int32>.size)
+    )
+    guard result == 0 else {
+        throw ChromeBridgeExecutorError.socketUnavailable(String(cString: strerror(errno)))
+    }
 }
 
 private func setSocketTimeout(_ timeoutSeconds: TimeInterval, on fileDescriptor: Int32) throws {
