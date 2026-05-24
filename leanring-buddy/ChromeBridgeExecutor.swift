@@ -58,19 +58,12 @@ struct ChromeBridgeCommandPlanner {
 struct ChromeBridgeLineCodec {
     struct EncodedRequest: Codable, Equatable, Sendable {
         let id: String
-        let command: EncodedCommand
-    }
-
-    struct EncodedCommand: Codable, Equatable, Sendable {
         let type: String
         let query: String?
     }
 
     static func encode(_ request: ChromeBridgeRequest) throws -> String {
-        let encodedRequest = EncodedRequest(
-            id: request.id,
-            command: EncodedCommand(command: request.command)
-        )
+        let encodedRequest = EncodedRequest(request: request)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
 
@@ -100,13 +93,13 @@ struct ChromeBridgeLineCodec {
     }
 }
 
-private extension ChromeBridgeLineCodec.EncodedCommand {
-    init(command: ChromeBridgeCommand) {
-        switch command {
+private extension ChromeBridgeLineCodec.EncodedRequest {
+    init(request: ChromeBridgeRequest) {
+        switch request.command {
         case .ping:
-            self.init(type: "ping", query: nil)
+            self.init(id: request.id, type: "ping", query: nil)
         case .googleSearch(let query):
-            self.init(type: "googleSearch", query: query)
+            self.init(id: request.id, type: "googleSearch", query: query)
         }
     }
 }

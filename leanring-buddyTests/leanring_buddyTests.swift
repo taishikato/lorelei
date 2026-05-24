@@ -771,6 +771,36 @@ struct leanring_buddyTests {
         #expect(line.contains("\"query\":\"Lorelei voice control smoke test\""))
     }
 
+    @Test func chromeBridgeGoogleSearchRequestEncodesTopLevelJSONShape() async throws {
+        let request = ChromeBridgeRequest(
+            id: "test-id",
+            command: .googleSearch(query: "Lorelei voice control smoke test")
+        )
+
+        let line = try ChromeBridgeLineCodec.encode(request)
+        let json = try #require(try jsonDictionary(from: line))
+
+        #expect(json["id"] as? String == "test-id")
+        #expect(json["type"] as? String == "googleSearch")
+        #expect(json["query"] as? String == "Lorelei voice control smoke test")
+        #expect(json["command"] == nil)
+    }
+
+    @Test func chromeBridgePingRequestEncodesTopLevelJSONShape() async throws {
+        let request = ChromeBridgeRequest(
+            id: "test-id",
+            command: .ping
+        )
+
+        let line = try ChromeBridgeLineCodec.encode(request)
+        let json = try #require(try jsonDictionary(from: line))
+
+        #expect(json["id"] as? String == "test-id")
+        #expect(json["type"] as? String == "ping")
+        #expect(json["query"] == nil)
+        #expect(json["command"] == nil)
+    }
+
     @Test func chromeBridgeResponseSummaryReportsGoogleSearchState() async throws {
         let response = ChromeBridgeResponse(
             id: "test-id",
@@ -783,6 +813,12 @@ struct leanring_buddyTests {
         )
 
         #expect(response.summary == "Chrome Google search opened: Lorelei voice control smoke test")
+    }
+
+    private func jsonDictionary(from line: String) throws -> [String: Any]? {
+        let trimmedLine = line.trimmingCharacters(in: .newlines)
+        let data = try #require(trimmedLine.data(using: .utf8))
+        return try JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 }
 
