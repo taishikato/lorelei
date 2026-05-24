@@ -43,3 +43,13 @@ The host starts a Unix domain socket at:
 Set `LORELEI_CHROME_BRIDGE_SOCKET` to override the path.
 
 Lorelei sends newline-delimited JSON requests to the socket. The host forwards each request to Chrome as a native messaging frame. Chrome responses with a matching string `id` are returned to the socket as newline-delimited JSON and the socket is closed.
+
+## Google E2E Smoke Test
+
+Run the Google-only end-to-end smoke test from the repository root:
+
+```sh
+node native-host/e2e-google-smoke.mjs
+```
+
+The script installs the development native host manifest for the local bridge extension, launches Google Chrome with a temporary profile and the unpacked extension, sends a `googleSearch` command over the Unix socket, and verifies that Google receives the smoke-test query. It only opens Google Search and prints a JSON success line with the observed title, URL, and search value.
