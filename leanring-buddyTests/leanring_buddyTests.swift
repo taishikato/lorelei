@@ -605,6 +605,26 @@ struct leanring_buddyTests {
         #expect(recorder.outputLastMessagePath != nil)
     }
 
+    @Test func codexExecutorDoesNotIgnoreUserConfigForWorkspaceWriteCommand() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let recorder = CodexCommandRecorder(finalMessage: "Computer-use answer")
+        let executor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+
+        _ = await executor.run(
+            .workspaceWrite,
+            prompt: CodexPromptBuilder.computerUsePrompt(for: "open the browser"),
+            workspacePath: directoryURL.path
+        )
+
+        #expect(recorder.arguments?.contains("--ignore-user-config") == false)
+        #expect(recorder.arguments?.contains("--sandbox") == true)
+        #expect(recorder.arguments?.contains("workspace-write") == true)
+    }
+
     @Test func codexExecutorReportsMissingWorkspace() async throws {
         let recorder = CodexCommandRecorder(finalMessage: "Should not run")
         let executor = CodexExecutor(
