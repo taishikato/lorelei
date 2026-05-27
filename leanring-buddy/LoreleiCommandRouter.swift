@@ -50,7 +50,9 @@ struct CodexPromptBuilder {
 
     static func computerUsePrompt(for prompt: String) -> String {
         """
-        The user requested a computer-use action through Lorelei. Use available computer-use capabilities if needed. Do not commit changes.
+        Use the existing Codex Computer Use plugin when desktop UI operation is needed.
+        Follow the Codex Computer Use confirmation and safety policy for risky UI actions.
+        Do not commit changes.
 
         User request:
         \(prompt)

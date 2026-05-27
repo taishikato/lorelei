@@ -231,6 +231,18 @@ struct leanring_buddyTests {
         #expect(router.route("click the submit button") == .codexComputerUse("click the submit button"))
     }
 
+    @Test func routerMapsBrowserOperationToCodexComputerUse() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("open the browser and search for Swift concurrency") == .codexComputerUse("open the browser and search for Swift concurrency"))
+    }
+
+    @Test func routerMapsExplicitComputerUsePhraseToCodexComputerUse() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("use computer use to open System Settings") == .codexComputerUse("use computer use to open System Settings"))
+    }
+
     @Test func confirmationPolicyAllowsOnlySafeLocalAndScopedScreenCommandsImmediately() async throws {
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitStatus))
         #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitDiff))
@@ -249,6 +261,15 @@ struct leanring_buddyTests {
 
         #expect(prompt.contains("Do not commit changes."))
         #expect(prompt.contains("fix the test"))
+    }
+
+    @Test func computerUsePromptMentionsPluginSafetyPolicyAndNoCommitGuard() async throws {
+        let prompt = CodexPromptBuilder.computerUsePrompt(for: "open the browser")
+
+        #expect(prompt.contains("existing Codex Computer Use plugin"))
+        #expect(prompt.contains("Codex Computer Use confirmation and safety policy"))
+        #expect(prompt.contains("Do not commit changes."))
+        #expect(prompt.contains("open the browser"))
     }
 
     @Test func pendingConfirmationStoresAndClearsAction() async throws {
