@@ -1460,6 +1460,7 @@ struct leanring_buddyTests {
     @Test func appServerExecutorRunsPreflightBeforeStartingTransport() async throws {
         let preflightCounter = LaunchCounter()
         let transportCounter = LaunchCounter()
+        let orderRecorder = EventOrderRecorder()
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
@@ -1468,11 +1469,13 @@ struct leanring_buddyTests {
         ])
         let executor = CodexAppServerExecutor(
             preflight: { prompt in
+                orderRecorder.record("preflight")
                 preflightCounter.increment()
                 #expect(prompt == "open Chrome")
                 return .completed("Chrome preflight ok")
             },
             makeTransport: {
+                orderRecorder.record("transport")
                 transportCounter.increment()
                 return transport
             },
@@ -1485,6 +1488,7 @@ struct leanring_buddyTests {
         #expect(result.summary == "Done")
         #expect(preflightCounter.value == 1)
         #expect(transportCounter.value == 1)
+        #expect(orderRecorder.events == ["preflight", "transport"])
     }
 
     @Test func appServerExecutorStopsWhenPreflightFails() async throws {
@@ -1503,6 +1507,54 @@ struct leanring_buddyTests {
         #expect(result.status == .failed)
         #expect(result.summary.contains("Chrome preflight failed."))
         #expect(transportCounter.value == 0)
+    }
+
+    @Test func appServerExecutorTimesOutHangingPreflightBeforeStartingTransport() async throws {
+        let transportCounter = LaunchCounter()
+        let executor = CodexAppServerExecutor(
+            turnTimeoutSeconds: 0.01,
+            preflight: { _ in
+                try? await Task.sleep(for: .seconds(5))
+                return .completed("Too late.")
+            },
+            makeTransport: {
+                transportCounter.increment()
+                return FakeCodexAppServerTransport(lines: [])
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await withTimeout(seconds: 1) {
+            await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
+        }
+
+        let commandResult = try #require(result)
+        #expect(commandResult.status == .failed)
+        #expect(commandResult.summary.contains("Codex App Server preflight timed out."))
+        #expect(commandResult.summary.contains("Trace:"))
+        #expect(commandResult.summary.contains("preflight timed out"))
+        #expect(transportCounter.value == 0)
+    }
+
+    @Test func appServerExecutorIncludesPreflightTraceWhenTransportFailsToStart() async throws {
+        struct StartupError: LocalizedError {
+            var errorDescription: String? { "transport unavailable" }
+        }
+
+        let executor = CodexAppServerExecutor(
+            preflight: { _ in .completed("Chrome preflight ok") },
+            makeTransport: {
+                throw StartupError()
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
+
+        #expect(result.status == .failed)
+        #expect(result.summary.contains("Codex App Server failed to start: transport unavailable"))
+        #expect(result.summary.contains("Trace:"))
+        #expect(result.summary.contains("preflight Chrome preflight ok"))
     }
 
     @Test func appServerExecutorStartsThreadAndTurn() async throws {
@@ -1900,6 +1952,23 @@ private final class LaunchCounter: @unchecked Sendable {
     func increment() {
         lock.lock()
         count += 1
+        lock.unlock()
+    }
+}
+
+private final class EventOrderRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedEvents: [String] = []
+
+    var events: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedEvents
+    }
+
+    func record(_ event: String) {
+        lock.lock()
+        recordedEvents.append(event)
         lock.unlock()
     }
 }

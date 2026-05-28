@@ -147,7 +147,13 @@ struct CodexAppServerExecutor {
         }
 
         let traceBuffer = CodexAppServerTraceBuffer()
-        let preflightResult = await preflight(prompt)
+        guard let preflightResult = await runPreflight(prompt: prompt, timeoutSeconds: turnTimeoutSeconds) else {
+            recordTrace(.preflight("timed out after \(formattedSeconds(turnTimeoutSeconds))s"), to: traceBuffer)
+            return WorkspaceCommandResult(
+                summary: "Codex App Server preflight timed out." + traceBuffer.diagnosticSuffix(),
+                status: .failed
+            )
+        }
         switch preflightResult {
         case .completed(let detail):
             recordTrace(.preflight(detail), to: traceBuffer)
@@ -166,7 +172,8 @@ struct CodexAppServerExecutor {
             transport = try await makeTransport()
         } catch {
             return WorkspaceCommandResult(
-                summary: "Codex App Server failed to start: \(error.localizedDescription)",
+                summary: "Codex App Server failed to start: \(error.localizedDescription)"
+                    + traceBuffer.diagnosticSuffix(),
                 status: .failed
             )
         }
@@ -314,6 +321,30 @@ struct CodexAppServerExecutor {
         await runDesktopAction(prompt: prompt, cwd: cwd)
     }
 
+    private func runPreflight(
+        prompt: String,
+        timeoutSeconds: TimeInterval
+    ) async -> CodexAppServerPreflightResult? {
+        let state = CodexAppServerPreflightRaceState()
+        var preflightTask: Task<Void, Never>?
+        var timeoutTask: Task<Void, Never>?
+
+        let result = await withCheckedContinuation { continuation in
+            preflightTask = Task { [preflight] in
+                let result = await preflight(prompt)
+                state.resume(with: result, continuation: continuation)
+            }
+            timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                state.resume(with: nil, continuation: continuation)
+            }
+        }
+
+        preflightTask?.cancel()
+        timeoutTask?.cancel()
+        return result
+    }
+
     private func send(
         _ message: [String: Any],
         to transport: CodexAppServerTransporting,
@@ -390,6 +421,13 @@ struct CodexAppServerExecutor {
 
         return "message"
     }
+
+    private func formattedSeconds(_ seconds: TimeInterval) -> String {
+        if seconds.rounded() == seconds {
+            return String(Int(seconds))
+        }
+        return String(format: "%.3f", seconds)
+    }
 }
 
 private actor CodexAppServerTimeoutState {
@@ -401,6 +439,23 @@ private actor CodexAppServerTimeoutState {
 
     func markTimedOut() {
         timedOut = true
+    }
+}
+
+private final class CodexAppServerPreflightRaceState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResume = false
+
+    func resume(
+        with result: CodexAppServerPreflightResult?,
+        continuation: CheckedContinuation<CodexAppServerPreflightResult?, Never>
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !didResume else { return }
+        didResume = true
+        continuation.resume(returning: result)
     }
 }
 
