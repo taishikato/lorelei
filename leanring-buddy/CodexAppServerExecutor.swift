@@ -12,6 +12,14 @@ enum CodexAppServerApprovalDecision: Equatable, Sendable {
     case cancel
 }
 
+enum CodexAppServerPreflightResult: Equatable, Sendable {
+    case completed(String)
+    case warning(String)
+    case failed(String)
+}
+
+typealias CodexAppServerPreflight = @Sendable (_ prompt: String) async -> CodexAppServerPreflightResult
+
 typealias CodexAppServerDynamicToolHandler = @MainActor (
     _ request: CodexAppServerDynamicToolCallRequest
 ) async -> CodexAppServerDynamicToolCallResult
@@ -29,6 +37,10 @@ struct CodexAppServerTraceEvent: Equatable, Sendable {
 
     static func outbound(_ detail: String) -> Self {
         Self("outbound \(detail)")
+    }
+
+    static func preflight(_ detail: String) -> Self {
+        Self("preflight \(detail)")
     }
 
     static func dynamicToolStarted(_ detail: String) -> Self {
@@ -92,6 +104,7 @@ enum CodexAppServerLaunch {
 
 struct CodexAppServerExecutor {
     private let turnTimeoutSeconds: TimeInterval
+    private let preflight: CodexAppServerPreflight
     private let makeTransport: () async throws -> CodexAppServerTransporting
     private let skillInputResolver: () -> [CodexAppServerSkillInput]
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
@@ -101,6 +114,7 @@ struct CodexAppServerExecutor {
 
     init(
         turnTimeoutSeconds: TimeInterval = 120,
+        preflight: @escaping CodexAppServerPreflight = { _ in .completed("No preflight configured.") },
         makeTransport: @escaping () async throws -> CodexAppServerTransporting = {
             try await CodexAppServerProcessTransport.make()
         },
@@ -118,6 +132,7 @@ struct CodexAppServerExecutor {
         approvalHandler: @escaping (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
+        self.preflight = preflight
         self.makeTransport = makeTransport
         self.skillInputResolver = skillInputResolver
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
@@ -131,6 +146,21 @@ struct CodexAppServerExecutor {
             return WorkspaceCommandResult(summary: "Codex App Server command timed out.", status: .failed)
         }
 
+        let traceBuffer = CodexAppServerTraceBuffer()
+        let preflightResult = await preflight(prompt)
+        switch preflightResult {
+        case .completed(let detail):
+            recordTrace(.preflight(detail), to: traceBuffer)
+        case .warning(let detail):
+            recordTrace(.preflight("warning: \(detail)"), to: traceBuffer)
+        case .failed(let detail):
+            recordTrace(.preflight("failed: \(detail)"), to: traceBuffer)
+            return WorkspaceCommandResult(
+                summary: detail + traceBuffer.diagnosticSuffix(),
+                status: .failed
+            )
+        }
+
         let transport: CodexAppServerTransporting
         do {
             transport = try await makeTransport()
@@ -142,7 +172,6 @@ struct CodexAppServerExecutor {
         }
 
         let timeoutState = CodexAppServerTimeoutState()
-        let traceBuffer = CodexAppServerTraceBuffer()
         let timeoutTask = Task { [turnTimeoutSeconds, transport, timeoutState] in
             try? await Task.sleep(for: .seconds(turnTimeoutSeconds))
             await timeoutState.markTimedOut()

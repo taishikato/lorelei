@@ -1457,6 +1457,54 @@ struct leanring_buddyTests {
         #expect(event == .unsupportedServerRequest(requestID: 45, method: "item/unknown/request"))
     }
 
+    @Test func appServerExecutorRunsPreflightBeforeStartingTransport() async throws {
+        let preflightCounter = LaunchCounter()
+        let transportCounter = LaunchCounter()
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            preflight: { prompt in
+                preflightCounter.increment()
+                #expect(prompt == "open Chrome")
+                return .completed("Chrome preflight ok")
+            },
+            makeTransport: {
+                transportCounter.increment()
+                return transport
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Done")
+        #expect(preflightCounter.value == 1)
+        #expect(transportCounter.value == 1)
+    }
+
+    @Test func appServerExecutorStopsWhenPreflightFails() async throws {
+        let transportCounter = LaunchCounter()
+        let executor = CodexAppServerExecutor(
+            preflight: { _ in .failed("Chrome preflight failed.") },
+            makeTransport: {
+                transportCounter.increment()
+                return FakeCodexAppServerTransport(lines: [])
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
+
+        #expect(result.status == .failed)
+        #expect(result.summary.contains("Chrome preflight failed."))
+        #expect(transportCounter.value == 0)
+    }
+
     @Test func appServerExecutorStartsThreadAndTurn() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
