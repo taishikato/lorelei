@@ -31,7 +31,7 @@ typealias WorkspaceProcessRun = @MainActor (
 ) async -> WorkspaceProcessExecution
 
 struct CodexExecutor {
-    static let executablePathDefaultsKey = "codexExecutablePath"
+    static let executablePathDefaultsKey = CodexExecutableLocator.executablePathDefaultsKey
 
     private let fileManager: FileManager
     private let defaults: UserDefaults
@@ -121,9 +121,9 @@ struct CodexExecutor {
             .appendingPathComponent("lorelei-codex-\(UUID().uuidString).txt")
         defer { try? fileManager.removeItem(at: outputURL) }
 
-        let execution = await commandRunner(
-            executableURL,
-            commandArguments(
+        let launch = Self.makeLaunchCommand(
+            codexExecutableURL: executableURL,
+            codexArguments: commandArguments(
                 mode: mode,
                 workspacePath: workspacePath,
                 outputPath: outputURL.path,
@@ -131,6 +131,12 @@ struct CodexExecutor {
                 imagePaths: imagePaths,
                 ephemeral: ephemeral
             ),
+            fileManager: fileManager
+        )
+
+        let execution = await commandRunner(
+            launch.executableURL,
+            launch.arguments,
             URL(fileURLWithPath: workspacePath, isDirectory: true),
             commandTimeoutSeconds,
             0,
@@ -211,58 +217,42 @@ struct CodexExecutor {
         return arguments
     }
 
-    private func resolveCodexExecutable() -> URL? {
-        if let overridePath = defaults.string(forKey: Self.executablePathDefaultsKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !overridePath.isEmpty,
-           let url = executableURLIfValid(path: overridePath) {
-            return url
+    static func makeLaunchCommand(
+        codexExecutableURL: URL,
+        codexArguments: [String],
+        fileManager: FileManager = .default
+    ) -> (executableURL: URL, arguments: [String]) {
+        let resolvedScriptURL = codexExecutableURL.resolvingSymlinksInPath()
+        if let nodeURL = resolveNodeExecutable(nearCodex: codexExecutableURL, fileManager: fileManager) {
+            return (
+                executableURL: nodeURL,
+                arguments: [resolvedScriptURL.path] + codexArguments
+            )
         }
 
-        let pathCandidates = ProcessInfo.processInfo.environment["PATH", default: ""]
-            .split(separator: ":")
-            .map(String.init)
-            .map { URL(fileURLWithPath: $0).appendingPathComponent("codex").path }
+        return (executableURL: codexExecutableURL, arguments: codexArguments)
+    }
 
-        let fixedCandidates = [
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex"
+    private static func resolveNodeExecutable(
+        nearCodex codexURL: URL,
+        fileManager: FileManager
+    ) -> URL? {
+        let candidates = [
+            codexURL.deletingLastPathComponent().appendingPathComponent("node"),
+            codexURL.resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("node")
         ]
 
-        for candidate in pathCandidates + fixedCandidates + nvmCodexCandidates() {
-            if let url = executableURLIfValid(path: candidate) {
-                return url
+        for candidate in candidates {
+            if fileManager.isExecutableFile(atPath: candidate.path) {
+                return candidate
             }
         }
 
         return nil
     }
 
-    private func executableURLIfValid(path: String) -> URL? {
-        let expandedPath = NSString(string: path).expandingTildeInPath
-        guard fileManager.isExecutableFile(atPath: expandedPath) else {
-            return nil
-        }
-        return URL(fileURLWithPath: expandedPath)
-    }
-
-    private func nvmCodexCandidates() -> [String] {
-        let versionsURL = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".nvm", isDirectory: true)
-            .appendingPathComponent("versions", isDirectory: true)
-            .appendingPathComponent("node", isDirectory: true)
-
-        guard let versionNames = try? fileManager.contentsOfDirectory(atPath: versionsURL.path) else {
-            return []
-        }
-
-        return versionNames.map {
-            versionsURL
-                .appendingPathComponent($0, isDirectory: true)
-                .appendingPathComponent("bin", isDirectory: true)
-                .appendingPathComponent("codex")
-                .path
-        }
+    private func resolveCodexExecutable() -> URL? {
+        CodexExecutableLocator(fileManager: fileManager, defaults: defaults).resolve()
     }
 
     private func concise(_ output: String, maxCharacters: Int = 4_000) -> String {

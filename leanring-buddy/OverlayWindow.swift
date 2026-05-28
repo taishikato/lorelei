@@ -10,6 +10,22 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+protocol OverlayWindowManaging: AnyObject {
+    var hasShownOverlayBefore: Bool { get set }
+
+    func showOverlay(onScreens screens: [NSScreen], companionManager: CompanionManager)
+    func hideOverlay()
+    func fadeOutAndHideOverlay(duration: TimeInterval)
+    func isShowingOverlay() -> Bool
+}
+
+extension OverlayWindowManaging {
+    func fadeOutAndHideOverlay() {
+        fadeOutAndHideOverlay(duration: 0.4)
+    }
+}
+
 class OverlayWindow: NSWindow {
     init(screen: NSScreen) {
         // Create window covering entire screen
@@ -723,7 +739,7 @@ private struct BlueCursorSpinnerView: View {
 // Manager for overlay windows — creates one per screen so the cursor
 // buddy seamlessly follows the cursor across multiple monitors.
 @MainActor
-class OverlayWindowManager {
+class OverlayWindowManager: OverlayWindowManaging {
     private var overlayWindows: [OverlayWindow] = []
     var hasShownOverlayBefore = false
 
