@@ -383,9 +383,9 @@ struct leanring_buddyTests {
         }
         #expect(prompt.contains("https://chatgpt.com"))
         #expect(prompt.contains("Google Chrome"))
-        #expect(prompt.contains("lorelei.foreground_app"))
-        #expect(prompt.contains("Call lorelei.foreground_app exactly once"))
+        #expect(prompt.contains("Chrome plugin"))
         #expect(prompt.contains("Do not use Computer Use"))
+        #expect(prompt.contains("Do not call lorelei.foreground_app"))
         #expect(prompt.contains("Do not search"))
     }
 
@@ -433,13 +433,10 @@ struct leanring_buddyTests {
         let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open TextEdit and type hello")
 
         #expect(prompt.contains("Codex App Server"))
-        #expect(prompt.contains("every desktop operation"))
-        #expect(prompt.contains("lorelei.foreground_app"))
-        #expect(prompt.contains("URL opening"))
-        #expect(prompt.contains("current macOS Space"))
+        #expect(prompt.contains("Chrome plugin"))
         #expect(prompt.contains("Computer Use plugin"))
-        #expect(prompt.contains("only when visual UI inspection"))
-        #expect(prompt.contains("confirmation and safety policy"))
+        #expect(prompt.contains("visual UI inspection"))
+        #expect(prompt.contains("lorelei.foreground_app"))
         #expect(prompt.contains("Do not rely on caller-side local shortcuts."))
         #expect(prompt.contains("Do not commit changes."))
         #expect(!prompt.contains("non-interactive codex exec"))
@@ -892,14 +889,16 @@ struct leanring_buddyTests {
         #expect(input[1]["path"] as? String == skillPath)
     }
 
-    @Test func appServerThreadStartDisablesChromePluginForDesktopActions() throws {
+    @Test func appServerThreadStartEnablesChromeAndComputerUsePluginsForDesktopActions() throws {
         let request = CodexAppServerProtocol.threadStartRequest(id: 2, cwd: "/Users/example")
         let params = try #require(request["params"] as? [String: Any])
         let config = try #require(params["config"] as? [String: Any])
         let plugins = try #require(config["plugins"] as? [String: Any])
         let chromePlugin = try #require(plugins["chrome@openai-bundled"] as? [String: Any])
+        let computerUsePlugin = try #require(plugins["computer-use@openai-bundled"] as? [String: Any])
 
-        #expect(chromePlugin["enabled"] as? Bool == false)
+        #expect(chromePlugin["enabled"] as? Bool == true)
+        #expect(computerUsePlugin["enabled"] as? Bool == true)
     }
 
     @Test func appServerThreadStartEnablesComputerUsePluginForDesktopActions() throws {

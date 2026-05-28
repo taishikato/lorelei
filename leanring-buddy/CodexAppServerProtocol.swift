@@ -743,7 +743,7 @@ enum CodexAppServerProtocol {
         [
             "plugins": [
                 "chrome@openai-bundled": [
-                    "enabled": false
+                    "enabled": true
                 ],
                 "computer-use@openai-bundled": [
                     "enabled": true

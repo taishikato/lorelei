@@ -71,11 +71,11 @@ struct CodexPromptBuilder {
 
     static func desktopActionPrompt(for prompt: String) -> String {
         """
-        Use Codex App Server's interactive control plane for every desktop operation, including simple app and URL opening.
-        For app or URL opening, first call the dynamic tool lorelei.foreground_app; URL opening must also go through that tool.
-        lorelei.foreground_app opens the optional URL, activates the target app, and tries to make its normal window visible in the current macOS Space.
-        Use the Codex Computer Use plugin only when visual UI inspection, clicking, typing, scrolling, dragging, or key presses are actually needed.
+        Use Codex App Server's interactive control plane for every desktop operation.
+        For Chrome and browser tasks, prefer the Codex Chrome plugin when the task can be completed through browser automation without visual desktop inspection.
+        Use the Codex Computer Use plugin only when visual UI inspection, clicking, typing, scrolling, dragging, key presses, or non-browser desktop control are actually needed.
         Before Computer Use inspects a desktop app, call lorelei.foreground_app for that target app. If Computer Use reports cgWindowNotFound, call lorelei.foreground_app once more before retrying visual inspection.
+        For non-Chrome app or URL opening, call lorelei.foreground_app before visual inspection so the target app is visible in the current macOS Space.
         Follow the Codex Computer Use confirmation and safety policy for risky UI actions.
         Do not rely on caller-side local shortcuts.
         Do not commit changes.
@@ -216,10 +216,11 @@ struct LoreleiCommandRouter {
         }
 
         return """
-        Open \(urlString) in Google Chrome.
-        Call lorelei.foreground_app exactly once with appName "Google Chrome", bundleIdentifier "com.google.Chrome", and url "\(urlString)".
-        After the tool succeeds, reply with the tool result in one sentence.
-        Do not use Computer Use, shell commands, or the Chrome plugin.
+        Open \(urlString) in Google Chrome using the Chrome plugin through Codex App Server.
+        Use the Chrome plugin to create or select a Chrome tab for "\(urlString)".
+        After the Chrome plugin succeeds, reply with the result in one sentence.
+        Do not use Computer Use, shell commands, or local macOS shortcuts.
+        Do not call lorelei.foreground_app for this Chrome-only task.
         Do not search, type into the page, click submit, or perform any additional browser interaction.
 
         Original user request:
