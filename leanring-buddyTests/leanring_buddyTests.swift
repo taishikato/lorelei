@@ -1621,6 +1621,20 @@ struct leanring_buddyTests {
 
         #expect(result == .completed("Chrome preflight skipped: prompt does not mention Chrome or a browser."))
         #expect(runner.calls.isEmpty)
+        #expect(runner.timeoutSecondsValues.isEmpty)
+    }
+
+    @Test func chromeMemorySaverPreflightSkipsExplicitSafariBrowserPrompt() async throws {
+        let runner = ChromeMemorySaverScriptRunnerRecorder(
+            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":0,"woken":0}"#, stderr: "")
+        )
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+
+        let result = await preflight.run(prompt: "open apple.com in Safari browser")
+
+        #expect(result == .completed("Chrome preflight skipped: prompt targets a non-Chrome browser."))
+        #expect(runner.calls.isEmpty)
+        #expect(runner.timeoutSecondsValues.isEmpty)
     }
 
     @Test func chromeMemorySaverPreflightRunsForChromePromptAndReportsWakeCount() async throws {
@@ -1633,6 +1647,20 @@ struct leanring_buddyTests {
 
         #expect(result == .completed("Chrome preflight checked 6 tabs and woke 2 sleeping tabs."))
         #expect(runner.calls.count == 1)
+        #expect(runner.timeoutSecondsValues == [8])
+    }
+
+    @Test func chromeMemorySaverPreflightRunsForGenericBrowserPrompt() async throws {
+        let runner = ChromeMemorySaverScriptRunnerRecorder(
+            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":3,"woken":1}"#, stderr: "")
+        )
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+
+        let result = await preflight.run(prompt: "open a browser tab")
+
+        #expect(result == .completed("Chrome preflight checked 3 tabs and woke 1 sleeping tabs."))
+        #expect(runner.calls.count == 1)
+        #expect(runner.timeoutSecondsValues == [8])
     }
 
     @Test func chromeMemorySaverPreflightWarnsButDoesNotFailWhenScriptFails() async throws {
@@ -1644,6 +1672,7 @@ struct leanring_buddyTests {
         let result = await preflight.run(prompt: "open chatgpt.com in Chrome")
 
         #expect(result == .warning("Chrome preflight could not complete: DevToolsActivePort missing"))
+        #expect(runner.timeoutSecondsValues == [8])
     }
 
     @Test func appServerExecutorStartsThreadAndTurn() async throws {
@@ -2065,11 +2094,18 @@ private final class EventOrderRecorder: @unchecked Sendable {
 private final class ChromeMemorySaverScriptRunnerRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedCalls: [String] = []
+    private var recordedTimeoutSecondsValues: [TimeInterval] = []
     private let execution: WorkspaceProcessExecution
 
     var calls: [String] {
         lock.withLock {
             recordedCalls
+        }
+    }
+
+    var timeoutSecondsValues: [TimeInterval] {
+        lock.withLock {
+            recordedTimeoutSecondsValues
         }
     }
 
@@ -2080,8 +2116,8 @@ private final class ChromeMemorySaverScriptRunnerRecorder: @unchecked Sendable {
     func run(script: String, timeoutSeconds: TimeInterval) async -> WorkspaceProcessExecution {
         lock.withLock {
             recordedCalls.append(script)
+            recordedTimeoutSecondsValues.append(timeoutSeconds)
         }
-        #expect(timeoutSeconds == 8)
         return execution
     }
 }

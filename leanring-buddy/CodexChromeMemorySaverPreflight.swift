@@ -25,7 +25,11 @@ struct CodexChromeMemorySaverPreflight {
     }
 
     func run(prompt: String) async -> CodexAppServerPreflightResult {
-        guard shouldRun(for: prompt) else {
+        let runDecision = shouldRun(for: prompt)
+        guard runDecision.shouldRun else {
+            if runDecision.isExplicitNonChromeBrowser {
+                return .completed("Chrome preflight skipped: prompt targets a non-Chrome browser.")
+            }
             return .completed("Chrome preflight skipped: prompt does not mention Chrome or a browser.")
         }
 
@@ -49,12 +53,33 @@ struct CodexChromeMemorySaverPreflight {
         return .completed("Chrome preflight checked \(pageTargets) tabs and woke \(woken) sleeping tabs.")
     }
 
-    private func shouldRun(for prompt: String) -> Bool {
+    private func shouldRun(for prompt: String) -> (shouldRun: Bool, isExplicitNonChromeBrowser: Bool) {
         let lowercasedPrompt = prompt.lowercased()
-        return lowercasedPrompt.contains("chrome")
-            || lowercasedPrompt.contains("browser")
-            || lowercasedPrompt.contains("chatgpt")
+        if lowercasedPrompt.contains("chrome")
+            || lowercasedPrompt.contains("chatgpt") {
+            return (true, false)
+        }
+        if Self.nonChromeBrowserNames.contains(where: { containsWord($0, in: lowercasedPrompt) }) {
+            return (false, true)
+        }
+        return (lowercasedPrompt.contains("browser"), false)
     }
+
+    private func containsWord(_ word: String, in text: String) -> Bool {
+        text.range(
+            of: "\\b\(NSRegularExpression.escapedPattern(for: word))\\b",
+            options: .regularExpression
+        ) != nil
+    }
+
+    private static let nonChromeBrowserNames = [
+        "safari",
+        "firefox",
+        "arc",
+        "edge",
+        "brave",
+        "opera"
+    ]
 
     private func reasonDescription(_ reason: WorkspaceProcessExecution.Reason) -> String {
         switch reason {
