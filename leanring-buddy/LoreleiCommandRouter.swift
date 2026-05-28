@@ -73,9 +73,10 @@ struct CodexPromptBuilder {
         """
         Use Codex App Server's interactive control plane for every desktop operation.
         For Chrome and browser tasks, prefer the Codex Chrome plugin when the task can be completed through browser automation without visual desktop inspection.
-        Use the Codex Computer Use plugin only when visual UI inspection, clicking, typing, scrolling, dragging, key presses, or non-browser desktop control are actually needed.
+        This includes browser typing, clicking, and search when the Chrome plugin can perform the browser automation without visual desktop inspection.
+        Use the Codex Computer Use plugin only when visual UI inspection, non-browser clicking, typing, scrolling, dragging, key presses, or other non-browser desktop control are actually needed.
         Before Computer Use inspects a desktop app, call lorelei.foreground_app for that target app. If Computer Use reports cgWindowNotFound, call lorelei.foreground_app once more before retrying visual inspection.
-        For non-Chrome app or URL opening, call lorelei.foreground_app before visual inspection so the target app is visible in the current macOS Space.
+        For non-Chrome app opening or non-Chrome URL opening, call lorelei.foreground_app before visual inspection so the target app is visible in the current macOS Space.
         Follow the Codex Computer Use confirmation and safety policy for risky UI actions.
         Do not rely on caller-side local shortcuts.
         Do not commit changes.

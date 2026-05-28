@@ -443,6 +443,21 @@ struct leanring_buddyTests {
         #expect(prompt.contains("open TextEdit and type hello"))
     }
 
+    @Test func desktopActionPromptKeepsBrowserAutomationOnChromePluginWhenVisualInspectionIsNotNeeded() async throws {
+        let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open ChatGPT in Chrome and type hello")
+
+        #expect(prompt.contains("browser typing, clicking, and search"))
+        #expect(prompt.contains("prefer the Codex Chrome plugin"))
+        #expect(prompt.contains("without visual desktop inspection"))
+    }
+
+    @Test func desktopActionPromptScopesForegroundAppToNonChromeOpeningOnly() async throws {
+        let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open chatgpt.com in Chrome")
+
+        #expect(prompt.contains("non-Chrome app opening or non-Chrome URL opening"))
+        #expect(!prompt.contains("For non-Chrome app or URL opening"))
+    }
+
     @Test func pendingConfirmationStoresAndClearsAction() async throws {
         var confirmation = PendingCommandConfirmation()
         confirmation.request(
