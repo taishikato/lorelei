@@ -15,13 +15,14 @@ enum LoreleiCommandAction: Equatable, Sendable {
     case codexWorkspaceWrite(String)
     case codexScreen(String)
     case codexDesktopAction(String)
+    case codexChromeBrowserOpen(String)
     case unsupported(String)
 
     var requiresWorkspace: Bool {
         switch self {
         case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
             return true
-        case .codexDesktopAction, .unsupported:
+        case .codexDesktopAction, .codexChromeBrowserOpen, .unsupported:
             return false
         }
     }
@@ -40,7 +41,7 @@ enum LoreleiCommandAction: Equatable, Sendable {
             return "Codex workspace write"
         case .codexScreen:
             return "Codex screen request"
-        case .codexDesktopAction:
+        case .codexDesktopAction, .codexChromeBrowserOpen:
             return "Codex desktop action"
         case .unsupported:
             return "Unsupported command"
@@ -51,7 +52,7 @@ enum LoreleiCommandAction: Equatable, Sendable {
 struct LoreleiConfirmationPolicy {
     static func requiresConfirmation(for action: LoreleiCommandAction) -> Bool {
         switch action {
-        case .codexReadOnly, .codexWorkspaceWrite, .codexDesktopAction:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexDesktopAction, .codexChromeBrowserOpen:
             return true
         case .gitStatus, .gitDiff, .runTests, .codexScreen, .unsupported:
             return false
@@ -69,8 +70,11 @@ struct CodexPromptBuilder {
         """
     }
 
-    static func appServerDesktopActionPrompt(for prompt: String) -> String {
-        if isChromeOnlyBrowserOpenPrompt(prompt) {
+    static func appServerDesktopActionPrompt(
+        for prompt: String,
+        wrapGenericGuidance: Bool = true
+    ) -> String {
+        if !wrapGenericGuidance {
             return prompt
         }
 
@@ -94,10 +98,6 @@ struct CodexPromptBuilder {
         """
     }
 
-    private static func isChromeOnlyBrowserOpenPrompt(_ prompt: String) -> Bool {
-        prompt.contains("using the Chrome plugin through Codex App Server")
-            && prompt.contains("Do not call lorelei.foreground_app for this Chrome-only task.")
-    }
 }
 
 struct PendingCommandConfirmation {
@@ -137,7 +137,7 @@ struct LoreleiCommandRouter {
         }
 
         if let browserOpenPrompt = browserOpenPrompt(command: command, originalCommand: originalCommand) {
-            return .codexDesktopAction(browserOpenPrompt)
+            return .codexChromeBrowserOpen(browserOpenPrompt)
         }
 
         if isComputerUseRequest(command) {

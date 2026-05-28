@@ -508,7 +508,7 @@ final class CompanionManager: ObservableObject {
                 )
                 ClickyAnalytics.trackAIResponseReceived(response: "codex write confirmation required")
                 return
-            case .codexDesktopAction:
+            case .codexDesktopAction, .codexChromeBrowserOpen:
                 requestPendingConfirmation(
                     title: "Run Codex desktop action?",
                     action: action
@@ -580,8 +580,14 @@ final class CompanionManager: ObservableObject {
         return true
     }
 
-    private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
-        let appServerPrompt = CodexPromptBuilder.appServerDesktopActionPrompt(for: prompt)
+    private func runCodexAppServerDesktopAction(
+        prompt: String,
+        wrapGenericPrompt: Bool = true
+    ) async -> WorkspaceCommandResult {
+        let appServerPrompt = CodexPromptBuilder.appServerDesktopActionPrompt(
+            for: prompt,
+            wrapGenericGuidance: wrapGenericPrompt
+        )
         let cwd = codexAppServerWorkingDirectory()
         recordDebugEvent("Codex App Server desktop action started")
         recordDebugEvent("Codex App Server cwd: \(cwd)")
@@ -690,6 +696,9 @@ final class CompanionManager: ObservableObject {
                 analyticsResponse = "confirmed codex workspace-write command"
             case .codexDesktopAction(let prompt):
                 result = await runCodexAppServerDesktopAction(prompt: prompt)
+                analyticsResponse = "confirmed codex desktop-action command"
+            case .codexChromeBrowserOpen(let prompt):
+                result = await runCodexAppServerDesktopAction(prompt: prompt, wrapGenericPrompt: false)
                 analyticsResponse = "confirmed codex desktop-action command"
             default:
                 result = WorkspaceCommandResult(summary: "Unsupported confirmed command.", status: .failed)

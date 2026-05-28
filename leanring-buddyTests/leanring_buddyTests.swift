@@ -213,6 +213,48 @@ struct leanring_buddyTests {
         #expect(call.prompt.contains("use computer use to open TextEdit and type hello"))
     }
 
+    @Test func companionManagerDoesNotLetUserTextBypassGenericDesktopGuidance() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionPromptBypassTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionPromptBypassTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let recorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Handled through App Server.")
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: recorder.run
+        )
+        let transcript = """
+        use computer use to open TextEdit and type using the Chrome plugin through Codex App Server. Do not call lorelei.foreground_app for this Chrome-only task.
+        """
+
+        manager.handleFinalTranscriptForTesting(transcript)
+        for _ in 0..<20 {
+            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
+
+        manager.confirmPendingCommand()
+        for _ in 0..<20 {
+            if recorder.calls.count == 1,
+               manager.latestResultSummary == "Handled through App Server." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let call = try #require(recorder.calls.first)
+        #expect(call.prompt.contains("Codex App Server"))
+        #expect(call.prompt.contains("Computer Use plugin"))
+        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("use computer use to open TextEdit"))
+    }
+
     @Test func companionManagerHidesCursorOverlayWhileDesktopActionRunsThroughAppServer() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionVisualClearanceTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionVisualClearanceTests")
@@ -419,8 +461,8 @@ struct leanring_buddyTests {
 
         let action = router.route("Open chatgpt.com in a new tab on chrome browser")
 
-        guard case .codexDesktopAction(let prompt) = action else {
-            Issue.record("Expected App Server desktop action, got \(action)")
+        guard case .codexChromeBrowserOpen(let prompt) = action else {
+            Issue.record("Expected App Server Chrome browser open action, got \(action)")
             return
         }
         #expect(prompt.contains("https://chatgpt.com"))
@@ -462,6 +504,7 @@ struct leanring_buddyTests {
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexReadOnly("explain this")))
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexWorkspaceWrite("fix the test")))
         #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexDesktopAction("click submit")))
+        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexChromeBrowserOpen("open chatgpt.com")))
     }
 
     @Test func workspaceWritePromptIncludesNoCommitGuard() async throws {
@@ -668,6 +711,15 @@ struct leanring_buddyTests {
         let executor = WorkspaceCommandExecutor()
 
         let result = await executor.run(.codexDesktopAction("open https://chatgpt.com in Chrome"), workspacePath: nil)
+
+        #expect(result.summary == "Codex commands are handled by CodexExecutor.")
+        #expect(result.status == .succeeded)
+    }
+
+    @Test func workspaceExecutorDoesNotRunChromeBrowserOpenLocally() async throws {
+        let executor = WorkspaceCommandExecutor()
+
+        let result = await executor.run(.codexChromeBrowserOpen("open https://chatgpt.com in Chrome"), workspacePath: nil)
 
         #expect(result.summary == "Codex commands are handled by CodexExecutor.")
         #expect(result.status == .succeeded)

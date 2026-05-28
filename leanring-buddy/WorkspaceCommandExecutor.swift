@@ -68,7 +68,7 @@ struct WorkspaceCommandExecutor {
             switch action {
             case .unsupported(let message):
                 return WorkspaceCommandResult(summary: message)
-            case .codexDesktopAction:
+            case .codexDesktopAction, .codexChromeBrowserOpen:
                 return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
             case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
                 break
@@ -96,7 +96,7 @@ struct WorkspaceCommandExecutor {
             return await runGitDiff(workspacePath: workspacePath)
         case .runTests:
             return WorkspaceCommandResult(summary: "No test command configured.", status: .failed)
-        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexDesktopAction:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexDesktopAction, .codexChromeBrowserOpen:
             return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
         case .unsupported(let message):
             return WorkspaceCommandResult(summary: message)
