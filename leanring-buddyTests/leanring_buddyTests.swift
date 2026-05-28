@@ -213,6 +213,60 @@ struct leanring_buddyTests {
         #expect(call.prompt.contains("use computer use to open TextEdit and type hello"))
     }
 
+    @Test func companionManagerSkipsChromeMemorySaverPreflightForGeneralDesktopAction() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerChromePreflightSkipTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerChromePreflightSkipTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let runner = ChromeMemorySaverScriptRunnerRecorder(
+            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":6,"woken":2}"#, stderr: "")
+        )
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Opened TextEdit."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            chromeMemorySaverScriptRunner: runner.run,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
+        for _ in 0..<20 {
+            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
+
+        manager.confirmPendingCommand()
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Opened TextEdit." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.latestResultSummary == "Opened TextEdit.")
+        #expect(runner.calls.isEmpty)
+        #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
+
+        let sentMessages = try await transport.sentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let params = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(params["input"] as? [[String: Any]])
+        let userText = try #require(input.first?["text"] as? String)
+        #expect(userText.contains("Codex App Server"))
+        #expect(userText.contains("Computer Use plugin"))
+        #expect(userText.contains("use computer use to open TextEdit and type hello"))
+    }
+
     @Test func companionManagerDoesNotLetUserTextBypassGenericDesktopGuidance() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionPromptBypassTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionPromptBypassTests")

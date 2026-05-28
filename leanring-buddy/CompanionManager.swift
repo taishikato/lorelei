@@ -23,6 +23,8 @@ typealias CodexAppServerDesktopActionRunner = @MainActor (
     _ cwd: String
 ) async -> WorkspaceCommandResult
 
+typealias CodexAppServerTransportFactory = @Sendable () async throws -> CodexAppServerTransporting
+
 @MainActor
 final class SpeechOutputClient: SpeechOutputing {
     private let synthesizer: AVSpeechSynthesizer
@@ -94,6 +96,8 @@ final class CompanionManager: ObservableObject {
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexExecutor = CodexExecutor()
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
+    private let chromeMemorySaverScriptRunner: ChromeMemorySaverScriptRunner?
+    private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
     private var pendingConfirmation = PendingCommandConfirmation()
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
@@ -128,11 +132,15 @@ final class CompanionManager: ObservableObject {
         speechOutput: SpeechOutputing? = nil,
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
+        chromeMemorySaverScriptRunner: ChromeMemorySaverScriptRunner? = nil,
+        codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
         overlayWindowManager: (any OverlayWindowManaging)? = nil
     ) {
         self.speechOutput = speechOutput ?? SpeechOutputClient()
         self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
+        self.chromeMemorySaverScriptRunner = chromeMemorySaverScriptRunner
+        self.codexAppServerTransportFactory = codexAppServerTransportFactory
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
     }
 
@@ -598,27 +606,44 @@ final class CompanionManager: ObservableObject {
             }
 
             let foregroundTool = CodexAppServerDesktopForegroundTool()
-            let chromePreflight = CodexChromeMemorySaverPreflight()
-            let executor = CodexAppServerExecutor(
-                preflight: { prompt in
-                    await chromePreflight.run(prompt: prompt)
-                },
-                dynamicToolSpecsResolver: {
-                    [CodexAppServerDesktopForegroundTool.spec]
-                },
-                dynamicToolHandler: { request in
-                    await foregroundTool.handle(request)
-                },
-                traceHandler: { [weak self] event in
-                    Task { @MainActor [weak self] in
-                        self?.recordDebugEvent("App Server: \(event.logLine)")
-                    }
-                },
-                approvalHandler: { [weak self] request in
-                    guard let self else { return .cancel }
-                    return await self.requestCodexAppServerApproval(request)
+            let chromePreflight = CodexChromeMemorySaverPreflight(scriptRunner: self.chromeMemorySaverScriptRunner)
+            let preflight: CodexAppServerPreflight = { _ in
+                await chromePreflight.run(prompt: prompt)
+            }
+            let dynamicToolSpecsResolver = {
+                [CodexAppServerDesktopForegroundTool.spec]
+            }
+            let dynamicToolHandler: CodexAppServerDynamicToolHandler = { request in
+                await foregroundTool.handle(request)
+            }
+            let traceHandler: CodexAppServerTraceHandler = { [weak self] event in
+                Task { @MainActor [weak self] in
+                    self?.recordDebugEvent("App Server: \(event.logLine)")
                 }
-            )
+            }
+            let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision = { [weak self] request in
+                guard let self else { return .cancel }
+                return await self.requestCodexAppServerApproval(request)
+            }
+            let executor: CodexAppServerExecutor
+            if let codexAppServerTransportFactory = self.codexAppServerTransportFactory {
+                executor = CodexAppServerExecutor(
+                    preflight: preflight,
+                    makeTransport: codexAppServerTransportFactory,
+                    dynamicToolSpecsResolver: dynamicToolSpecsResolver,
+                    dynamicToolHandler: dynamicToolHandler,
+                    traceHandler: traceHandler,
+                    approvalHandler: approvalHandler
+                )
+            } else {
+                executor = CodexAppServerExecutor(
+                    preflight: preflight,
+                    dynamicToolSpecsResolver: dynamicToolSpecsResolver,
+                    dynamicToolHandler: dynamicToolHandler,
+                    traceHandler: traceHandler,
+                    approvalHandler: approvalHandler
+                )
+            }
             return await executor.runDesktopAction(prompt: appServerPrompt, cwd: cwd)
         }
     }
