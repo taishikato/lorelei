@@ -165,10 +165,52 @@ struct leanring_buddyTests {
         #expect(call.prompt.contains("Codex App Server"))
         #expect(call.prompt.contains("https://chatgpt.com"))
         #expect(call.prompt.contains("Google Chrome"))
-        #expect(call.prompt.contains("lorelei.foreground_app"))
-        #expect(call.prompt.contains("Do not rely on caller-side local shortcuts."))
+        #expect(call.prompt.contains("Chrome plugin"))
+        #expect(call.prompt.contains("Do not use Computer Use"))
+        #expect(call.prompt.contains("Do not call lorelei.foreground_app"))
+        #expect(!call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(!call.prompt.contains("call lorelei.foreground_app before visual inspection"))
         #expect(call.cwd == FileManager.default.homeDirectoryForCurrentUser.path)
         #expect(manager.latestResultSummary == "Opened through App Server.")
+    }
+
+    @Test func companionManagerWrapsGeneralDesktopActionsWithForegroundAppGuidance() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerGeneralDesktopActionRunnerTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerGeneralDesktopActionRunnerTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let recorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Typed through App Server.")
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: recorder.run
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
+        for _ in 0..<20 {
+            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
+
+        manager.confirmPendingCommand()
+        for _ in 0..<20 {
+            if recorder.calls.count == 1,
+               manager.latestResultSummary == "Typed through App Server." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let call = try #require(recorder.calls.first)
+        #expect(call.prompt.contains("Codex App Server"))
+        #expect(call.prompt.contains("Computer Use plugin"))
+        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("use computer use to open TextEdit and type hello"))
     }
 
     @Test func companionManagerHidesCursorOverlayWhileDesktopActionRunsThroughAppServer() async throws {

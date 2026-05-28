@@ -581,7 +581,7 @@ final class CompanionManager: ObservableObject {
     }
 
     private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
-        let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(for: prompt)
+        let appServerPrompt = CodexPromptBuilder.appServerDesktopActionPrompt(for: prompt)
         let cwd = codexAppServerWorkingDirectory()
         recordDebugEvent("Codex App Server desktop action started")
         recordDebugEvent("Codex App Server cwd: \(cwd)")

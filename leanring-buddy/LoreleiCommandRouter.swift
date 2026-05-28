@@ -69,6 +69,14 @@ struct CodexPromptBuilder {
         """
     }
 
+    static func appServerDesktopActionPrompt(for prompt: String) -> String {
+        if isChromeOnlyBrowserOpenPrompt(prompt) {
+            return prompt
+        }
+
+        return desktopActionPrompt(for: prompt)
+    }
+
     static func desktopActionPrompt(for prompt: String) -> String {
         """
         Use Codex App Server's interactive control plane for every desktop operation.
@@ -84,6 +92,11 @@ struct CodexPromptBuilder {
         User request:
         \(prompt)
         """
+    }
+
+    private static func isChromeOnlyBrowserOpenPrompt(_ prompt: String) -> Bool {
+        prompt.contains("using the Chrome plugin through Codex App Server")
+            && prompt.contains("Do not call lorelei.foreground_app for this Chrome-only task.")
     }
 }
 
