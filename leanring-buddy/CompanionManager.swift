@@ -598,7 +598,11 @@ final class CompanionManager: ObservableObject {
             }
 
             let foregroundTool = CodexAppServerDesktopForegroundTool()
+            let chromePreflight = CodexChromeMemorySaverPreflight()
             let executor = CodexAppServerExecutor(
+                preflight: { prompt in
+                    await chromePreflight.run(prompt: prompt)
+                },
                 dynamicToolSpecsResolver: {
                     [CodexAppServerDesktopForegroundTool.spec]
                 },

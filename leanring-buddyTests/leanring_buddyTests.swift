@@ -1557,6 +1557,41 @@ struct leanring_buddyTests {
         #expect(result.summary.contains("preflight Chrome preflight ok"))
     }
 
+    @Test func chromeMemorySaverPreflightSkipsNonChromePrompt() async throws {
+        let runner = ChromeMemorySaverScriptRunnerRecorder(
+            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":0,"woken":0}"#, stderr: "")
+        )
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+
+        let result = await preflight.run(prompt: "open TextEdit")
+
+        #expect(result == .completed("Chrome preflight skipped: prompt does not mention Chrome or a browser."))
+        #expect(runner.calls.isEmpty)
+    }
+
+    @Test func chromeMemorySaverPreflightRunsForChromePromptAndReportsWakeCount() async throws {
+        let runner = ChromeMemorySaverScriptRunnerRecorder(
+            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":6,"woken":2}"#, stderr: "")
+        )
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+
+        let result = await preflight.run(prompt: "open chatgpt.com in Chrome")
+
+        #expect(result == .completed("Chrome preflight checked 6 tabs and woke 2 sleeping tabs."))
+        #expect(runner.calls.count == 1)
+    }
+
+    @Test func chromeMemorySaverPreflightWarnsButDoesNotFailWhenScriptFails() async throws {
+        let runner = ChromeMemorySaverScriptRunnerRecorder(
+            execution: WorkspaceProcessExecution(reason: .exited(1), stdout: "", stderr: "DevToolsActivePort missing")
+        )
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+
+        let result = await preflight.run(prompt: "open chatgpt.com in Chrome")
+
+        #expect(result == .warning("Chrome preflight could not complete: DevToolsActivePort missing"))
+    }
+
     @Test func appServerExecutorStartsThreadAndTurn() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
@@ -1970,6 +2005,30 @@ private final class EventOrderRecorder: @unchecked Sendable {
         lock.lock()
         recordedEvents.append(event)
         lock.unlock()
+    }
+}
+
+private final class ChromeMemorySaverScriptRunnerRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedCalls: [String] = []
+    private let execution: WorkspaceProcessExecution
+
+    var calls: [String] {
+        lock.withLock {
+            recordedCalls
+        }
+    }
+
+    init(execution: WorkspaceProcessExecution) {
+        self.execution = execution
+    }
+
+    func run(script: String, timeoutSeconds: TimeInterval) async -> WorkspaceProcessExecution {
+        lock.withLock {
+            recordedCalls.append(script)
+        }
+        #expect(timeoutSeconds == 8)
+        return execution
     }
 }
 
