@@ -1687,36 +1687,33 @@ struct leanring_buddyTests {
         #expect(eventLines.contains("outbound response#47"))
     }
 
-    @Test func liveAppServerOpensChromeThroughForegroundDynamicTool() async throws {
+    @Test func liveAppServerOpensChromeThroughChromePlugin() async throws {
         let liveMarkerPath = "/tmp/lorelei-live-app-server-foreground-test"
         guard ProcessInfo.processInfo.environment["LORELEI_LIVE_APP_SERVER_FOREGROUND_TEST"] == "1"
                 || FileManager.default.fileExists(atPath: liveMarkerPath) else {
             return
         }
 
-        let foregroundTool = CodexAppServerDesktopForegroundTool()
         let traceRecorder = AppServerTraceRecorder()
         let executor = CodexAppServerExecutor(
             turnTimeoutSeconds: 45,
-            dynamicToolSpecsResolver: {
-                [CodexAppServerDesktopForegroundTool.spec]
-            },
-            dynamicToolHandler: { request in
-                await foregroundTool.handle(request)
-            },
             traceHandler: { event in
                 traceRecorder.record(event)
             },
             approvalHandler: { _ in .accept }
         )
-        let prompt = """
-        Call lorelei.foreground_app exactly once with appName "Google Chrome", bundleIdentifier "com.google.Chrome", and url "https://chatgpt.com".
-        After the tool succeeds, reply with the tool result in one sentence.
-        Do not use shell commands, the Chrome plugin, or Computer Use for this live smoke test.
-        """
+        let action = LoreleiCommandRouter().route("Open chatgpt.com in a new tab on chrome browser")
+        guard case .codexChromeBrowserOpen(let prompt) = action else {
+            Issue.record("Expected App Server Chrome browser open action, got \(action)")
+            return
+        }
+
+        #expect(prompt.contains("Chrome plugin"))
+        #expect(prompt.contains("Do not call lorelei.foreground_app"))
+        #expect(!prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
 
         let result = await executor.runDesktopAction(
-            prompt: CodexPromptBuilder.desktopActionPrompt(for: prompt),
+            prompt: prompt,
             cwd: FileManager.default.homeDirectoryForCurrentUser.path
         )
 
@@ -1725,7 +1722,7 @@ struct leanring_buddyTests {
                 .joined(separator: "\n")
             Issue.record(
                 """
-                Live App Server foreground smoke failed.
+                Live App Server Chrome plugin smoke failed.
                 Status: \(result.status)
                 Summary: \(result.summary)
                 Trace:
