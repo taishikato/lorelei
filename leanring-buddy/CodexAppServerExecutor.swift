@@ -82,6 +82,14 @@ private final class CodexAppServerTraceBuffer: @unchecked Sendable {
     }
 }
 
+private final class CodexAppServerPreflightPromptBox: @unchecked Sendable {
+    let value: String
+
+    init(_ prompt: String) {
+        value = String(decoding: Array(prompt.utf8), as: UTF8.self)
+    }
+}
+
 protocol CodexAppServerTransporting: Sendable {
     func send(line: String) async throws
     func nextLine() async throws -> String?
@@ -326,12 +334,13 @@ struct CodexAppServerExecutor {
         timeoutSeconds: TimeInterval
     ) async -> CodexAppServerPreflightResult? {
         let state = CodexAppServerPreflightRaceState()
+        let preflightPrompt = CodexAppServerPreflightPromptBox(prompt)
         var preflightTask: Task<Void, Never>?
         var timeoutTask: Task<Void, Never>?
 
         let result = await withCheckedContinuation { continuation in
-            preflightTask = Task { [preflight] in
-                let result = await preflight(prompt)
+            preflightTask = Task { [preflight, preflightPrompt] in
+                let result = await preflight(preflightPrompt.value)
                 state.resume(with: result, continuation: continuation)
             }
             timeoutTask = Task {

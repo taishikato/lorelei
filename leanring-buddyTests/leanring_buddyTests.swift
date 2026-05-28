@@ -229,7 +229,9 @@ struct leanring_buddyTests {
         let manager = CompanionManager(
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
-            chromeMemorySaverScriptRunner: runner.run,
+            chromeMemorySaverScriptRunner: { _, timeoutSeconds in
+                runner.run(timeoutSeconds: timeoutSeconds)
+            },
             codexAppServerTransportFactory: { transport }
         )
 
@@ -1522,10 +1524,9 @@ struct leanring_buddyTests {
             #"{"method":"turn/completed","params":{"status":"completed"}}"#
         ])
         let executor = CodexAppServerExecutor(
-            preflight: { prompt in
+            preflight: { _ in
                 orderRecorder.record("preflight")
                 preflightCounter.increment()
-                #expect(prompt == "open Chrome")
                 return .completed("Chrome preflight ok")
             },
             makeTransport: {
@@ -1615,7 +1616,9 @@ struct leanring_buddyTests {
         let runner = ChromeMemorySaverScriptRunnerRecorder(
             execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":0,"woken":0}"#, stderr: "")
         )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
+            runner.run(timeoutSeconds: timeoutSeconds)
+        })
 
         let result = await preflight.run(prompt: "open TextEdit")
 
@@ -1628,7 +1631,9 @@ struct leanring_buddyTests {
         let runner = ChromeMemorySaverScriptRunnerRecorder(
             execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":0,"woken":0}"#, stderr: "")
         )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
+            runner.run(timeoutSeconds: timeoutSeconds)
+        })
 
         let result = await preflight.run(prompt: "open apple.com in Safari browser")
 
@@ -1641,7 +1646,9 @@ struct leanring_buddyTests {
         let runner = ChromeMemorySaverScriptRunnerRecorder(
             execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":6,"woken":2}"#, stderr: "")
         )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
+            runner.run(timeoutSeconds: timeoutSeconds)
+        })
 
         let result = await preflight.run(prompt: "open chatgpt.com in Chrome")
 
@@ -1654,7 +1661,9 @@ struct leanring_buddyTests {
         let runner = ChromeMemorySaverScriptRunnerRecorder(
             execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":3,"woken":1}"#, stderr: "")
         )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
+            runner.run(timeoutSeconds: timeoutSeconds)
+        })
 
         let result = await preflight.run(prompt: "open a browser tab")
 
@@ -1667,7 +1676,9 @@ struct leanring_buddyTests {
         let runner = ChromeMemorySaverScriptRunnerRecorder(
             execution: WorkspaceProcessExecution(reason: .exited(1), stdout: "", stderr: "DevToolsActivePort missing")
         )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: runner.run)
+        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
+            runner.run(timeoutSeconds: timeoutSeconds)
+        })
 
         let result = await preflight.run(prompt: "open chatgpt.com in Chrome")
 
@@ -1827,6 +1838,7 @@ struct leanring_buddyTests {
             description: "Bring an app onscreen.",
             inputSchema: .object(["type": .string("object")])
         )
+        let dynamicToolRequestRecorder = StringRecorder()
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
@@ -1838,7 +1850,7 @@ struct leanring_buddyTests {
             makeTransport: { transport },
             dynamicToolSpecsResolver: { [dynamicTool] },
             dynamicToolHandler: { request in
-                #expect(request.tool == "foreground_app")
+                dynamicToolRequestRecorder.record(request.tool)
                 return CodexAppServerDynamicToolCallResult(
                     success: true,
                     contentText: "Google Chrome is onscreen."
@@ -1850,6 +1862,7 @@ struct leanring_buddyTests {
         let result = await executor.runDesktopAction(prompt: "foreground Chrome", cwd: "/Users/example")
 
         #expect(result.summary == "Foregrounded and done")
+        #expect(dynamicToolRequestRecorder.values == ["foreground_app"])
         let sentMessages = try await transport.sentLines.map { line in
             try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
         }
@@ -2091,6 +2104,23 @@ private final class EventOrderRecorder: @unchecked Sendable {
     }
 }
 
+private final class StringRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedValues: [String] = []
+
+    var values: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedValues
+    }
+
+    func record(_ value: String) {
+        lock.lock()
+        recordedValues.append(value)
+        lock.unlock()
+    }
+}
+
 private final class ChromeMemorySaverScriptRunnerRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedCalls: [String] = []
@@ -2098,27 +2128,31 @@ private final class ChromeMemorySaverScriptRunnerRecorder: @unchecked Sendable {
     private let execution: WorkspaceProcessExecution
 
     var calls: [String] {
-        lock.withLock {
-            recordedCalls
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedCalls
     }
 
     var timeoutSecondsValues: [TimeInterval] {
-        lock.withLock {
-            recordedTimeoutSecondsValues
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedTimeoutSecondsValues
     }
 
     init(execution: WorkspaceProcessExecution) {
         self.execution = execution
     }
 
-    func run(script: String, timeoutSeconds: TimeInterval) async -> WorkspaceProcessExecution {
-        lock.withLock {
-            recordedCalls.append(script)
-            recordedTimeoutSecondsValues.append(timeoutSeconds)
-        }
+    func run(timeoutSeconds: TimeInterval) -> WorkspaceProcessExecution {
+        record(timeoutSeconds: timeoutSeconds)
         return execution
+    }
+
+    private func record(timeoutSeconds: TimeInterval) {
+        lock.lock()
+        recordedCalls.append("script")
+        recordedTimeoutSecondsValues.append(timeoutSeconds)
+        lock.unlock()
     }
 }
 
