@@ -312,7 +312,7 @@ struct LoreleiTests {
             codexAppServerDesktopActionRunner: recorder.run,
             overlayWindowManager: overlayWindowManager
         )
-        manager.setClickyCursorEnabled(true)
+        manager.setBuddyCursorEnabled(true)
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {

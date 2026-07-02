@@ -61,7 +61,7 @@ struct CompanionPanelView: View {
             Spacer()
 
             Button {
-                NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+                NotificationCenter.default.post(name: .loreleiDismissPanel, object: nil)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .semibold))

@@ -149,15 +149,15 @@ final class CompanionManager: ObservableObject {
         UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
     }
 
-    /// User preference for whether the Clicky cursor should be shown.
+    /// User preference for whether the Lorelei cursor should be shown.
     /// When toggled off, the overlay is hidden and push-to-talk is disabled.
     /// Persisted to UserDefaults so the choice survives app restarts.
-    @Published var isClickyCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyCursorEnabled") == nil
+    @Published var isBuddyCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyCursorEnabled") == nil
         ? true
         : UserDefaults.standard.bool(forKey: "isClickyCursorEnabled")
 
-    func setClickyCursorEnabled(_ enabled: Bool) {
-        isClickyCursorEnabled = enabled
+    func setBuddyCursorEnabled(_ enabled: Bool) {
+        isBuddyCursorEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "isClickyCursorEnabled")
         transientHideTask?.cancel()
         transientHideTask = nil
@@ -179,7 +179,7 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
-        if allPermissionsGranted && isClickyCursorEnabled {
+        if allPermissionsGranted && isBuddyCursorEnabled {
             overlayWindowManager.hasShownOverlayBefore = true
             overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
             isOverlayVisible = true
@@ -310,7 +310,7 @@ final class CompanionManager: ObservableObject {
                     hasScreenContentPermission = true
                     UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
 
-                    if allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
+                    if allPermissionsGranted && !isOverlayVisible && isBuddyCursorEnabled {
                         overlayWindowManager.hasShownOverlayBefore = true
                         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                         isOverlayVisible = true
@@ -408,14 +408,14 @@ final class CompanionManager: ObservableObject {
             transientHideTask = nil
 
             // If the cursor is hidden, bring it back transiently for this interaction
-            if !isClickyCursorEnabled && !isOverlayVisible {
+            if !isBuddyCursorEnabled && !isOverlayVisible {
                 overlayWindowManager.hasShownOverlayBefore = true
                 overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                 isOverlayVisible = true
             }
 
             // Dismiss the menu bar panel so it doesn't cover the screen
-            NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
+            NotificationCenter.default.post(name: .loreleiDismissPanel, object: nil)
 
             // Cancel any in-progress placeholder response from a previous utterance
             currentResponseTask?.cancel()
@@ -624,7 +624,7 @@ final class CompanionManager: ObservableObject {
     private func withDesktopActionOverlayHidden(
         _ operation: @escaping @MainActor () async -> WorkspaceCommandResult
     ) async -> WorkspaceCommandResult {
-        let shouldRestoreOverlay = isOverlayVisible && isClickyCursorEnabled
+        let shouldRestoreOverlay = isOverlayVisible && isBuddyCursorEnabled
         transientHideTask?.cancel()
         transientHideTask = nil
         clearDetectedElementLocation()
@@ -635,7 +635,7 @@ final class CompanionManager: ObservableObject {
         }
 
         defer {
-            if shouldRestoreOverlay && isClickyCursorEnabled {
+            if shouldRestoreOverlay && isBuddyCursorEnabled {
                 overlayWindowManager.hasShownOverlayBefore = true
                 overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                 isOverlayVisible = true
@@ -723,12 +723,12 @@ final class CompanionManager: ObservableObject {
         )
     }
 
-    /// If the cursor is in transient mode (user toggled "Show Clicky" off),
+    /// If the cursor is in transient mode (user toggled the cursor off),
     /// waits for any pointing animation to finish, then fades out the overlay
     /// after a 1-second pause. Cancelled automatically
     /// if the user starts another push-to-talk interaction.
     private func scheduleTransientHideIfNeeded() {
-        guard !isClickyCursorEnabled && isOverlayVisible else { return }
+        guard !isBuddyCursorEnabled && isOverlayVisible else { return }
 
         transientHideTask?.cancel()
         transientHideTask = Task {
