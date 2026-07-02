@@ -14,15 +14,37 @@ enum LoreleiCommandAction: Equatable, Sendable {
     case codexReadOnly(String)
     case codexWorkspaceWrite(String)
     case codexScreen(String)
-    case codexComputerUse(String)
+    case codexDesktopAction(String)
+    case codexChromeBrowserOpen(String)
     case unsupported(String)
 
     var requiresWorkspace: Bool {
         switch self {
         case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
             return true
-        case .codexComputerUse, .unsupported:
+        case .codexDesktopAction, .codexChromeBrowserOpen, .unsupported:
             return false
+        }
+    }
+
+    var debugLabel: String {
+        switch self {
+        case .gitStatus:
+            return "Git status"
+        case .gitDiff:
+            return "Git diff"
+        case .runTests:
+            return "Run tests"
+        case .codexReadOnly:
+            return "Codex read-only"
+        case .codexWorkspaceWrite:
+            return "Codex workspace write"
+        case .codexScreen:
+            return "Codex screen request"
+        case .codexDesktopAction, .codexChromeBrowserOpen:
+            return "Codex desktop action"
+        case .unsupported:
+            return "Unsupported command"
         }
     }
 }
@@ -30,7 +52,7 @@ enum LoreleiCommandAction: Equatable, Sendable {
 struct LoreleiConfirmationPolicy {
     static func requiresConfirmation(for action: LoreleiCommandAction) -> Bool {
         switch action {
-        case .codexReadOnly, .codexWorkspaceWrite, .codexComputerUse:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexDesktopAction, .codexChromeBrowserOpen:
             return true
         case .gitStatus, .gitDiff, .runTests, .codexScreen, .unsupported:
             return false
@@ -48,14 +70,34 @@ struct CodexPromptBuilder {
         """
     }
 
-    static func computerUsePrompt(for prompt: String) -> String {
+    static func appServerDesktopActionPrompt(
+        for prompt: String,
+        wrapGenericGuidance: Bool = true
+    ) -> String {
+        if !wrapGenericGuidance {
+            return prompt
+        }
+
+        return desktopActionPrompt(for: prompt)
+    }
+
+    static func desktopActionPrompt(for prompt: String) -> String {
         """
-        The user requested a computer-use action through Lorelei. Use available computer-use capabilities if needed. Do not commit changes.
+        Use Codex App Server's interactive control plane for every desktop operation.
+        For Chrome and browser tasks, prefer the Codex Chrome plugin when the task can be completed through browser automation without visual desktop inspection.
+        This includes browser typing, clicking, and search when the Chrome plugin can perform the browser automation without visual desktop inspection.
+        Use the Codex Computer Use plugin only when visual UI inspection, non-browser clicking, typing, scrolling, dragging, key presses, or other non-browser desktop control are actually needed.
+        Before Computer Use inspects a desktop app, call lorelei.foreground_app for that target app. If Computer Use reports cgWindowNotFound, call lorelei.foreground_app once more before retrying visual inspection.
+        For non-Chrome app opening or non-Chrome URL opening, call lorelei.foreground_app before visual inspection so the target app is visible in the current macOS Space.
+        Follow the Codex Computer Use confirmation and safety policy for risky UI actions.
+        Do not rely on caller-side local shortcuts.
+        Do not commit changes.
 
         User request:
         \(prompt)
         """
     }
+
 }
 
 struct PendingCommandConfirmation {
@@ -94,8 +136,12 @@ struct LoreleiCommandRouter {
             return .codexScreen(originalCommand)
         }
 
+        if let browserOpenPrompt = browserOpenPrompt(command: command, originalCommand: originalCommand) {
+            return .codexChromeBrowserOpen(browserOpenPrompt)
+        }
+
         if isComputerUseRequest(command) {
-            return .codexComputerUse(originalCommand)
+            return .codexDesktopAction(originalCommand)
         }
 
         if isStatusRequest(command) {
@@ -171,6 +217,125 @@ struct LoreleiCommandRouter {
             || command.contains("computer use")
             || command.contains("system settings")
             || command.contains("use the browser")
+            || isBrowserDesktopOperation(command)
+    }
+
+    private func browserOpenPrompt(command: String, originalCommand: String) -> String? {
+        guard command.contains("chrome"),
+              !command.contains("computer use"),
+              !requiresBrowserInteractionAfterOpen(command),
+              containsAnyWord(in: command, words: ["open", "launch"]) || command.contains("new tab"),
+              let urlString = normalizedURLString(in: originalCommand) else {
+            return nil
+        }
+
+        return """
+        Open \(urlString) in Google Chrome using the Chrome plugin through Codex App Server.
+        Use the Chrome plugin to create or select a Chrome tab for "\(urlString)".
+        After the Chrome plugin succeeds, reply with the result in one sentence.
+        Do not use Computer Use, shell commands, or local macOS shortcuts.
+        Do not call lorelei.foreground_app for this Chrome-only task.
+        Do not search, type into the page, click submit, or perform any additional browser interaction.
+
+        Original user request:
+        \(originalCommand)
+        """
+    }
+
+    private func isBrowserDesktopOperation(_ command: String) -> Bool {
+        let mentionsBrowserTarget = command.contains("chrome")
+            || command.contains("safari")
+            || command.contains("browser")
+            || command.contains("chatgpt")
+
+        guard mentionsBrowserTarget else { return false }
+
+        return containsAnyWord(in: command, words: [
+            "open",
+            "launch",
+            "type",
+            "search",
+            "ask",
+            "enter",
+            "submit",
+            "press",
+            "click",
+            "scroll"
+        ]) || command.contains("new tab")
+    }
+
+    private func requiresBrowserInteractionAfterOpen(_ command: String) -> Bool {
+        command.contains(" and then ")
+            || command.contains(" then ")
+            || containsAnyWord(in: command, words: [
+                "type",
+                "search",
+                "ask",
+                "enter",
+                "submit",
+                "press",
+                "click",
+                "scroll"
+            ])
+    }
+
+    private func normalizedURLString(in command: String) -> String? {
+        let trimmingCharacters = CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: "\"'.,;!?()[]{}<>"))
+
+        for rawToken in command.components(separatedBy: .whitespacesAndNewlines) {
+            let token = rawToken.trimmingCharacters(in: trimmingCharacters)
+            guard !token.isEmpty else { continue }
+
+            if let urlString = normalizedURLString(from: token) {
+                return urlString
+            }
+        }
+
+        return nil
+    }
+
+    private func normalizedURLString(from token: String) -> String? {
+        let lowercasedToken = token.lowercased()
+        let candidate: String
+        if lowercasedToken.hasPrefix("https://") || lowercasedToken.hasPrefix("http://") {
+            candidate = token
+        } else if looksLikeDomain(token) {
+            candidate = "https://\(token)"
+        } else {
+            return nil
+        }
+
+        guard let components = URLComponents(string: candidate),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              let host = components.host,
+              looksLikeHost(host) else {
+            return nil
+        }
+
+        return components.string ?? candidate
+    }
+
+    private func looksLikeDomain(_ token: String) -> Bool {
+        let host = token
+            .split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init) ?? token
+        return looksLikeHost(host)
+    }
+
+    private func looksLikeHost(_ host: String) -> Bool {
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2,
+              let topLevelDomain = labels.last,
+              topLevelDomain.count >= 2 else {
+            return false
+        }
+
+        return host.allSatisfy { character in
+            character.isLetter || character.isNumber || character == "." || character == "-"
+        }
     }
 
     private func isScreenRequest(_ command: String) -> Bool {

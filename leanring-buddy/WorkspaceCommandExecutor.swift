@@ -65,8 +65,13 @@ struct WorkspaceCommandExecutor {
 
     func run(_ action: LoreleiCommandAction, workspacePath: String?) async -> WorkspaceCommandResult {
         guard action.requiresWorkspace else {
-            if case let .unsupported(message) = action {
+            switch action {
+            case .unsupported(let message):
                 return WorkspaceCommandResult(summary: message)
+            case .codexDesktopAction, .codexChromeBrowserOpen:
+                return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
+            case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
+                break
             }
             return WorkspaceCommandResult(summary: "Unsupported command.")
         }
@@ -91,7 +96,7 @@ struct WorkspaceCommandExecutor {
             return await runGitDiff(workspacePath: workspacePath)
         case .runTests:
             return WorkspaceCommandResult(summary: "No test command configured.", status: .failed)
-        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexComputerUse:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexDesktopAction, .codexChromeBrowserOpen:
             return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
         case .unsupported(let message):
             return WorkspaceCommandResult(summary: message)
@@ -266,7 +271,8 @@ final class WorkspaceProcessRunner: @unchecked Sendable {
         currentDirectoryURL: URL,
         timeoutSeconds: TimeInterval,
         prelaunchDelay: TimeInterval = 0,
-        onLaunch: (@Sendable () -> Void)? = nil
+        onLaunch: (@Sendable () -> Void)? = nil,
+        environment: [String: String]? = nil
     ) async -> WorkspaceProcessExecution {
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -278,13 +284,61 @@ final class WorkspaceProcessRunner: @unchecked Sendable {
                         timeoutSeconds: timeoutSeconds,
                         continuation: continuation,
                         prelaunchDelay: prelaunchDelay,
-                        onLaunch: onLaunch
+                        onLaunch: onLaunch,
+                        environment: environment
                     )
                 }
             }
         } onCancel: {
             cancel()
         }
+    }
+
+    /// GUI-launched apps inherit a minimal PATH. Subprocesses that rely on `env node`
+    /// or spawn MCP servers via `npx` need common Node install locations prepended.
+    nonisolated static func launchEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = base
+        let existingComponents = (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+            .split(separator: ":", omittingEmptySubsequences: false)
+            .map(String.init)
+
+        var mergedComponents: [String] = []
+        for candidate in nodeBinPathCandidates() + existingComponents {
+            guard !candidate.isEmpty, !mergedComponents.contains(candidate) else { continue }
+            mergedComponents.append(candidate)
+        }
+
+        environment["PATH"] = mergedComponents.joined(separator: ":")
+        return environment
+    }
+
+    nonisolated private static func nodeBinPathCandidates() -> [String] {
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser
+        var candidates = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            home.appendingPathComponent(".nodebrew/current/bin").path,
+            "/opt/homebrew/var/nodebrew/current/bin"
+        ]
+
+        let nvmVersionsURL = home
+            .appendingPathComponent(".nvm", isDirectory: true)
+            .appendingPathComponent("versions", isDirectory: true)
+            .appendingPathComponent("node", isDirectory: true)
+
+        if let versionNames = try? fileManager.contentsOfDirectory(atPath: nvmVersionsURL.path) {
+            candidates += versionNames.map {
+                nvmVersionsURL
+                    .appendingPathComponent($0, isDirectory: true)
+                    .appendingPathComponent("bin", isDirectory: true)
+                    .path
+            }
+        }
+
+        return candidates.filter { fileManager.fileExists(atPath: $0) }
     }
 
     nonisolated func cancel() {
@@ -301,7 +355,8 @@ final class WorkspaceProcessRunner: @unchecked Sendable {
         timeoutSeconds: TimeInterval,
         continuation: CheckedContinuation<WorkspaceProcessExecution, Never>,
         prelaunchDelay: TimeInterval = 0,
-        onLaunch: (@Sendable () -> Void)? = nil
+        onLaunch: (@Sendable () -> Void)? = nil,
+        environment: [String: String]? = nil
     ) {
         guard !didComplete else {
             continuation.resume(returning: WorkspaceProcessExecution(reason: .cancelled, stdout: "", stderr: ""))
@@ -318,6 +373,7 @@ final class WorkspaceProcessRunner: @unchecked Sendable {
         process.executableURL = executableURL
         process.arguments = arguments
         process.currentDirectoryURL = currentDirectoryURL
+        process.environment = environment ?? Self.launchEnvironment()
 
         let stdout = Pipe()
         let stderr = Pipe()

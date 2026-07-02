@@ -169,6 +169,8 @@ struct CompanionPanelView: View {
                 )
 
                 pendingConfirmationBlock
+
+                debugBlock
             }
         }
     }
@@ -196,6 +198,33 @@ struct CompanionPanelView: View {
                 }
             }
         }
+    }
+
+    private var debugBlock: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Debug")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(DS.Colors.textTertiary)
+
+            ScrollView {
+                Text(companionManager.debugLogText)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(DS.Colors.textSecondary)
+                    .lineLimit(nil)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 74, maxHeight: 112)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .fill(DS.Colors.surface1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
+                .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
+        )
     }
 
     private var footer: some View {
