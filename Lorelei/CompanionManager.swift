@@ -252,8 +252,6 @@ final class CompanionManager: ObservableObject {
         let previouslyHadAccessibility = hasAccessibilityPermission
         let previouslyHadScreenRecording = hasScreenRecordingPermission
         let previouslyHadMicrophone = hasMicrophonePermission
-        let previouslyHadAll = allPermissionsGranted
-
         let currentlyHasAccessibility = WindowPositionManager.hasAccessibilityPermission()
         hasAccessibilityPermission = currentlyHasAccessibility
 
@@ -275,24 +273,10 @@ final class CompanionManager: ObservableObject {
             print("🔑 Permissions — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
         }
 
-        // Track individual permission grants as they happen
-        if !previouslyHadAccessibility && hasAccessibilityPermission {
-            ClickyAnalytics.trackPermissionGranted(permission: "accessibility")
-        }
-        if !previouslyHadScreenRecording && hasScreenRecordingPermission {
-            ClickyAnalytics.trackPermissionGranted(permission: "screen_recording")
-        }
-        if !previouslyHadMicrophone && hasMicrophonePermission {
-            ClickyAnalytics.trackPermissionGranted(permission: "microphone")
-        }
         // Screen content permission is persisted — once the user has approved the
         // SCShareableContent picker, we don't need to re-check it.
         if !hasScreenContentPermission {
             hasScreenContentPermission = UserDefaults.standard.bool(forKey: "hasScreenContentPermission")
-        }
-
-        if !previouslyHadAll && allPermissionsGranted {
-            ClickyAnalytics.trackAllPermissionsGranted()
         }
     }
 
@@ -325,7 +309,6 @@ final class CompanionManager: ObservableObject {
                     guard didCapture else { return }
                     hasScreenContentPermission = true
                     UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
-                    ClickyAnalytics.trackPermissionGranted(permission: "screen_content")
 
                     if allPermissionsGranted && !isOverlayVisible && isClickyCursorEnabled {
                         overlayWindowManager.hasShownOverlayBefore = true
@@ -439,8 +422,6 @@ final class CompanionManager: ObservableObject {
             clearDetectedElementLocation()
             _ = resolvePendingCodexAppServerApproval(.cancel)
 
-            ClickyAnalytics.trackPushToTalkStarted()
-
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
                 await buddyDictationManager.startPushToTalkFromKeyboardShortcut(
@@ -451,7 +432,6 @@ final class CompanionManager: ObservableObject {
                     submitDraftText: { [weak self] finalTranscript in
                         self?.lastTranscript = finalTranscript
                         print("🗣️ Companion received transcript: \(finalTranscript)")
-                        ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
                         self?.handleFinalTranscriptLocally(finalTranscript)
                     }
                 )
@@ -461,7 +441,6 @@ final class CompanionManager: ObservableObject {
             // before the async startPushToTalk had a chance to begin recording.
             // Without this, a quick press-and-release drops the release event and
             // leaves the waveform overlay stuck on screen indefinitely.
-            ClickyAnalytics.trackPushToTalkReleased()
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
@@ -497,7 +476,6 @@ final class CompanionManager: ObservableObject {
             if case let .unsupported(message) = action {
                 updateLatestResultSummary(message)
                 speechOutput.speak(WorkspaceCommandResult(summary: message, status: .failed).spokenStatus)
-                ClickyAnalytics.trackAIResponseReceived(response: "unsupported local command")
                 return
             }
 
@@ -507,21 +485,18 @@ final class CompanionManager: ObservableObject {
                     title: "Run Codex read-only?",
                     action: action
                 )
-                ClickyAnalytics.trackAIResponseReceived(response: "codex read-only confirmation required")
                 return
             case .codexWorkspaceWrite:
                 requestPendingConfirmation(
                     title: "Run Codex with workspace write access?",
                     action: action
                 )
-                ClickyAnalytics.trackAIResponseReceived(response: "codex write confirmation required")
                 return
             case .codexDesktopAction, .codexChromeBrowserOpen:
                 requestPendingConfirmation(
                     title: "Run Codex desktop action?",
                     action: action
                 )
-                ClickyAnalytics.trackAIResponseReceived(response: "codex desktop-action confirmation required")
                 return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
@@ -529,7 +504,6 @@ final class CompanionManager: ObservableObject {
 
                 updateLatestResultSummary(result.summary)
                 speechOutput.speak(result.spokenStatus)
-                ClickyAnalytics.trackAIResponseReceived(response: "codex screen context command")
                 return
             case .gitStatus, .gitDiff, .runTests, .unsupported:
                 break
@@ -543,7 +517,6 @@ final class CompanionManager: ObservableObject {
 
             updateLatestResultSummary(result.summary)
             speechOutput.speak(result.spokenStatus)
-            ClickyAnalytics.trackAIResponseReceived(response: "local workspace command")
         }
     }
 
@@ -707,7 +680,6 @@ final class CompanionManager: ObservableObject {
             voiceState = .processing
 
             let result: WorkspaceCommandResult
-            let analyticsResponse: String
             switch action {
             case .codexReadOnly(let prompt):
                 result = await codexExecutor.run(
@@ -715,30 +687,24 @@ final class CompanionManager: ObservableObject {
                     prompt: prompt,
                     workspacePath: workspaceSettingsStore.selectedWorkspacePath
                 )
-                analyticsResponse = "confirmed codex read-only command"
             case .codexWorkspaceWrite(let prompt):
                 result = await codexExecutor.run(
                     .workspaceWrite,
                     prompt: CodexPromptBuilder.workspaceWritePrompt(for: prompt),
                     workspacePath: workspaceSettingsStore.selectedWorkspacePath
                 )
-                analyticsResponse = "confirmed codex workspace-write command"
             case .codexDesktopAction(let prompt):
                 result = await runCodexAppServerDesktopAction(prompt: prompt)
-                analyticsResponse = "confirmed codex desktop-action command"
             case .codexChromeBrowserOpen(let prompt):
                 result = await runCodexAppServerDesktopAction(prompt: prompt, wrapGenericPrompt: false)
-                analyticsResponse = "confirmed codex desktop-action command"
             default:
                 result = WorkspaceCommandResult(summary: "Unsupported confirmed command.", status: .failed)
-                analyticsResponse = "unsupported confirmed command"
             }
 
             guard !Task.isCancelled else { return }
 
             updateLatestResultSummary(result.summary)
             speechOutput.speak(result.spokenStatus)
-            ClickyAnalytics.trackAIResponseReceived(response: analyticsResponse)
         }
     }
 
