@@ -656,7 +656,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             "Codex",
             "Claude",
             "Anthropic",
-            "OpenAI",
             "SwiftUI",
             "Xcode",
             "Vercel",

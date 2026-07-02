@@ -41,24 +41,6 @@ struct LoreleiTests {
         #expect(shouldTreatPermissionAsGranted)
     }
 
-    @Test func openAITranscriptionIsNotDefaultWhenConfigured() async throws {
-        let shouldUseOpenAI = BuddyTranscriptionProviderFactory.shouldUseOpenAIProvider(
-            preferredProviderRawValue: nil,
-            openAIIsConfigured: true
-        )
-
-        #expect(!shouldUseOpenAI)
-    }
-
-    @Test func openAITranscriptionCanBeExplicitlySelectedWhenConfigured() async throws {
-        let shouldUseOpenAI = BuddyTranscriptionProviderFactory.shouldUseOpenAIProvider(
-            preferredProviderRawValue: "openai",
-            openAIIsConfigured: true
-        )
-
-        #expect(shouldUseOpenAI)
-    }
-
     @Test func workspaceSelectionPersistsOnePath() async throws {
         let defaults = UserDefaults(suiteName: "WorkspaceSettingsStoreTests")!
         defaults.removePersistentDomain(forName: "WorkspaceSettingsStoreTests")
