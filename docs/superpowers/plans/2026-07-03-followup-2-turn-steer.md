@@ -118,3 +118,28 @@ struct ConversationEntry: Identifiable, Equatable, Sendable {
 **Tests (locked names):**
 - `companionManagerLogsUserAndAssistantEntriesAcrossTurns` - two voice turns over one session: log ends `[user, assistant, user, assistant]` with the right texts.
 - `companionManagerLogsSteeredUtteranceIntoConversation` - steer mid-turn: a `.user` entry with the "↪ " prefix appears while the same assistant entry keeps streaming (no new assistant entry created by the steer).
+
+---
+
+### Task 5 (added 2026-07-03 after context-loss diagnosis): One thread for every Codex action
+
+**Problem:** Only `.codexDesktopAction` runs on the app-server thread. `.codexReadOnly` / `.codexWorkspaceWrite` / `.codexScreen` still go through the stateless `codex exec` CLI path, so utterances like "Continue" (router default = readOnly) land in a separate brain with no conversation history. Protocol-level probe confirmed the thread itself shares context perfectly across turns.
+
+**Schema facts (docs/appserver-schema):** `TurnStartParams` supports `sandboxPolicy` (SandboxMode: "read-only" | "workspace-write" | "danger-full-access") and `input` items of type `text` / `localImage` (path-based) among others.
+
+**Behavior:**
+- `CodexAppServerExecutor` generalizes `runDesktopAction` into `runTurn(prompt:cwd:sandboxPolicy:extraInput:)` (desktop actions keep today's parameters; `runDesktopAction` may remain as a thin wrapper). `turnStartRequest` gains optional `sandboxPolicy` and image input items (`{"type":"localImage","path":...}` appended after the text item).
+- CompanionManager routes ALL Codex actions through the shared executor/session:
+  - `.codexReadOnly` -> `runTurn(prompt, sandboxPolicy: "read-only")` (raw prompt, no desktop wrapper)
+  - `.codexWorkspaceWrite` -> `runTurn(CodexPromptBuilder.workspaceWritePrompt(for:), sandboxPolicy: "workspace-write")`
+  - `.codexScreen` -> capture screenshots as today, then `runTurn(prompt, sandboxPolicy: "read-only", extraInput: [localImage paths])` - replacing CodexScreenContextRequestRunner's exec invocation
+  - `.codexDesktopAction` -> unchanged wrapper/parameters
+  All four now stream progress, appear in the conversation log, steer, and share one thread.
+- Retire the `codex exec` execution path: delete `CodexExecutionMode`, `CodexExecutor.run(...)` and its argument builder; KEEP `CodexExecutableLocator` and `CodexExecutor.makeLaunchCommand` (the app-server launch depends on them - rehome them if that reads better). Update WorkspaceCommandExecutor's placeholder arms and any tests referencing the exec path.
+- `grep -rn 'CodexExecutionMode\|--output-last-message\|ask-for-approval' Lorelei LoreleiTests` must be empty afterward (exit 1).
+
+**Tests (locked names):**
+- `appServerTurnStartRequestEncodesSandboxPolicyAndLocalImage` - builder with sandboxPolicy "read-only" and one localImage path emits params.sandboxPolicy and input [text, localImage] per schema.
+- `companionManagerRunsReadOnlyUtteranceOnSharedThread` - a desktop turn then "what did you just do" (routes readOnly) over ONE scripted transport: factory count 1, second turn/start carries sandboxPolicy "read-only" and the same threadId.
+- `companionManagerRunsWorkspaceWriteOnSharedThread` - mutating utterance sends turn/start with sandboxPolicy "workspace-write" and the workspace-write wrapper prompt on the same thread.
+- Screen path: adapt the existing screen-request tests to assert the shared executor receives the localImage input instead of a codex exec invocation.
