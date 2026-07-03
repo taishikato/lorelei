@@ -61,11 +61,13 @@ struct CodexPromptBuilder {
     static func desktopActionPrompt(for prompt: String) -> String {
         """
         Use Codex App Server's interactive control plane for every desktop operation.
-        Use the Codex Computer Use plugin for desktop control, including browser typing, clicking, search, scrolling, dragging, key presses, and other interactive UI actions.
-        Before Computer Use inspects a desktop app, call lorelei.foreground_app for that target app. If Computer Use reports cgWindowNotFound, call lorelei.foreground_app once more before retrying visual inspection.
-        For app opening or URL opening, call lorelei.foreground_app before visual inspection so the target app is visible in the current macOS Space.
-        Follow the Codex Computer Use confirmation and safety policy for risky UI actions.
-        Do not rely on caller-side local shortcuts.
+        You control the desktop ONLY through the lorelei.* tools:
+        1. Call lorelei.foreground_app to bring the target app (or URL) onscreen in the current macOS Space.
+        2. Call lorelei.desktop_snapshot to read the app's accessibility tree; act on elements by their [eN] ids.
+        3. Use lorelei.desktop_action (press/focus/raise) and lorelei.set_text (sets values directly - required for non-ASCII text) to operate the UI.
+        4. After UI state changes, call lorelei.desktop_snapshot again before further actions.
+        5. Only when the snapshot lacks the information you need (canvas or custom-drawn UIs), call lorelei.screenshot and reason from the image.
+        Do not simulate keyboard shortcuts. Do not use shell commands to manipulate the UI.
         Do not commit changes.
 
         User request:

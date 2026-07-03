@@ -40,7 +40,7 @@ A floating liquid-glass toolbar shows status and the live stream; a cursor-side 
 | 5 | Codex App Server approval bridging stays as the only gate (accept/decline from the toolbar). |
 | 6 | Cursor-side indicator: small liquid-glass capsule with live waveform only; follows the cursor; no transcript there. |
 | 7 | Computer use is built in-house: AX tree is fed to the model, actions address elements by ID (official Codex computer use is desktop-app-only; watch openai/codex#20851). |
-| 8 | MCP tools are a thin stdio shim relaying over a local socket to Lorelei.app, which executes everything; TCC permissions are unified on the app bundle. |
+| 8 | ~~MCP tools are a thin stdio shim relaying over a local socket to Lorelei.app~~ REVISED 2026-07-03: desktop tools are App Server **dynamic tools** on the existing JSON-RPC connection (no shim, no socket), executed in-process by Lorelei.app; TCC permissions stay unified on the app bundle. The bundled `computer-use@openai-bundled` plugin (desktop-app-only) is retired in phase 3. |
 | 9 | STT: SpeechDetector + DictationTranscriber only, on-device; delete OpenAI cloud STT and the old SFSpeechRecognizer implementation; keep the provider protocol as the seam. |
 | 10 | Toolbar expanded view: current turn stream + tool activity + stop + approval UI only; no history, no text input in v1. |
 | 11 | Sound cues (listen start/stop, done, fail, approval) + one-sentence TTS on completion/failure/approval. |

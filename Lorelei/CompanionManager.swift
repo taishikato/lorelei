@@ -98,6 +98,7 @@ final class CompanionManager: ObservableObject {
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
+    private var axDesktopActionExecutor: AXDesktopActionExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
@@ -549,10 +550,24 @@ final class CompanionManager: ObservableObject {
 
             let foregroundTool = CodexAppServerDesktopForegroundTool()
             let dynamicToolSpecsResolver = {
-                [CodexAppServerDesktopForegroundTool.spec]
+                [CodexAppServerDesktopForegroundTool.spec] + CodexAppServerDesktopToolSuite.toolSpecs()
             }
-            let dynamicToolHandler: CodexAppServerDynamicToolHandler = { request in
-                await foregroundTool.handle(request)
+            let dynamicToolHandler: CodexAppServerDynamicToolHandler = { [weak self] request in
+                if request.namespace == CodexAppServerDesktopForegroundTool.spec.namespace,
+                   request.tool == CodexAppServerDesktopForegroundTool.spec.name {
+                    return await foregroundTool.handle(request)
+                }
+
+                guard let self else {
+                    return CodexAppServerDynamicToolCallResult(
+                        success: false,
+                        contentText: "CompanionManager is no longer available for desktop tool handling."
+                    )
+                }
+                return await CodexAppServerDesktopToolSuite.handle(
+                    request,
+                    executor: self.sharedAXDesktopActionExecutor()
+                )
             }
             let traceHandler: CodexAppServerTraceHandler = { [weak self] event in
                 Task { @MainActor [weak self] in
@@ -582,6 +597,15 @@ final class CompanionManager: ObservableObject {
             }
             return await executor.runDesktopAction(prompt: appServerPrompt, cwd: cwd)
         }
+    }
+
+    private func sharedAXDesktopActionExecutor() -> AXDesktopActionExecutor {
+        if let axDesktopActionExecutor {
+            return axDesktopActionExecutor
+        }
+        let executor = AXDesktopActionExecutor()
+        axDesktopActionExecutor = executor
+        return executor
     }
 
     private func withDesktopActionOverlayHidden(

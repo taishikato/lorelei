@@ -92,7 +92,6 @@ enum CodexAppServerLaunch {
 struct CodexAppServerExecutor {
     private let turnTimeoutSeconds: TimeInterval
     private let makeTransport: () async throws -> CodexAppServerTransporting
-    private let skillInputResolver: () -> [CodexAppServerSkillInput]
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
     private let dynamicToolHandler: CodexAppServerDynamicToolHandler
     private let traceHandler: CodexAppServerTraceHandler
@@ -102,9 +101,6 @@ struct CodexAppServerExecutor {
         turnTimeoutSeconds: TimeInterval = 120,
         makeTransport: @escaping () async throws -> CodexAppServerTransporting = {
             try await CodexAppServerStdioTransport.make()
-        },
-        skillInputResolver: @escaping () -> [CodexAppServerSkillInput] = {
-            CodexAppServerSkillInputResolver.desktopActionSkillInputs()
         },
         dynamicToolSpecsResolver: @escaping () -> [CodexAppServerDynamicToolSpec] = { [] },
         dynamicToolHandler: @escaping CodexAppServerDynamicToolHandler = { request in
@@ -118,7 +114,6 @@ struct CodexAppServerExecutor {
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
         self.makeTransport = makeTransport
-        self.skillInputResolver = skillInputResolver
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
         self.dynamicToolHandler = dynamicToolHandler
         self.traceHandler = traceHandler
@@ -187,8 +182,7 @@ struct CodexAppServerExecutor {
                             id: 3,
                             threadID: threadID,
                             prompt: prompt,
-                            cwd: cwd,
-                            skillInputs: skillInputResolver()
+                            cwd: cwd
                         ),
                         to: transport,
                         traceBuffer: traceBuffer

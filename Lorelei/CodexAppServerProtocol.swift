@@ -38,11 +38,6 @@ struct CodexAppServerApprovalRequest: Equatable, Sendable {
     let declinePayload: CodexAppServerApprovalPayload
 }
 
-struct CodexAppServerSkillInput: Equatable, Sendable {
-    let name: String
-    let path: String
-}
-
 struct CodexAppServerDynamicToolSpec: Equatable, Sendable {
     let name: String
     let namespace: String?
@@ -58,9 +53,23 @@ struct CodexAppServerDynamicToolCallRequest: Equatable, Sendable {
     let arguments: CodexAppServerJSONValue
 }
 
+enum CodexAppServerDynamicToolContentItem: Equatable, Sendable {
+    case text(String)
+    case image(dataURL: String)
+}
+
 struct CodexAppServerDynamicToolCallResult: Equatable, Sendable {
     let success: Bool
-    let contentText: String
+    let contentItems: [CodexAppServerDynamicToolContentItem]
+
+    init(success: Bool, contentItems: [CodexAppServerDynamicToolContentItem]) {
+        self.success = success
+        self.contentItems = contentItems
+    }
+
+    init(success: Bool, contentText: String) {
+        self.init(success: success, contentItems: [.text(contentText)])
+    }
 }
 
 enum CodexAppServerJSONValue: Equatable, Sendable {
@@ -123,95 +132,6 @@ enum CodexAppServerJSONValue: Equatable, Sendable {
     }
 }
 
-enum CodexAppServerSkillInputResolver {
-    static func desktopActionSkillInputs(
-        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
-        fileManager: FileManager = .default
-    ) -> [CodexAppServerSkillInput] {
-        guard let computerUseSkillInput = computerUseSkillInput(
-            homeDirectoryURL: homeDirectoryURL,
-            fileManager: fileManager
-        ) else {
-            return []
-        }
-        return [computerUseSkillInput]
-    }
-
-    static func computerUseSkillInput(
-        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
-        fileManager: FileManager = .default
-    ) -> CodexAppServerSkillInput? {
-        guard let skillURL = computerUseSkillURL(
-            homeDirectoryURL: homeDirectoryURL,
-            fileManager: fileManager
-        ) else {
-            return nil
-        }
-
-        return CodexAppServerSkillInput(
-            name: "computer-use:computer-use",
-            path: skillURL.path
-        )
-    }
-
-    private static func computerUseSkillURL(
-        homeDirectoryURL: URL,
-        fileManager: FileManager
-    ) -> URL? {
-        let marketplaceSkillURL = homeDirectoryURL
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent(".tmp", isDirectory: true)
-            .appendingPathComponent("bundled-marketplaces", isDirectory: true)
-            .appendingPathComponent("openai-bundled", isDirectory: true)
-            .appendingPathComponent("plugins", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("skills", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("SKILL.md")
-
-        if fileManager.fileExists(atPath: marketplaceSkillURL.path) {
-            return marketplaceSkillURL
-        }
-
-        return newestPluginCacheSkillURL(
-            homeDirectoryURL: homeDirectoryURL,
-            fileManager: fileManager
-        )
-    }
-
-    private static func newestPluginCacheSkillURL(
-        homeDirectoryURL: URL,
-        fileManager: FileManager
-    ) -> URL? {
-        let cacheRootURL = homeDirectoryURL
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent("plugins", isDirectory: true)
-            .appendingPathComponent("cache", isDirectory: true)
-            .appendingPathComponent("openai-bundled", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-
-        guard let versionNames = try? fileManager.contentsOfDirectory(atPath: cacheRootURL.path) else {
-            return nil
-        }
-
-        return versionNames
-            .map { cacheRootURL.appendingPathComponent($0, isDirectory: true) }
-            .filter { versionURL in
-                var isDirectory: ObjCBool = false
-                return fileManager.fileExists(atPath: versionURL.path, isDirectory: &isDirectory)
-                    && isDirectory.boolValue
-            }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
-            .map { versionURL in
-                versionURL
-                    .appendingPathComponent("skills", isDirectory: true)
-                    .appendingPathComponent("computer-use", isDirectory: true)
-                    .appendingPathComponent("SKILL.md")
-            }
-            .first { fileManager.fileExists(atPath: $0.path) }
-    }
-}
-
 enum CodexAppServerApprovalPayload: Equatable, Sendable {
     case toolUserInput(questionID: String, answer: String)
     case commandDecision(String)
@@ -259,10 +179,13 @@ enum CodexAppServerProtocol {
     ) -> [String: Any] {
         var params: [String: Any] = [
             "cwd": cwd,
-            "config": desktopActionConfigOverrides(),
             "approvalPolicy": granularApprovalPolicy(),
             "approvalsReviewer": "user"
         ]
+        let configOverrides = desktopActionConfigOverrides()
+        if !configOverrides.isEmpty {
+            params["config"] = configOverrides
+        }
         if !dynamicTools.isEmpty {
             params["dynamicTools"] = dynamicTools.map(dynamicToolSpecObject)
         }
@@ -278,8 +201,7 @@ enum CodexAppServerProtocol {
         id: Int,
         threadID: String,
         prompt: String,
-        cwd: String,
-        skillInputs: [CodexAppServerSkillInput] = []
+        cwd: String
     ) -> [String: Any] {
         let input: [[String: Any]] = [
             [
@@ -287,13 +209,7 @@ enum CodexAppServerProtocol {
                 "text": prompt,
                 "text_elements": []
             ]
-        ] + skillInputs.map { skillInput in
-            [
-                "type": "skill",
-                "name": skillInput.name,
-                "path": skillInput.path
-            ]
-        }
+        ]
 
         return [
             "id": id,
@@ -390,12 +306,20 @@ enum CodexAppServerProtocol {
             "id": id,
             "result": [
                 "success": result.success,
-                "contentItems": [
-                    [
-                        "type": "inputText",
-                        "text": result.contentText
-                    ]
-                ]
+                "contentItems": result.contentItems.map { item in
+                    switch item {
+                    case .text(let text):
+                        return [
+                            "type": "inputText",
+                            "text": text
+                        ]
+                    case .image(let dataURL):
+                        return [
+                            "type": "inputImage",
+                            "imageUrl": dataURL
+                        ]
+                    }
+                }
             ]
         ]
     }
@@ -602,9 +526,7 @@ enum CodexAppServerProtocol {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let message = ((params["message"] as? String) ?? "Codex is requesting MCP approval.")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = serverName == "computer-use"
-            ? "Computer Use approval"
-            : "MCP server approval"
+        let title = "MCP server approval"
         let serverDetail = serverName.map { "Server: \($0)" }
         let detail = [message.isEmpty ? nil : message, serverDetail]
             .compactMap { $0 }
@@ -746,13 +668,7 @@ enum CodexAppServerProtocol {
     }
 
     private static func desktopActionConfigOverrides() -> [String: Any] {
-        [
-            "plugins": [
-                "computer-use@openai-bundled": [
-                    "enabled": true
-                ]
-            ]
-        ]
+        [:]
     }
 
     nonisolated private static func dynamicToolSpecObject(_ spec: CodexAppServerDynamicToolSpec) -> [String: Any] {

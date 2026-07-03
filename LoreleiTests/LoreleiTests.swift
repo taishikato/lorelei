@@ -138,10 +138,50 @@ struct LoreleiTests {
         #expect(call.prompt.contains("Codex App Server"))
         #expect(call.prompt.contains("chatgpt.com"))
         #expect(call.prompt.contains("chrome browser"))
-        #expect(call.prompt.contains("Computer Use plugin"))
-        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
         #expect(call.cwd == FileManager.default.homeDirectoryForCurrentUser.path)
         #expect(manager.latestResultSummary == "Opened through App Server.")
+    }
+
+    @Test func companionManagerRegistersDesktopToolSuiteWithForegroundTool() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDesktopToolSuiteRegistrationTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDesktopToolSuiteRegistrationTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Registered tools."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Registered tools." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadStartParams = try #require(threadStart["params"] as? [String: Any])
+        let dynamicTools = try #require(threadStartParams["dynamicTools"] as? [[String: Any]])
+        let toolNames = dynamicTools.compactMap { $0["name"] as? String }
+
+        #expect(toolNames.count == 5)
+        #expect(toolNames.filter { $0 == "foreground_app" }.count == 1)
+        #expect(toolNames.filter { $0 == "desktop_snapshot" }.count == 1)
+        #expect(toolNames.filter { $0 == "desktop_action" }.count == 1)
+        #expect(toolNames.filter { $0 == "set_text" }.count == 1)
+        #expect(toolNames.filter { $0 == "screenshot" }.count == 1)
     }
 
     @Test func companionManagerWrapsGeneralDesktopActionsWithForegroundAppGuidance() async throws {
@@ -169,8 +209,8 @@ struct LoreleiTests {
         #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
-        #expect(call.prompt.contains("Computer Use plugin"))
-        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
         #expect(call.prompt.contains("use computer use to open TextEdit and type hello"))
     }
 
@@ -202,8 +242,8 @@ struct LoreleiTests {
         #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
-        #expect(call.prompt.contains("Computer Use plugin"))
-        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
         #expect(call.prompt.contains("use computer use to open TextEdit"))
     }
 
@@ -451,9 +491,11 @@ struct LoreleiTests {
         let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open TextEdit and type hello")
 
         #expect(prompt.contains("Codex App Server"))
-        #expect(prompt.contains("Computer Use plugin for desktop control"))
-        #expect(prompt.contains("lorelei.foreground_app"))
-        #expect(prompt.contains("Do not rely on caller-side local shortcuts."))
+        #expect(prompt.contains("lorelei.desktop_snapshot"))
+        #expect(prompt.contains("lorelei.desktop_action"))
+        #expect(prompt.contains("lorelei.set_text"))
+        #expect(prompt.contains("lorelei.screenshot"))
+        #expect(prompt.contains("Do not simulate keyboard shortcuts."))
         #expect(prompt.contains("Do not commit changes."))
         #expect(!prompt.contains("non-interactive codex exec"))
         #expect(prompt.contains("open TextEdit and type hello"))
@@ -918,40 +960,11 @@ struct LoreleiTests {
         #expect(params["model"] as? String == "gpt-5.5")
     }
 
-    @Test func appServerTurnStartCanAttachComputerUseSkillInput() throws {
-        let skillPath = "/Users/example/.codex/plugins/computer-use/skills/computer-use/SKILL.md"
-        let request = CodexAppServerProtocol.turnStartRequest(
-            id: 3,
-            threadID: "thread-1",
-            prompt: "click submit",
-            cwd: "/Users/example",
-            skillInputs: [
-                CodexAppServerSkillInput(
-                    name: "computer-use:computer-use",
-                    path: skillPath
-                )
-            ]
-        )
-        let params = try #require(request["params"] as? [String: Any])
-        let input = try #require(params["input"] as? [[String: Any]])
-
-        #expect(input.count == 2)
-        #expect(input[0]["type"] as? String == "text")
-        #expect(input[1]["type"] as? String == "skill")
-        #expect(input[1]["name"] as? String == "computer-use:computer-use")
-        #expect(input[1]["path"] as? String == skillPath)
-    }
-
-    @Test func appServerThreadStartEnablesComputerUsePluginForDesktopActions() throws {
+    @Test func appServerThreadStartSendsNoPluginConfig() throws {
         let request = CodexAppServerProtocol.threadStartRequest(id: 2, cwd: "/Users/example")
         let params = try #require(request["params"] as? [String: Any])
-        let config = try #require(params["config"] as? [String: Any])
-        let plugins = try #require(config["plugins"] as? [String: Any])
-        let computerUsePlugin = try #require(plugins["computer-use@openai-bundled"] as? [String: Any])
-        let chromePluginID = "chrome@" + "openai-bundled"
 
-        #expect(plugins[chromePluginID] == nil)
-        #expect(computerUsePlugin["enabled"] as? Bool == true)
+        #expect(params["config"] == nil)
     }
 
     @Test func appServerThreadStartCanRegisterDynamicTools() throws {
@@ -1019,8 +1032,8 @@ struct LoreleiTests {
         ])))
 
         #expect(result.success)
-        #expect(result.contentText.contains("Google Chrome"))
-        #expect(result.contentText.contains("onscreen"))
+        #expect(textContent(result)?.contains("Google Chrome") == true)
+        #expect(textContent(result)?.contains("onscreen") == true)
         #expect(recorder.events == [
             "open:https://chatgpt.com:Google Chrome:com.google.Chrome",
             "activate:Google Chrome:com.google.Chrome",
@@ -1059,58 +1072,8 @@ struct LoreleiTests {
         let result = await tool.handle(foregroundToolRequest(arguments: .object([:])))
 
         #expect(!result.success)
-        #expect(result.contentText.contains("appName or bundleIdentifier"))
+        #expect(textContent(result)?.contains("appName or bundleIdentifier") == true)
         #expect(recorder.events.isEmpty)
-    }
-
-    @Test func appServerComputerUseSkillResolverFindsBundledMarketplaceSkill() throws {
-        let homeURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: homeURL) }
-        let skillURL = homeURL
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent(".tmp", isDirectory: true)
-            .appendingPathComponent("bundled-marketplaces", isDirectory: true)
-            .appendingPathComponent("openai-bundled", isDirectory: true)
-            .appendingPathComponent("plugins", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("skills", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("SKILL.md")
-        try FileManager.default.createDirectory(
-            at: skillURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try "Computer Use".write(to: skillURL, atomically: true, encoding: .utf8)
-
-        let input = try #require(CodexAppServerSkillInputResolver.computerUseSkillInput(homeDirectoryURL: homeURL))
-
-        #expect(input.name == "computer-use:computer-use")
-        #expect(input.path == skillURL.path)
-    }
-
-    @Test func appServerComputerUseSkillResolverFallsBackToPluginCacheSkill() throws {
-        let homeURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: homeURL) }
-        let skillURL = homeURL
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent("plugins", isDirectory: true)
-            .appendingPathComponent("cache", isDirectory: true)
-            .appendingPathComponent("openai-bundled", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("1.0.799", isDirectory: true)
-            .appendingPathComponent("skills", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("SKILL.md")
-        try FileManager.default.createDirectory(
-            at: skillURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try "Computer Use".write(to: skillURL, atomically: true, encoding: .utf8)
-
-        let input = try #require(CodexAppServerSkillInputResolver.computerUseSkillInput(homeDirectoryURL: homeURL))
-
-        #expect(input.name == "computer-use:computer-use")
-        #expect(input.path == skillURL.path)
     }
 
     @Test func codexExecutorReportsMissingWorkspace() async throws {
@@ -1201,7 +1164,7 @@ struct LoreleiTests {
 
     @Test func appServerProtocolParsesMcpElicitationRequestAsApproval() throws {
         let line = """
-        {"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"computer-use","mode":"form","_meta":null,"message":"Allow Computer Use to inspect Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}
+        {"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"example-server","mode":"form","_meta":null,"message":"Allow Codex to inspect Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}
         """
 
         let event = try CodexAppServerProtocol.parseInboundLine(line)
@@ -1210,8 +1173,8 @@ struct LoreleiTests {
             CodexAppServerApprovalRequest(
                 requestID: 0,
                 kind: .mcpElicitation,
-                title: "Computer Use approval",
-                detail: "Allow Computer Use to inspect Google Chrome?\nServer: computer-use",
+                title: "MCP server approval",
+                detail: "Allow Codex to inspect Google Chrome?\nServer: example-server",
                 acceptPayload: .mcpElicitationAccept,
                 declinePayload: .mcpElicitationDecline
             )
@@ -1283,11 +1246,374 @@ struct LoreleiTests {
         #expect(firstItem["text"] as? String == "Chrome is onscreen.")
     }
 
+    @Test func dynamicToolCallResponseEncodesImageContentItems() throws {
+        let response = CodexAppServerProtocol.dynamicToolCallResponse(
+            id: 48,
+            result: CodexAppServerDynamicToolCallResult(
+                success: true,
+                contentItems: [
+                    .text("done"),
+                    .image(dataURL: "data:image/png;base64,AA==")
+                ]
+            )
+        )
+        let result = try #require(response["result"] as? [String: Any])
+        let contentItems = try #require(result["contentItems"] as? [[String: Any]])
+
+        #expect(contentItems.count == 2)
+        #expect(contentItems[0]["type"] as? String == "inputText")
+        #expect(contentItems[0]["text"] as? String == "done")
+        #expect(contentItems[1]["type"] as? String == "inputImage")
+        #expect(contentItems[1]["imageUrl"] as? String == "data:image/png;base64,AA==")
+    }
+
+    @Test func desktopToolSuiteRegistersSnapshotActionAndSetTextSpecs() throws {
+        let specs = CodexAppServerDesktopToolSuite.toolSpecs()
+
+        #expect(specs.map(\.namespace) == ["lorelei", "lorelei", "lorelei", "lorelei"])
+        #expect(specs.map(\.name) == ["desktop_snapshot", "desktop_action", "set_text", "screenshot"])
+
+        let snapshotSpec = try #require(specs.first { $0.name == "desktop_snapshot" })
+        let actionSpec = try #require(specs.first { $0.name == "desktop_action" })
+        let setTextSpec = try #require(specs.first { $0.name == "set_text" })
+        let screenshotSpec = try #require(specs.first { $0.name == "screenshot" })
+
+        guard case .object(let snapshotSchema) = snapshotSpec.inputSchema,
+              case .object(let snapshotProperties) = snapshotSchema["properties"],
+              case .object(let actionSchema) = actionSpec.inputSchema,
+              case .object(let actionProperties) = actionSchema["properties"],
+              case .object(let setTextSchema) = setTextSpec.inputSchema,
+              case .object(let setTextProperties) = setTextSchema["properties"] else {
+            Issue.record("Expected object schemas with properties.")
+            return
+        }
+
+        #expect(snapshotSchema["type"] == .string("object"))
+        #expect(snapshotProperties["app"] != nil)
+        #expect(actionSchema["required"] == .array([.string("elementId"), .string("action")]))
+        #expect(setTextSchema["required"] == .array([.string("elementId"), .string("text")]))
+        #expect(screenshotSpec.description.contains("Fallback"))
+        #expect(screenshotSpec.description.contains("lorelei.desktop_snapshot"))
+
+        guard case .object(let actionProperty) = actionProperties["action"],
+              case .array(let actionEnum) = actionProperty["enum"],
+              case .object(let modeProperty) = setTextProperties["mode"],
+              case .array(let modeEnum) = modeProperty["enum"] else {
+            Issue.record("Expected enum schemas for action and mode.")
+            return
+        }
+
+        #expect(actionProperties["elementId"] != nil)
+        #expect(actionEnum == [.string("press"), .string("focus"), .string("raise")])
+        #expect(setTextProperties["elementId"] != nil)
+        #expect(setTextProperties["text"] != nil)
+        #expect(modeEnum == [.string("replace"), .string("insert")])
+    }
+
+    @Test func desktopToolSuiteSnapshotReturnsTreeText() async throws {
+        let executor = FakeDesktopActionExecutor()
+
+        let defaultResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(tool: "desktop_snapshot", arguments: .object([:])),
+            executor: executor
+        )
+        let appResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(tool: "desktop_snapshot", arguments: .object(["app": .string("TextEdit")])),
+            executor: executor
+        )
+
+        #expect(defaultResult.success)
+        #expect(defaultResult.contentItems == [.text("[e1] AXWindow \"Demo\" (0,0 100x100)")])
+        #expect(appResult.success)
+        #expect(appResult.contentItems == [.text("[e1] AXWindow \"Demo\" (0,0 100x100)")])
+        #expect(executor.snapshotAppNames == [nil, "TextEdit"])
+    }
+
+    @Test func desktopToolSuiteActionResolvesElementAndReportsOutcome() async throws {
+        let executor = FakeDesktopActionExecutor()
+
+        let result = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "desktop_action",
+                arguments: .object([
+                    "elementId": .string("e2"),
+                    "action": .string("press")
+                ])
+            ),
+            executor: executor
+        )
+
+        #expect(result.success)
+        #expect(result.contentItems == [.text("ok")])
+        #expect(executor.performCalls.count == 1)
+        #expect(executor.performCalls.first?.0 == .press)
+        #expect(executor.performCalls.first?.1 == "e2")
+    }
+
+    @Test func desktopToolSuiteSetTextDefaultsToReplaceMode() async throws {
+        let executor = FakeDesktopActionExecutor()
+
+        let defaultResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "set_text",
+                arguments: .object([
+                    "elementId": .string("e2"),
+                    "text": .string("Hello")
+                ])
+            ),
+            executor: executor
+        )
+        let insertResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "set_text",
+                arguments: .object([
+                    "elementId": .string("e2"),
+                    "text": .string(" there"),
+                    "mode": .string("insert")
+                ])
+            ),
+            executor: executor
+        )
+
+        #expect(defaultResult.success)
+        #expect(insertResult.success)
+        #expect(executor.setTextCalls.count == 2)
+        #expect(executor.setTextCalls[0].0 == "Hello")
+        #expect(executor.setTextCalls[0].1 == "e2")
+        #expect(executor.setTextCalls[0].2 == .replace)
+        #expect(executor.setTextCalls[1].0 == " there")
+        #expect(executor.setTextCalls[1].1 == "e2")
+        #expect(executor.setTextCalls[1].2 == .insert)
+    }
+
+    @Test func desktopToolSuiteReportsStaleElementAsToolFailure() async throws {
+        let executor = FakeDesktopActionExecutor()
+        executor.outcome = DesktopActionOutcome(
+            success: false,
+            message: DesktopActionError.staleElementID("e9").toolMessage
+        )
+
+        let result = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "desktop_action",
+                arguments: .object([
+                    "elementId": .string("e9"),
+                    "action": .string("press")
+                ])
+            ),
+            executor: executor
+        )
+
+        #expect(!result.success)
+        #expect(result.contentItems == [.text("Unknown or stale elementId 'e9'. Call lorelei.desktop_snapshot again before acting.")])
+    }
+
+    @Test func desktopToolSuiteRejectsUnknownToolName() async throws {
+        let executor = FakeDesktopActionExecutor()
+
+        let result = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(tool: "desktop_spin", arguments: .object([:])),
+            executor: executor
+        )
+
+        #expect(!result.success)
+        #expect(textContent(result)?.contains("desktop_spin") == true)
+    }
+
+    @Test func desktopToolSuiteScreenshotReturnsImageItem() async throws {
+        let executor = FakeDesktopActionExecutor()
+        executor.screenshotResult = .success(Data([0x89, 0x50, 0x4e, 0x47]))
+
+        let result = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(tool: "screenshot", arguments: .object([:])),
+            executor: executor
+        )
+
+        #expect(result.success)
+        #expect(result.contentItems.count == 1)
+        guard case .image(let dataURL) = result.contentItems.first else {
+            Issue.record("Expected screenshot to return an image content item.")
+            return
+        }
+        #expect(dataURL.hasPrefix("data:image/png;base64,"))
+    }
+
+    @Test func desktopToolSuiteScreenshotFailureIsToolFailure() async throws {
+        let executor = FakeDesktopActionExecutor()
+        executor.screenshotResult = .failure(.captureFailed("no permission"))
+
+        let result = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(tool: "screenshot", arguments: .object([:])),
+            executor: executor
+        )
+
+        #expect(!result.success)
+        #expect(textContent(result)?.contains("no permission") == true)
+    }
+
+    @Test func axSerializerAssignsDepthFirstIDsAndFormatsLines() throws {
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: nil,
+            frame: CGRect(x: 0, y: 25, width: 1024, height: 743),
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXGroup",
+                    title: "Toolbar",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: [
+                        DesktopUINode(
+                            role: "AXButton",
+                            title: "Save",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: false,
+                            isFocused: false,
+                            children: []
+                        )
+                    ]
+                ),
+                DesktopUINode(
+                    role: "AXTextArea",
+                    title: nil,
+                    value: "Hello",
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: true,
+                    children: []
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+
+        #expect(result.text == """
+        [e1] AXWindow "Demo" (0,25 1024x743)
+          [e2] AXGroup "Toolbar"
+            [e3] AXButton "Save" disabled
+          [e4] AXTextArea value="Hello" focused
+        """)
+        #expect(result.elementCount == 4)
+        #expect(registry == ["e1": 0, "e2": 1, "e3": 2, "e4": 3])
+    }
+
+    @Test func axSerializerPromotesChildrenOfBareStructuralNodes() throws {
+        let root = DesktopUINode(
+            role: "AXGroup",
+            title: nil,
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXButton",
+                    title: "First",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: []
+                ),
+                DesktopUINode(
+                    role: "AXSplitGroup",
+                    title: nil,
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: [
+                        DesktopUINode(
+                            role: "AXButton",
+                            title: "Second",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+
+        #expect(result.text == """
+        [e1] AXButton "First"
+        [e2] AXButton "Second"
+        """)
+        #expect(result.elementCount == 2)
+        #expect(registry == ["e1": 0, "e2": 1])
+    }
+
+    @Test func axSerializerTruncatesLongValuesAndElementCount() throws {
+        let longValue = String(repeating: "a", count: 90)
+        let children = (0..<401).map { index in
+            DesktopUINode(
+                role: "AXButton",
+                title: "Button \(index)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                children: []
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: longValue,
+            frame: CGRect(x: 10.4, y: 20.6, width: 300.2, height: 200.8),
+            isEnabled: true,
+            isFocused: false,
+            children: children
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let expectedValue = String(repeating: "a", count: 79) + "…"
+
+        #expect(lines.first == "[e1] AXWindow \"Demo\" value=\"\(expectedValue)\" (10,21 300x201)")
+        #expect(lines.last == "… truncated (2 elements omitted)")
+        #expect(result.elementCount == 400)
+        #expect(registry.count == 400)
+        #expect(registry["e1"] == 0)
+        #expect(registry["e400"] == 399)
+        #expect(registry["e401"] == nil)
+    }
+
+    @Test func axExecutorRejectsActionsWithUnknownElementID() async throws {
+        let executor = AXDesktopActionExecutor(hasAccessibilityPermission: { true })
+
+        let outcome = await executor.perform(.press, elementID: "e9")
+
+        #expect(!outcome.success)
+        #expect(outcome.message == DesktopActionError.staleElementID("e9").toolMessage)
+    }
+
+    @Test func axExecutorReportsMissingAccessibilityPermission() async throws {
+        let executor = AXDesktopActionExecutor(hasAccessibilityPermission: { false })
+
+        let result = await executor.snapshot(appName: nil)
+
+        #expect(result == .failure(.accessibilityPermissionMissing))
+    }
+
     @Test func appServerExecutorAnswersMcpElicitationApprovalWithZeroID() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"computer-use","mode":"form","_meta":null,"message":"Allow Codex to use Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}"#,
+            #"{"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"example-server","mode":"form","_meta":null,"message":"Allow Codex to use Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}"#,
             #"{"method":"item/agentMessage/delta","params":{"delta":"Approved and done"}}"#,
             #"{"method":"turn/completed","params":{"status":"completed"}}"#
         ])
@@ -1346,7 +1672,7 @@ struct LoreleiTests {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"mcpToolCall","status":"failed","server":"computer-use","tool":"get_app_state","result":{"content":[{"type":"text","text":"Computer Use server error -10005: cgWindowNotFound"}],"isError":true}}}}"#,
+            #"{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"mcpToolCall","status":"failed","server":"example-server","tool":"get_app_state","result":{"content":[{"type":"text","text":"Example server error"}],"isError":true}}}}"#,
             #"{"method":"item/agentMessage/delta","params":{"delta":"I could not read the Google Chrome window."}}"#,
             #"{"method":"turn/completed","params":{"status":"completed"}}"#
         ])
@@ -1408,42 +1734,6 @@ struct LoreleiTests {
         #expect(result.status == .succeeded)
         #expect(result.summary == "Done")
         #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
-    }
-
-    @Test func appServerExecutorAttachesComputerUseSkillInputToDesktopTurn() async throws {
-        let skillPath = "/Users/example/.codex/plugins/computer-use/skills/computer-use/SKILL.md"
-        let transport = FakeCodexAppServerTransport(lines: [
-            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
-            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"method":"turn/completed","params":{"status":"completed"}}"#
-        ])
-        let executor = CodexAppServerExecutor(
-            makeTransport: { transport },
-            skillInputResolver: {
-                [
-                    CodexAppServerSkillInput(
-                        name: "computer-use:computer-use",
-                        path: skillPath
-                    )
-                ]
-            },
-            approvalHandler: { _ in .cancel }
-        )
-
-        _ = await executor.runDesktopAction(prompt: "click submit", cwd: "/Users/example")
-
-        let sentMessages = try await transport.sentLines.map { line in
-            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
-        }
-        let root = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
-        let params = try #require(root["params"] as? [String: Any])
-        let input = try #require(params["input"] as? [[String: Any]])
-
-        #expect(input.contains { item in
-            item["type"] as? String == "skill"
-                && item["name"] as? String == "computer-use:computer-use"
-                && item["path"] as? String == skillPath
-        })
     }
 
     @Test func appServerExecutorAnswersToolUserInputApproval() async throws {
@@ -1684,6 +1974,62 @@ struct LoreleiTests {
             tool: "foreground_app",
             arguments: arguments
         )
+    }
+
+    private func desktopToolRequest(
+        tool: String,
+        arguments: CodexAppServerJSONValue,
+        namespace: String? = "lorelei"
+    ) -> CodexAppServerDynamicToolCallRequest {
+        CodexAppServerDynamicToolCallRequest(
+            requestID: 47,
+            callID: "call-1",
+            namespace: namespace,
+            tool: tool,
+            arguments: arguments
+        )
+    }
+
+    private func textContent(_ result: CodexAppServerDynamicToolCallResult) -> String? {
+        guard result.contentItems.count == 1,
+              case .text(let text) = result.contentItems[0] else {
+            return nil
+        }
+        return text
+    }
+}
+
+@MainActor
+private final class FakeDesktopActionExecutor: DesktopActionExecuting {
+    var snapshotResult: Result<DesktopSnapshotResult, DesktopActionError> =
+        .success(DesktopSnapshotResult(text: "[e1] AXWindow \"Demo\" (0,0 100x100)", elementCount: 1))
+    var performCalls: [(DesktopElementAction, String)] = []
+    var setTextCalls: [(String, String, DesktopSetTextMode)] = []
+    var outcome = DesktopActionOutcome(success: true, message: "ok")
+    var screenshotResult: Result<Data, DesktopActionError> = .success(Data([0x89, 0x50]))
+    var snapshotAppNames: [String?] = []
+
+    func snapshot(appName: String?) async -> Result<DesktopSnapshotResult, DesktopActionError> {
+        snapshotAppNames.append(appName)
+        return snapshotResult
+    }
+
+    func perform(_ action: DesktopElementAction, elementID: String) async -> DesktopActionOutcome {
+        performCalls.append((action, elementID))
+        return outcome
+    }
+
+    func setText(
+        _ text: String,
+        elementID: String,
+        mode: DesktopSetTextMode
+    ) async -> DesktopActionOutcome {
+        setTextCalls.append((text, elementID, mode))
+        return outcome
+    }
+
+    func screenshot() async -> Result<Data, DesktopActionError> {
+        screenshotResult
     }
 }
 
