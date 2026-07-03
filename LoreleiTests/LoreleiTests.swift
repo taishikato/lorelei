@@ -226,6 +226,51 @@ struct LoreleiTests {
         #expect(toolNames.filter { $0 == "screenshot" }.count == 1)
     }
 
+    @Test func companionManagerReusesAppServerSessionAcrossVoiceTurns() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAppServerSessionReuseTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAppServerSessionReuseTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [transport])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { try await factory.next() }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "First turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect Safari")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Second turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.latestResultSummary == "Second turn.")
+        #expect(await factory.callCount == 1)
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStartIDs = sentMessages.compactMap { message -> Int? in
+            guard message["method"] as? String == "turn/start" else { return nil }
+            return message["id"] as? Int
+        }
+        #expect(turnStartIDs == [3, 4])
+    }
+
     @Test func companionManagerWrapsGeneralDesktopActionsWithForegroundAppGuidance() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerGeneralDesktopActionRunnerTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerGeneralDesktopActionRunnerTests")

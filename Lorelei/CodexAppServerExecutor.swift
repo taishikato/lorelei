@@ -42,6 +42,25 @@ struct CodexAppServerTraceEvent: Equatable, Sendable {
 
 typealias CodexAppServerTraceHandler = @Sendable (_ event: CodexAppServerTraceEvent) -> Void
 
+enum CodexAppServerSessionLifecycleEvent: Sendable {
+    case started
+    case reused
+    case reset
+
+    var logLine: String {
+        switch self {
+        case .started:
+            return "session started"
+        case .reused:
+            return "session reused"
+        case .reset:
+            return "session reset"
+        }
+    }
+}
+
+typealias CodexAppServerSessionLifecycleHandler = @Sendable (_ event: CodexAppServerSessionLifecycleEvent) -> Void
+
 final class CodexAppServerTraceBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private let maxLines: Int
@@ -100,13 +119,18 @@ actor CodexAppServerSessionStore {
     typealias TraceRecorder = @Sendable (CodexAppServerTraceEvent, CodexAppServerTraceBuffer) -> Void
 
     private let makeTransport: () async throws -> CodexAppServerTransporting
+    private let onLifecycleEvent: CodexAppServerSessionLifecycleHandler
     private var currentTransport: CodexAppServerTransporting?
     private var currentConnectionToken = 0
     private var liveSession: LiveSession?
     private var nextID = 1
 
-    init(makeTransport: @escaping () async throws -> CodexAppServerTransporting) {
+    init(
+        makeTransport: @escaping () async throws -> CodexAppServerTransporting,
+        onLifecycleEvent: @escaping CodexAppServerSessionLifecycleHandler = { _ in }
+    ) {
         self.makeTransport = makeTransport
+        self.onLifecycleEvent = onLifecycleEvent
     }
 
     var hasLiveSession: Bool {
@@ -121,11 +145,13 @@ actor CodexAppServerSessionStore {
         onTransportReady: @Sendable (CodexAppServerTransporting) -> Void
     ) async throws -> LiveSession {
         if let liveSession, liveSession.cwd == cwd {
+            onLifecycleEvent(.reused)
             return liveSession
         }
 
         if let currentTransport {
             await currentTransport.terminate()
+            onLifecycleEvent(.reset)
         }
         currentTransport = nil
         liveSession = nil
@@ -184,6 +210,7 @@ actor CodexAppServerSessionStore {
                     connectionToken: connectionToken
                 )
                 liveSession = session
+                onLifecycleEvent(.started)
                 return session
             case .unsupportedServerRequest(_, let method):
                 throw CodexAppServerSessionStoreError.unsupportedClientMethod(method)
@@ -223,6 +250,7 @@ actor CodexAppServerSessionStore {
             return
         }
 
+        let hadConnection = currentTransport != nil || liveSession != nil
         if let currentTransport {
             await currentTransport.terminate()
         }
@@ -234,6 +262,9 @@ actor CodexAppServerSessionStore {
         liveSession = nil
         currentConnectionToken += 1
         nextID = 1
+        if hadConnection {
+            onLifecycleEvent(.reset)
+        }
     }
 
     private func takeNextRequestID() -> Int {
@@ -320,10 +351,14 @@ final class CodexAppServerExecutor {
         traceHandler: @escaping CodexAppServerTraceHandler = { _ in },
         progressHandler: @escaping CodexAppServerTurnProgressHandler = { _ in },
         onTransportReady: @escaping @Sendable (CodexAppServerTransporting) -> Void = { _ in },
+        onSessionLifecycleEvent: @escaping CodexAppServerSessionLifecycleHandler = { _ in },
         approvalHandler: @escaping (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
-        self.sessionStore = CodexAppServerSessionStore(makeTransport: makeTransport)
+        self.sessionStore = CodexAppServerSessionStore(
+            makeTransport: makeTransport,
+            onLifecycleEvent: onSessionLifecycleEvent
+        )
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
         self.dynamicToolHandler = dynamicToolHandler
         self.traceHandler = traceHandler
@@ -360,6 +395,10 @@ final class CodexAppServerExecutor {
 
     func runComputerUse(prompt: String, cwd: String) async -> WorkspaceCommandResult {
         await runDesktopAction(prompt: prompt, cwd: cwd)
+    }
+
+    func invalidateSession() async {
+        await sessionStore.invalidate()
     }
 
     private func runDesktopActionAttempt(
