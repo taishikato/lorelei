@@ -770,50 +770,74 @@ private struct BlueCursorSpinnerView: View {
 
 // Manager for overlay windows — creates one per screen so the cursor
 // buddy seamlessly follows the cursor across multiple monitors.
+//
+// Windows and their SwiftUI hosting views are CACHED and reused across
+// push-to-talk presses. Tearing the content view down synchronously on key
+// release crashed the app (EXC_BAD_ACCESS in SwiftUI's button-gesture
+// dispatch): the overlay covers the whole screen while listening, so AppKit
+// can still hold gesture state pointing into the hosting bridge when the
+// window is dismantled. Hiding is orderOut-only; windows are rebuilt only
+// when the screen configuration or the first-appearance flag changes, and
+// discarded windows are torn down on the next runloop tick.
 @MainActor
 class OverlayWindowManager: OverlayWindowManaging {
     private var overlayWindows: [OverlayWindow] = []
+    private var overlayCacheKey: [String] = []
+    private var overlayCacheIsFirstAppearance = false
+    private var isOverlayVisible = false
     var hasShownOverlayBefore = false
 
     func showOverlay(onScreens screens: [NSScreen], companionManager: CompanionManager) {
-        // Hide any existing overlays
-        hideOverlay()
-
         // Track if this is the first time showing overlay (welcome message)
         let isFirstAppearance = !hasShownOverlayBefore
         hasShownOverlayBefore = true
 
-        // Create one overlay window per screen
-        for screen in screens {
-            let window = OverlayWindow(screen: screen)
+        let cacheKey = screens.map { Self.screenCacheKey($0) }
+        if overlayWindows.isEmpty
+            || cacheKey != overlayCacheKey
+            || overlayCacheIsFirstAppearance != isFirstAppearance {
+            discardOverlayWindowsDeferred()
 
-            let contentView = BlueCursorView(
-                screenFrame: screen.frame,
-                isFirstAppearance: isFirstAppearance,
-                companionManager: companionManager
-            )
+            for screen in screens {
+                let window = OverlayWindow(screen: screen)
 
-            let hostingView = NSHostingView(rootView: contentView)
-            hostingView.frame = screen.frame
-            window.contentView = hostingView
+                let contentView = BlueCursorView(
+                    screenFrame: screen.frame,
+                    isFirstAppearance: isFirstAppearance,
+                    companionManager: companionManager
+                )
 
-            overlayWindows.append(window)
+                let hostingView = NSHostingView(rootView: contentView)
+                hostingView.frame = screen.frame
+                window.contentView = hostingView
+
+                overlayWindows.append(window)
+            }
+
+            overlayCacheKey = cacheKey
+            overlayCacheIsFirstAppearance = isFirstAppearance
+        }
+
+        for window in overlayWindows {
+            window.alphaValue = 1
             window.orderFrontRegardless()
         }
+        isOverlayVisible = true
     }
 
     func hideOverlay() {
+        // orderOut only — the hosting views stay alive so in-flight gesture
+        // state cannot dangle. Windows are reused on the next press.
         for window in overlayWindows {
             window.orderOut(nil)
-            window.contentView = nil
         }
-        overlayWindows.removeAll()
+        isOverlayVisible = false
     }
 
-    /// Fades out overlay windows over `duration` seconds, then removes them.
+    /// Fades out overlay windows over `duration` seconds, then hides them.
     func fadeOutAndHideOverlay(duration: TimeInterval = 0.4) {
         let windowsToFade = overlayWindows
-        overlayWindows.removeAll()
+        isOverlayVisible = false
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration
@@ -822,14 +846,38 @@ class OverlayWindowManager: OverlayWindowManaging {
                 window.animator().alphaValue = 0
             }
         }, completionHandler: {
-            for window in windowsToFade {
-                window.orderOut(nil)
-                window.contentView = nil
+            Task { @MainActor in
+                for window in windowsToFade {
+                    // A show() that raced the fade resets alpha to 1 — leave
+                    // those windows on screen.
+                    if window.alphaValue == 0 {
+                        window.orderOut(nil)
+                    }
+                }
             }
         })
     }
 
     func isShowingOverlay() -> Bool {
-        return !overlayWindows.isEmpty
+        return isOverlayVisible
+    }
+
+    private func discardOverlayWindowsDeferred() {
+        let discarded = overlayWindows
+        overlayWindows = []
+        guard !discarded.isEmpty else { return }
+        // Tear down one tick later so any gesture dispatch that references
+        // the old hosting views finishes first.
+        DispatchQueue.main.async {
+            for window in discarded {
+                window.orderOut(nil)
+                window.contentView = nil
+            }
+        }
+    }
+
+    private static func screenCacheKey(_ screen: NSScreen) -> String {
+        let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber ?? 0
+        return "\(number)-\(NSStringFromRect(screen.frame))"
     }
 }
