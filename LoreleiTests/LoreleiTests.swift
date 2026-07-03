@@ -2052,6 +2052,63 @@ struct LoreleiTests {
         await transport.enqueue(#"{"method":"turn/completed","params":{"status":"completed"}}"#)
     }
 
+    @Test func companionManagerStopTerminatesLiveTransport() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerStopRunTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerStopRunTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        let recorder = RunStatusRecorder()
+        let statusCancellable = manager.$runStatus.sink { recorder.record($0) }
+        defer { statusCancellable.cancel() }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if recorder.statuses.contains(.working("Thinking…")) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.stopCurrentRun()
+        for _ in 0..<20 {
+            if await transport.didTerminate {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(await transport.didTerminate)
+        #expect(manager.latestResultSummary == "Stopped.")
+        #expect(manager.runStatus == .finished(success: false))
+    }
+
+    @Test func companionManagerStopWithoutRunIsNoOp() {
+        let defaults = UserDefaults(suiteName: "CompanionManagerStopWithoutRunTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerStopWithoutRunTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.stopCurrentRun()
+
+        #expect(manager.runStatus == .idle)
+        #expect(manager.latestResultSummary == nil)
+        #expect(manager.pendingApprovalTitle == nil)
+    }
+
     private func makeTemporaryGitRepository() throws -> URL {
         let repositoryURL = try makeTemporaryDirectory()
         try runGitTestCommand(["init"], in: repositoryURL)
@@ -2422,6 +2479,10 @@ private actor BlockingCodexAppServerTransport: CodexAppServerTransporting {
 
     var sentLines: [String] {
         recordedSentLines
+    }
+
+    var didTerminate: Bool {
+        terminated
     }
 
     func enqueue(_ line: String) {

@@ -96,6 +96,7 @@ struct CodexAppServerExecutor {
     private let dynamicToolHandler: CodexAppServerDynamicToolHandler
     private let traceHandler: CodexAppServerTraceHandler
     private let progressHandler: CodexAppServerTurnProgressHandler
+    private let onTransportReady: @Sendable (CodexAppServerTransporting) -> Void
     private let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
 
     init(
@@ -112,6 +113,7 @@ struct CodexAppServerExecutor {
         },
         traceHandler: @escaping CodexAppServerTraceHandler = { _ in },
         progressHandler: @escaping CodexAppServerTurnProgressHandler = { _ in },
+        onTransportReady: @escaping @Sendable (CodexAppServerTransporting) -> Void = { _ in },
         approvalHandler: @escaping (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
@@ -120,6 +122,7 @@ struct CodexAppServerExecutor {
         self.dynamicToolHandler = dynamicToolHandler
         self.traceHandler = traceHandler
         self.progressHandler = progressHandler
+        self.onTransportReady = onTransportReady
         self.approvalHandler = approvalHandler
     }
 
@@ -132,6 +135,7 @@ struct CodexAppServerExecutor {
         let transport: CodexAppServerTransporting
         do {
             transport = try await makeTransport()
+            onTransportReady(transport)
         } catch {
             return WorkspaceCommandResult(
                 summary: "Codex App Server failed to start: \(error.localizedDescription)"

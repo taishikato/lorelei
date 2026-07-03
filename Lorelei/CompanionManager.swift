@@ -104,6 +104,7 @@ final class CompanionManager: ObservableObject {
     private let runStatusIdleReturnDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
+    private var liveCodexAppServerTransport: CodexAppServerTransporting?
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -447,7 +448,26 @@ final class CompanionManager: ObservableObject {
     func handleFinalTranscriptForTesting(_ transcript: String) {
         handleFinalTranscriptLocally(transcript)
     }
+#endif
 
+    func stopCurrentRun() {
+        guard currentResponseTask != nil
+            || liveCodexAppServerTransport != nil
+            || pendingCodexAppServerApproval != nil
+        else {
+            return
+        }
+
+        Task { @MainActor in
+            await terminateLiveCodexAppServerTransportWhenReady()
+        }
+        currentResponseTask?.cancel()
+        cancelPendingCodexAppServerApprovalForStop()
+        updateLatestResultSummary("Stopped.")
+        finishRunStatus(success: false)
+    }
+
+#if DEBUG
     func simulateShortcutTransitionForTesting(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
         switch transition {
         case .pressed:
@@ -565,6 +585,24 @@ final class CompanionManager: ObservableObject {
         return true
     }
 
+    private func cancelPendingCodexAppServerApprovalForStop() {
+        guard let continuation = pendingCodexAppServerApproval else { return }
+        pendingCodexAppServerApproval = nil
+        pendingApprovalTitle = nil
+        recordDebugEvent("App Server approval cancelled")
+        continuation.resume(returning: .cancel)
+    }
+
+    private func terminateLiveCodexAppServerTransportWhenReady() async {
+        for _ in 0..<20 {
+            if let transport = liveCodexAppServerTransport {
+                await transport.terminate()
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
         let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(for: prompt)
         let cwd = codexAppServerWorkingDirectory()
@@ -607,6 +645,11 @@ final class CompanionManager: ObservableObject {
                     self?.handleCodexAppServerProgress(progress)
                 }
             }
+            let transportReadyHandler: @Sendable (CodexAppServerTransporting) -> Void = { [weak self] transport in
+                Task { @MainActor [weak self] in
+                    self?.liveCodexAppServerTransport = transport
+                }
+            }
             let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision = { [weak self] request in
                 guard let self else { return .cancel }
                 return await self.requestCodexAppServerApproval(request)
@@ -619,6 +662,7 @@ final class CompanionManager: ObservableObject {
                     dynamicToolHandler: dynamicToolHandler,
                     traceHandler: traceHandler,
                     progressHandler: progressHandler,
+                    onTransportReady: transportReadyHandler,
                     approvalHandler: approvalHandler
                 )
             } else {
@@ -627,6 +671,7 @@ final class CompanionManager: ObservableObject {
                     dynamicToolHandler: dynamicToolHandler,
                     traceHandler: traceHandler,
                     progressHandler: progressHandler,
+                    onTransportReady: transportReadyHandler,
                     approvalHandler: approvalHandler
                 )
             }
@@ -753,6 +798,7 @@ final class CompanionManager: ObservableObject {
         guard responseTaskTracker.finishIfCurrent(taskID) else { return }
         voiceState = .idle
         currentResponseTask = nil
+        liveCodexAppServerTransport = nil
         scheduleTransientHideIfNeeded()
     }
 
