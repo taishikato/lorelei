@@ -37,6 +37,7 @@ enum LoginItemRegistrationPolicy {
 @MainActor
 final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarPanelManager: MenuBarPanelManager?
+    private var toolbarController: LoreleiToolbarController?
     private let companionManager = CompanionManager()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -46,7 +47,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 0])
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
+        toolbarController = LoreleiToolbarController(companionManager: companionManager)
         companionManager.start()
+        toolbarController?.show()
         // Auto-open the panel only when permissions are missing or revoked.
         if !companionManager.allPermissionsGranted {
             menuBarPanelManager?.showPanelOnLaunch()

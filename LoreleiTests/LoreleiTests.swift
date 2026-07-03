@@ -523,6 +523,25 @@ struct LoreleiTests {
         #expect(WorkspaceCommandResult(summary: "Failed", status: .failed).spokenStatus == "Failed")
     }
 
+    @Test func toolbarPanelFrameCentersAtTopOfScreen() async throws {
+        let frame = LoreleiToolbarController.panelFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 2000, height: 1200),
+            size: CGSize(width: 260, height: 36),
+            topInset: 8
+        )
+
+        #expect(frame == CGRect(x: 870, y: 1156, width: 260, height: 36))
+    }
+
+    @Test func toolbarStatusLabelReflectsRunStatus() async throws {
+        #expect(LoreleiToolbarView.statusLabel(for: .idle) == "Ready")
+        #expect(LoreleiToolbarView.statusLabel(for: .listening) == "Listening…")
+        #expect(LoreleiToolbarView.statusLabel(for: .transcribing) == "Transcribing…")
+        #expect(LoreleiToolbarView.statusLabel(for: .working("lorelei.set_text")) == "lorelei.set_text")
+        #expect(LoreleiToolbarView.statusLabel(for: .needsApproval("Run command")) == "Needs approval")
+        #expect(LoreleiToolbarView.statusLabel(for: .finished(success: false)) == "Failed")
+    }
+
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {
         let executor = WorkspaceCommandExecutor()
 
