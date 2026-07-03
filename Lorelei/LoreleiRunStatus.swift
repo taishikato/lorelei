@@ -17,6 +17,8 @@ enum LoreleiRunStatus: Equatable, Sendable {
 }
 
 enum CodexAppServerTurnProgress: Equatable, Sendable {
+    case turnStarted(threadID: String, turnID: String)
+    case turnEnded
     case agentMessageDelta(String)
     case toolCallStarted(name: String)
     case toolCallCompleted(name: String, success: Bool)

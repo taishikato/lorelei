@@ -771,6 +771,8 @@ final class CompanionManager: ObservableObject {
 
     private func handleCodexAppServerProgress(_ progress: CodexAppServerTurnProgress) {
         switch progress {
+        case .turnStarted, .turnEnded:
+            break
         case .agentMessageDelta(let delta):
             streamText += delta
         case .toolCallStarted(let name):

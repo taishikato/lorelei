@@ -1141,6 +1141,26 @@ struct LoreleiTests {
         #expect(params["model"] as? String == "gpt-5.5")
     }
 
+    @Test func appServerTurnSteerRequestEncodesActiveTurnPrecondition() throws {
+        let request = CodexAppServerProtocol.turnSteerRequest(
+            id: 7,
+            threadID: "thread-1",
+            expectedTurnID: "turn-9",
+            prompt: "actually, use the other window"
+        )
+        let params = try #require(request["params"] as? [String: Any])
+        let input = try #require(params["input"] as? [[String: Any]])
+        let textInput = try #require(input.first)
+
+        #expect(request["id"] as? Int == 7)
+        #expect(request["method"] as? String == "turn/steer")
+        #expect(params["threadId"] as? String == "thread-1")
+        #expect(params["expectedTurnId"] as? String == "turn-9")
+        #expect(textInput["type"] as? String == "text")
+        #expect(textInput["text"] as? String == "actually, use the other window")
+        #expect((textInput["text_elements"] as? [Any])?.isEmpty == true)
+    }
+
     @Test func appServerThreadStartSendsNoPluginConfig() throws {
         let request = CodexAppServerProtocol.threadStartRequest(id: 2, cwd: "/Users/example")
         let params = try #require(request["params"] as? [String: Any])
@@ -2257,7 +2277,37 @@ struct LoreleiTests {
             .agentMessageDelta("Hel"),
             .agentMessageDelta("lo"),
             .toolCallStarted(name: "lorelei.desktop_snapshot"),
-            .toolCallCompleted(name: "lorelei.desktop_snapshot", success: true)
+            .toolCallCompleted(name: "lorelei.desktop_snapshot", success: true),
+            .turnEnded
+        ])
+    }
+
+    @Test func appServerExecutorReportsTurnStartedAndEnded() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let recorder = AppServerProgressRecorder()
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            progressHandler: { progress in
+                recorder.record(progress)
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "inspect desktop", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(recorder.progress == [
+            .turnStarted(threadID: "thread-1", turnID: "turn-9"),
+            .agentMessageDelta("Hel"),
+            .agentMessageDelta("lo"),
+            .turnEnded
         ])
     }
 

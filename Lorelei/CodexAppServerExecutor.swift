@@ -368,6 +368,10 @@ final class CodexAppServerExecutor {
     }
 
     func runDesktopAction(prompt: String, cwd: String) async -> WorkspaceCommandResult {
+        defer {
+            progressHandler(.turnEnded)
+        }
+
         guard turnTimeoutSeconds > 0 else {
             return WorkspaceCommandResult(summary: "Codex App Server command timed out.", status: .failed)
         }
@@ -480,6 +484,8 @@ final class CodexAppServerExecutor {
                 didReceiveTurnEvent = true
                 recordTrace(.inbound(codexAppServerTraceDetail(for: event)), to: traceBuffer)
                 switch event {
+                case .turnStarted(let threadID, let turnID):
+                    progressHandler(.turnStarted(threadID: threadID, turnID: turnID))
                 case .agentMessageDelta(let delta):
                     progressHandler(.agentMessageDelta(delta))
                     finalText += delta
@@ -661,6 +667,8 @@ nonisolated private func codexAppServerTraceDetail(for event: CodexAppServerInbo
         return "response#\(requestID)"
     case .threadStarted(let requestID, let threadID):
         return "threadStarted#\(requestID):\(threadID)"
+    case .turnStarted(let threadID, let turnID):
+        return "turnStarted:\(threadID):\(turnID)"
     case .agentMessageDelta:
         return "agentMessageDelta"
     case .toolCallCompleted(let status, _, _):

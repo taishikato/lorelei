@@ -10,6 +10,7 @@ import Foundation
 enum CodexAppServerInboundEvent: Equatable, Sendable {
     case response(requestID: Int)
     case threadStarted(requestID: Int, threadID: String)
+    case turnStarted(threadID: String, turnID: String)
     case agentMessageDelta(String)
     case toolCallCompleted(status: String, failureMessage: String?, name: String?)
     case turnCompleted(status: String)
@@ -203,13 +204,7 @@ enum CodexAppServerProtocol {
         prompt: String,
         cwd: String
     ) -> [String: Any] {
-        let input: [[String: Any]] = [
-            [
-                "type": "text",
-                "text": prompt,
-                "text_elements": []
-            ]
-        ]
+        let input = textUserInput(prompt: prompt)
 
         return [
             "id": id,
@@ -221,6 +216,23 @@ enum CodexAppServerProtocol {
                 "input": input,
                 "approvalPolicy": granularApprovalPolicy(),
                 "approvalsReviewer": "user"
+            ]
+        ]
+    }
+
+    static func turnSteerRequest(
+        id: Int,
+        threadID: String,
+        expectedTurnID: String,
+        prompt: String
+    ) -> [String: Any] {
+        [
+            "id": id,
+            "method": "turn/steer",
+            "params": [
+                "threadId": threadID,
+                "expectedTurnId": expectedTurnID,
+                "input": textUserInput(prompt: prompt)
             ]
         ]
     }
@@ -365,6 +377,13 @@ enum CodexAppServerProtocol {
             return .error("Codex App Server returned an error.")
         case "item/agentMessage/delta":
             return .agentMessageDelta((params["delta"] as? String) ?? "")
+        case "turn/started":
+            guard let threadID = params["threadId"] as? String,
+                  let turn = params["turn"] as? [String: Any],
+                  let turnID = turn["id"] as? String else {
+                throw CodexAppServerProtocolError.missingRequiredField
+            }
+            return .turnStarted(threadID: threadID, turnID: turnID)
         case "item/completed":
             return parseCompletedItem(params: params)
         case "turn/completed":
@@ -668,6 +687,16 @@ enum CodexAppServerProtocol {
             }
         }
         return nil
+    }
+
+    private static func textUserInput(prompt: String) -> [[String: Any]] {
+        [
+            [
+                "type": "text",
+                "text": prompt,
+                "text_elements": []
+            ]
+        ]
     }
 
     private static func granularApprovalPolicy() -> [String: Any] {
