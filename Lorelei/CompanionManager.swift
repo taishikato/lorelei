@@ -104,6 +104,7 @@ final class CompanionManager: ObservableObject {
     private let audioFeedback: BuddyAudioFeedbacking
     private let runStatusIdleReturnDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
+    private var codexAppServerExecutor: CodexAppServerExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var liveCodexAppServerTransport: CodexAppServerTransporting?
     private var responseTaskTracker = CompanionResponseTaskTracker()
@@ -456,14 +457,13 @@ final class CompanionManager: ObservableObject {
 
     func stopCurrentRun() {
         guard currentResponseTask != nil
-            || liveCodexAppServerTransport != nil
             || pendingCodexAppServerApproval != nil
         else {
             return
         }
 
         Task { @MainActor in
-            await terminateLiveCodexAppServerTransportWhenReady()
+            await invalidateLiveCodexAppServerSessionWhenReady()
         }
         currentResponseTask?.cancel()
         cancelPendingCodexAppServerApprovalForStop()
@@ -594,10 +594,21 @@ final class CompanionManager: ObservableObject {
         for _ in 0..<20 {
             if let transport = liveCodexAppServerTransport {
                 await transport.terminate()
+                liveCodexAppServerTransport = nil
                 return
             }
             try? await Task.sleep(for: .milliseconds(5))
         }
+    }
+
+    private func invalidateLiveCodexAppServerSessionWhenReady() async {
+        if let codexAppServerExecutor {
+            await codexAppServerExecutor.invalidateSession()
+            liveCodexAppServerTransport = nil
+            return
+        }
+
+        await terminateLiveCodexAppServerTransportWhenReady()
     }
 
     private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
@@ -611,69 +622,86 @@ final class CompanionManager: ObservableObject {
                 return await codexAppServerDesktopActionRunner(appServerPrompt, cwd)
             }
 
-            let foregroundTool = CodexAppServerDesktopForegroundTool()
-            let dynamicToolSpecsResolver = {
-                [CodexAppServerDesktopForegroundTool.spec] + CodexAppServerDesktopToolSuite.toolSpecs()
-            }
-            let dynamicToolHandler: CodexAppServerDynamicToolHandler = { [weak self] request in
-                if request.namespace == CodexAppServerDesktopForegroundTool.spec.namespace,
-                   request.tool == CodexAppServerDesktopForegroundTool.spec.name {
-                    return await foregroundTool.handle(request)
-                }
-
-                guard let self else {
-                    return CodexAppServerDynamicToolCallResult(
-                        success: false,
-                        contentText: "CompanionManager is no longer available for desktop tool handling."
-                    )
-                }
-                return await CodexAppServerDesktopToolSuite.handle(
-                    request,
-                    executor: self.sharedAXDesktopActionExecutor()
-                )
-            }
-            let traceHandler: CodexAppServerTraceHandler = { [weak self] event in
-                Task { @MainActor [weak self] in
-                    self?.recordDebugEvent("App Server: \(event.logLine)")
-                }
-            }
-            let progressHandler: CodexAppServerTurnProgressHandler = { [weak self] progress in
-                Task { @MainActor [weak self] in
-                    self?.handleCodexAppServerProgress(progress)
-                }
-            }
-            let transportReadyHandler: @Sendable (CodexAppServerTransporting) -> Void = { [weak self] transport in
-                Task { @MainActor [weak self] in
-                    self?.liveCodexAppServerTransport = transport
-                }
-            }
-            let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision = { [weak self] request in
-                guard let self else { return .cancel }
-                return await self.requestCodexAppServerApproval(request)
-            }
-            let executor: CodexAppServerExecutor
-            if let codexAppServerTransportFactory = self.codexAppServerTransportFactory {
-                executor = CodexAppServerExecutor(
-                    makeTransport: codexAppServerTransportFactory,
-                    dynamicToolSpecsResolver: dynamicToolSpecsResolver,
-                    dynamicToolHandler: dynamicToolHandler,
-                    traceHandler: traceHandler,
-                    progressHandler: progressHandler,
-                    onTransportReady: transportReadyHandler,
-                    approvalHandler: approvalHandler
-                )
-            } else {
-                executor = CodexAppServerExecutor(
-                    dynamicToolSpecsResolver: dynamicToolSpecsResolver,
-                    dynamicToolHandler: dynamicToolHandler,
-                    traceHandler: traceHandler,
-                    progressHandler: progressHandler,
-                    onTransportReady: transportReadyHandler,
-                    approvalHandler: approvalHandler
-                )
-            }
+            let executor = self.sharedCodexAppServerExecutor()
             return await executor.runDesktopAction(prompt: appServerPrompt, cwd: cwd)
         }
+    }
+
+    private func sharedCodexAppServerExecutor() -> CodexAppServerExecutor {
+        if let codexAppServerExecutor {
+            return codexAppServerExecutor
+        }
+
+        let foregroundTool = CodexAppServerDesktopForegroundTool()
+        let dynamicToolSpecsResolver = {
+            [CodexAppServerDesktopForegroundTool.spec] + CodexAppServerDesktopToolSuite.toolSpecs()
+        }
+        let dynamicToolHandler: CodexAppServerDynamicToolHandler = { [weak self] request in
+            if request.namespace == CodexAppServerDesktopForegroundTool.spec.namespace,
+               request.tool == CodexAppServerDesktopForegroundTool.spec.name {
+                return await foregroundTool.handle(request)
+            }
+
+            guard let self else {
+                return CodexAppServerDynamicToolCallResult(
+                    success: false,
+                    contentText: "CompanionManager is no longer available for desktop tool handling."
+                )
+            }
+            return await CodexAppServerDesktopToolSuite.handle(
+                request,
+                executor: self.sharedAXDesktopActionExecutor()
+            )
+        }
+        let traceHandler: CodexAppServerTraceHandler = { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.recordDebugEvent("App Server: \(event.logLine)")
+            }
+        }
+        let progressHandler: CodexAppServerTurnProgressHandler = { [weak self] progress in
+            Task { @MainActor [weak self] in
+                self?.handleCodexAppServerProgress(progress)
+            }
+        }
+        let transportReadyHandler: @Sendable (CodexAppServerTransporting) -> Void = { [weak self] transport in
+            Task { @MainActor [weak self] in
+                self?.liveCodexAppServerTransport = transport
+            }
+        }
+        let lifecycleHandler: CodexAppServerSessionLifecycleHandler = { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.recordDebugEvent("App Server: \(event.logLine)")
+            }
+        }
+        let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision = { [weak self] request in
+            guard let self else { return .cancel }
+            return await self.requestCodexAppServerApproval(request)
+        }
+        let executor: CodexAppServerExecutor
+        if let codexAppServerTransportFactory {
+            executor = CodexAppServerExecutor(
+                makeTransport: codexAppServerTransportFactory,
+                dynamicToolSpecsResolver: dynamicToolSpecsResolver,
+                dynamicToolHandler: dynamicToolHandler,
+                traceHandler: traceHandler,
+                progressHandler: progressHandler,
+                onTransportReady: transportReadyHandler,
+                onSessionLifecycleEvent: lifecycleHandler,
+                approvalHandler: approvalHandler
+            )
+        } else {
+            executor = CodexAppServerExecutor(
+                dynamicToolSpecsResolver: dynamicToolSpecsResolver,
+                dynamicToolHandler: dynamicToolHandler,
+                traceHandler: traceHandler,
+                progressHandler: progressHandler,
+                onTransportReady: transportReadyHandler,
+                onSessionLifecycleEvent: lifecycleHandler,
+                approvalHandler: approvalHandler
+            )
+        }
+        codexAppServerExecutor = executor
+        return executor
     }
 
     private func sharedAXDesktopActionExecutor() -> AXDesktopActionExecutor {

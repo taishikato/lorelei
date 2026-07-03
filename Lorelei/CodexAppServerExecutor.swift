@@ -19,39 +19,58 @@ typealias CodexAppServerDynamicToolHandler = @MainActor (
 struct CodexAppServerTraceEvent: Equatable, Sendable {
     nonisolated let logLine: String
 
-    private init(_ logLine: String) {
+    nonisolated private init(_ logLine: String) {
         self.logLine = logLine
     }
 
-    static func inbound(_ detail: String) -> Self {
+    nonisolated static func inbound(_ detail: String) -> Self {
         Self("inbound \(detail)")
     }
 
-    static func outbound(_ detail: String) -> Self {
+    nonisolated static func outbound(_ detail: String) -> Self {
         Self("outbound \(detail)")
     }
 
-    static func dynamicToolStarted(_ detail: String) -> Self {
+    nonisolated static func dynamicToolStarted(_ detail: String) -> Self {
         Self("dynamicToolStarted \(detail)")
     }
 
-    static func dynamicToolCompleted(_ detail: String) -> Self {
+    nonisolated static func dynamicToolCompleted(_ detail: String) -> Self {
         Self("dynamicToolCompleted \(detail)")
     }
 }
 
 typealias CodexAppServerTraceHandler = @Sendable (_ event: CodexAppServerTraceEvent) -> Void
 
-private final class CodexAppServerTraceBuffer: @unchecked Sendable {
+enum CodexAppServerSessionLifecycleEvent: Sendable {
+    case started
+    case reused
+    case reset
+
+    var logLine: String {
+        switch self {
+        case .started:
+            return "session started"
+        case .reused:
+            return "session reused"
+        case .reset:
+            return "session reset"
+        }
+    }
+}
+
+typealias CodexAppServerSessionLifecycleHandler = @Sendable (_ event: CodexAppServerSessionLifecycleEvent) -> Void
+
+final class CodexAppServerTraceBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private let maxLines: Int
-    private var lines: [String] = []
+    nonisolated(unsafe) private var lines: [String] = []
 
     init(maxLines: Int = 30) {
         self.maxLines = maxLines
     }
 
-    func record(_ event: CodexAppServerTraceEvent) {
+    nonisolated func record(_ event: CodexAppServerTraceEvent) {
         lock.lock()
         defer { lock.unlock() }
 
@@ -61,7 +80,7 @@ private final class CodexAppServerTraceBuffer: @unchecked Sendable {
         }
     }
 
-    func diagnosticSuffix() -> String {
+    nonisolated func diagnosticSuffix() -> String {
         lock.lock()
         defer { lock.unlock() }
 
@@ -89,9 +108,227 @@ enum CodexAppServerLaunch {
     }
 }
 
-struct CodexAppServerExecutor {
-    private let turnTimeoutSeconds: TimeInterval
+actor CodexAppServerSessionStore {
+    struct LiveSession {
+        let transport: CodexAppServerTransporting
+        let threadID: String
+        let cwd: String
+        let connectionToken: Int
+    }
+
+    typealias TraceRecorder = @Sendable (CodexAppServerTraceEvent, CodexAppServerTraceBuffer) -> Void
+
     private let makeTransport: () async throws -> CodexAppServerTransporting
+    private let onLifecycleEvent: CodexAppServerSessionLifecycleHandler
+    private var currentTransport: CodexAppServerTransporting?
+    private var currentConnectionToken = 0
+    private var liveSession: LiveSession?
+    private var nextID = 1
+
+    init(
+        makeTransport: @escaping () async throws -> CodexAppServerTransporting,
+        onLifecycleEvent: @escaping CodexAppServerSessionLifecycleHandler = { _ in }
+    ) {
+        self.makeTransport = makeTransport
+        self.onLifecycleEvent = onLifecycleEvent
+    }
+
+    var hasLiveSession: Bool {
+        liveSession != nil
+    }
+
+    func ensureSession(
+        cwd: String,
+        dynamicTools: [CodexAppServerDynamicToolSpec],
+        traceBuffer: CodexAppServerTraceBuffer,
+        recordTrace: TraceRecorder,
+        onTransportReady: @Sendable (CodexAppServerTransporting) -> Void
+    ) async throws -> LiveSession {
+        if let liveSession, liveSession.cwd == cwd {
+            onLifecycleEvent(.reused)
+            return liveSession
+        }
+
+        if let currentTransport {
+            await currentTransport.terminate()
+            onLifecycleEvent(.reset)
+        }
+        currentTransport = nil
+        liveSession = nil
+        currentConnectionToken += 1
+        nextID = 1
+
+        let transport: CodexAppServerTransporting
+        do {
+            transport = try await makeTransport()
+        } catch {
+            throw CodexAppServerSessionStoreError.transportStartFailed(error.localizedDescription)
+        }
+        currentTransport = transport
+        let connectionToken = currentConnectionToken
+        onTransportReady(transport)
+
+        let initializeID = takeNextRequestID()
+        try await send(
+            CodexAppServerProtocol.initializeRequest(id: initializeID),
+            to: transport,
+            traceBuffer: traceBuffer,
+            recordTrace: recordTrace
+        )
+        try ensureConnectionIsCurrent(connectionToken)
+
+        while let line = try await transport.nextLine() {
+            try ensureConnectionIsCurrent(connectionToken)
+            let event = try await CodexAppServerProtocol.parseInboundLine(line)
+            recordTrace(.inbound(codexAppServerTraceDetail(for: event)), traceBuffer)
+            switch event {
+            case .response(let requestID) where requestID == initializeID:
+                try await send(
+                    CodexAppServerProtocol.initializedNotification(),
+                    to: transport,
+                    traceBuffer: traceBuffer,
+                    recordTrace: recordTrace
+                )
+                try ensureConnectionIsCurrent(connectionToken)
+                let threadStartID = takeNextRequestID()
+                try await send(
+                    CodexAppServerProtocol.threadStartRequest(
+                        id: threadStartID,
+                        cwd: cwd,
+                        dynamicTools: dynamicTools
+                    ),
+                    to: transport,
+                    traceBuffer: traceBuffer,
+                    recordTrace: recordTrace
+                )
+                try ensureConnectionIsCurrent(connectionToken)
+            case .threadStarted(_, let threadID):
+                let session = LiveSession(
+                    transport: transport,
+                    threadID: threadID,
+                    cwd: cwd,
+                    connectionToken: connectionToken
+                )
+                liveSession = session
+                onLifecycleEvent(.started)
+                return session
+            case .unsupportedServerRequest(_, let method):
+                throw CodexAppServerSessionStoreError.unsupportedClientMethod(method)
+            case .error(let message):
+                throw CodexAppServerSessionStoreError.serverError(message)
+            case .ignored:
+                break
+            default:
+                break
+            }
+        }
+
+        throw CodexAppServerSessionStoreError.closedBeforeThreadStart
+    }
+
+    func nextRequestID() -> Int {
+        takeNextRequestID()
+    }
+
+    func invalidate() async {
+        await invalidateCurrentConnection(onlyIfToken: currentConnectionToken)
+    }
+
+    func invalidate(onlyIfToken connectionToken: Int) async {
+        await invalidateCurrentConnection(onlyIfToken: connectionToken)
+    }
+
+    func invalidateCurrentConnectionForTimeout() async {
+        guard currentTransport != nil else {
+            return
+        }
+        await invalidate(onlyIfToken: currentConnectionToken)
+    }
+
+    private func invalidateCurrentConnection(onlyIfToken connectionToken: Int) async {
+        guard currentConnectionToken == connectionToken else {
+            return
+        }
+
+        let hadConnection = currentTransport != nil || liveSession != nil
+        if let currentTransport {
+            await currentTransport.terminate()
+        }
+
+        guard currentConnectionToken == connectionToken else {
+            return
+        }
+        currentTransport = nil
+        liveSession = nil
+        currentConnectionToken += 1
+        nextID = 1
+        if hadConnection {
+            onLifecycleEvent(.reset)
+        }
+    }
+
+    private func takeNextRequestID() -> Int {
+        let requestID = nextID
+        nextID += 1
+        return requestID
+    }
+
+    private func ensureConnectionIsCurrent(_ connectionToken: Int) throws {
+        guard currentConnectionToken == connectionToken else {
+            throw CodexAppServerSessionStoreError.sessionInvalidated
+        }
+    }
+
+    private func send(
+        _ message: [String: Any],
+        to transport: CodexAppServerTransporting,
+        traceBuffer: CodexAppServerTraceBuffer,
+        recordTrace: TraceRecorder
+    ) async throws {
+        try await transport.send(line: CodexAppServerProtocol.encodeLine(message))
+        recordTrace(.outbound(codexAppServerTraceDetail(forOutboundMessage: message)), traceBuffer)
+    }
+}
+
+private enum CodexAppServerSessionStoreError: Error, LocalizedError {
+    case closedBeforeThreadStart
+    case sessionInvalidated
+    case serverError(String)
+    case transportStartFailed(String)
+    case unsupportedClientMethod(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .closedBeforeThreadStart:
+            return "Codex App Server did not start a thread."
+        case .sessionInvalidated:
+            return "Codex App Server session was invalidated."
+        case .serverError(let message):
+            return "Codex App Server error: \(message)"
+        case .transportStartFailed(let message):
+            return "Codex App Server failed to start: \(message)"
+        case .unsupportedClientMethod(let method):
+            return "Codex App Server requested unsupported client method: \(method)"
+        }
+    }
+}
+
+private struct CodexAppServerTurnAttemptResult {
+    let commandResult: WorkspaceCommandResult
+    let shouldRetryDeadSession: Bool
+
+    static func finished(_ commandResult: WorkspaceCommandResult) -> Self {
+        Self(commandResult: commandResult, shouldRetryDeadSession: false)
+    }
+
+    static func retry(_ commandResult: WorkspaceCommandResult) -> Self {
+        Self(commandResult: commandResult, shouldRetryDeadSession: true)
+    }
+}
+
+final class CodexAppServerExecutor {
+    private let turnTimeoutSeconds: TimeInterval
+    private let sessionStore: CodexAppServerSessionStore
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
     private let dynamicToolHandler: CodexAppServerDynamicToolHandler
     private let traceHandler: CodexAppServerTraceHandler
@@ -114,10 +351,14 @@ struct CodexAppServerExecutor {
         traceHandler: @escaping CodexAppServerTraceHandler = { _ in },
         progressHandler: @escaping CodexAppServerTurnProgressHandler = { _ in },
         onTransportReady: @escaping @Sendable (CodexAppServerTransporting) -> Void = { _ in },
+        onSessionLifecycleEvent: @escaping CodexAppServerSessionLifecycleHandler = { _ in },
         approvalHandler: @escaping (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
-        self.makeTransport = makeTransport
+        self.sessionStore = CodexAppServerSessionStore(
+            makeTransport: makeTransport,
+            onLifecycleEvent: onSessionLifecycleEvent
+        )
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
         self.dynamicToolHandler = dynamicToolHandler
         self.traceHandler = traceHandler
@@ -132,68 +373,113 @@ struct CodexAppServerExecutor {
         }
 
         let traceBuffer = CodexAppServerTraceBuffer()
-        let transport: CodexAppServerTransporting
-        do {
-            transport = try await makeTransport()
-            onTransportReady(transport)
-        } catch {
-            return WorkspaceCommandResult(
-                summary: "Codex App Server failed to start: \(error.localizedDescription)"
-                    + traceBuffer.diagnosticSuffix(),
-                status: .failed
+        var lastFailure: WorkspaceCommandResult?
+
+        for attempt in 0..<2 {
+            let result = await runDesktopActionAttempt(
+                prompt: prompt,
+                cwd: cwd,
+                traceBuffer: traceBuffer,
+                allowDeadSessionRetry: attempt == 0
             )
+            if result.shouldRetryDeadSession {
+                await sessionStore.invalidate()
+                lastFailure = result.commandResult
+                continue
+            }
+            return result.commandResult
         }
 
+        return lastFailure ?? WorkspaceCommandResult(summary: "Codex App Server failed.", status: .failed)
+    }
+
+    func runComputerUse(prompt: String, cwd: String) async -> WorkspaceCommandResult {
+        await runDesktopAction(prompt: prompt, cwd: cwd)
+    }
+
+    func invalidateSession() async {
+        await sessionStore.invalidate()
+    }
+
+    private func runDesktopActionAttempt(
+        prompt: String,
+        cwd: String,
+        traceBuffer: CodexAppServerTraceBuffer,
+        allowDeadSessionRetry: Bool
+    ) async -> CodexAppServerTurnAttemptResult {
         let timeoutState = CodexAppServerTimeoutState()
-        let timeoutTask = Task { [turnTimeoutSeconds, transport, timeoutState] in
-            try? await Task.sleep(for: .seconds(turnTimeoutSeconds))
+        let timeoutTask = Task { [turnTimeoutSeconds, sessionStore, timeoutState] in
+            do {
+                try await Task.sleep(for: .seconds(turnTimeoutSeconds))
+            } catch {
+                return
+            }
             await timeoutState.markTimedOut()
-            await transport.terminate()
+            await sessionStore.invalidateCurrentConnectionForTimeout()
         }
         defer { timeoutTask.cancel() }
 
         var isWaitingOnApproval = false
+        var didReceiveTurnEvent = false
 
         do {
-            try await send(CodexAppServerProtocol.initializeRequest(id: 1), to: transport, traceBuffer: traceBuffer)
+            let session = try await sessionStore.ensureSession(
+                cwd: cwd,
+                dynamicTools: dynamicToolSpecsResolver(),
+                traceBuffer: traceBuffer,
+                recordTrace: { [traceHandler] event, traceBuffer in
+                    traceBuffer.record(event)
+                    traceHandler(event)
+                },
+                onTransportReady: onTransportReady
+            )
 
-            var didStartThread = false
+            if await timeoutState.didTimeOut {
+                await sessionStore.invalidate(onlyIfToken: session.connectionToken)
+                return .finished(timeoutResult(isWaitingOnApproval: isWaitingOnApproval, traceBuffer: traceBuffer))
+            }
+
+            do {
+                try await send(
+                    CodexAppServerProtocol.turnStartRequest(
+                        id: await sessionStore.nextRequestID(),
+                        threadID: session.threadID,
+                        prompt: prompt,
+                        cwd: cwd
+                    ),
+                    to: session.transport,
+                    traceBuffer: traceBuffer
+                )
+            } catch {
+                if await timeoutState.didTimeOut {
+                    await sessionStore.invalidate(onlyIfToken: session.connectionToken)
+                    return .finished(timeoutResult(isWaitingOnApproval: isWaitingOnApproval, traceBuffer: traceBuffer))
+                }
+                await sessionStore.invalidate()
+                if allowDeadSessionRetry {
+                    return .retry(
+                        WorkspaceCommandResult(
+                            summary: "Codex App Server failed: \(error.localizedDescription)",
+                            status: .failed
+                        )
+                    )
+                }
+                return .finished(
+                    WorkspaceCommandResult(
+                        summary: "Codex App Server failed: \(error.localizedDescription)",
+                        status: .failed
+                    )
+                )
+            }
+
             var finalText = ""
             var pendingToolFailure: String?
 
-            while let line = try await transport.nextLine() {
+            while let line = try await session.transport.nextLine() {
                 let event = try CodexAppServerProtocol.parseInboundLine(line)
-                recordTrace(.inbound(traceDetail(for: event)), to: traceBuffer)
+                didReceiveTurnEvent = true
+                recordTrace(.inbound(codexAppServerTraceDetail(for: event)), to: traceBuffer)
                 switch event {
-                case .response(let requestID):
-                    if requestID == 1 {
-                        try await send(
-                            CodexAppServerProtocol.initializedNotification(),
-                            to: transport,
-                            traceBuffer: traceBuffer
-                        )
-                        try await send(
-                            CodexAppServerProtocol.threadStartRequest(
-                                id: 2,
-                                cwd: cwd,
-                                dynamicTools: dynamicToolSpecsResolver()
-                            ),
-                            to: transport,
-                            traceBuffer: traceBuffer
-                        )
-                    }
-                case .threadStarted(_, let threadID):
-                    didStartThread = true
-                    try await send(
-                        CodexAppServerProtocol.turnStartRequest(
-                            id: 3,
-                            threadID: threadID,
-                            prompt: prompt,
-                            cwd: cwd
-                        ),
-                        to: transport,
-                        traceBuffer: traceBuffer
-                    )
                 case .agentMessageDelta(let delta):
                     progressHandler(.agentMessageDelta(delta))
                     finalText += delta
@@ -209,7 +495,7 @@ struct CodexAppServerExecutor {
                     let payload = decision == .accept ? request.acceptPayload : request.declinePayload
                     try await send(
                         CodexAppServerProtocol.approvalResponse(id: request.requestID, payload: payload),
-                        to: transport,
+                        to: session.transport,
                         traceBuffer: traceBuffer
                     )
                 case .dynamicToolCall(let request):
@@ -226,68 +512,110 @@ struct CodexAppServerExecutor {
                             id: request.requestID,
                             result: result
                         ),
-                        to: transport,
+                        to: session.transport,
                         traceBuffer: traceBuffer
                     )
                 case .unsupportedServerRequest(_, let method):
-                    await transport.terminate()
-                    return WorkspaceCommandResult(
-                        summary: "Codex App Server requested unsupported client method: \(method)",
-                        status: .failed
+                    await sessionStore.invalidate()
+                    return .finished(
+                        WorkspaceCommandResult(
+                            summary: "Codex App Server requested unsupported client method: \(method)",
+                            status: .failed
+                        )
                     )
                 case .turnCompleted(let status):
-                    await transport.terminate()
                     if status == "completed" {
                         let summary = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if let pendingToolFailure {
-                            return WorkspaceCommandResult(
-                                summary: summary.isEmpty ? pendingToolFailure : summary,
-                                status: .failed
+                            return .finished(
+                                WorkspaceCommandResult(
+                                    summary: summary.isEmpty ? pendingToolFailure : summary,
+                                    status: .failed
+                                )
                             )
                         }
-                        return WorkspaceCommandResult(summary: summary.isEmpty ? "Codex completed." : summary)
+                        return .finished(WorkspaceCommandResult(summary: summary.isEmpty ? "Codex completed." : summary))
                     }
-                    return WorkspaceCommandResult(
-                        summary: "Codex App Server turn ended with status: \(status)",
-                        status: .failed
+                    return .finished(
+                        WorkspaceCommandResult(
+                            summary: "Codex App Server turn ended with status: \(status)",
+                            status: .failed
+                        )
                     )
                 case .error(let message):
-                    await transport.terminate()
-                    return WorkspaceCommandResult(summary: "Codex App Server error: \(message)", status: .failed)
+                    await sessionStore.invalidate()
+                    return .finished(WorkspaceCommandResult(summary: "Codex App Server error: \(message)", status: .failed))
                 case .threadWaitingOnApproval(let waitingOnApproval):
                     isWaitingOnApproval = waitingOnApproval
-                case .ignored:
+                case .response, .threadStarted, .ignored:
                     break
                 }
 
                 if Task.isCancelled {
-                    await transport.terminate()
-                    return WorkspaceCommandResult(summary: "Codex App Server command cancelled.", status: .cancelled)
+                    await sessionStore.invalidate(onlyIfToken: session.connectionToken)
+                    return .finished(
+                        WorkspaceCommandResult(summary: "Codex App Server command cancelled.", status: .cancelled)
+                    )
                 }
             }
 
-            await transport.terminate()
             if await timeoutState.didTimeOut {
-                return timeoutResult(isWaitingOnApproval: isWaitingOnApproval, traceBuffer: traceBuffer)
+                await sessionStore.invalidate(onlyIfToken: session.connectionToken)
+                return .finished(timeoutResult(isWaitingOnApproval: isWaitingOnApproval, traceBuffer: traceBuffer))
             }
-            if didStartThread {
-                return WorkspaceCommandResult(
+            await sessionStore.invalidate()
+            if !didReceiveTurnEvent, allowDeadSessionRetry {
+                return .retry(
+                    WorkspaceCommandResult(
+                        summary: "Codex App Server closed before completing the turn.",
+                        status: .failed
+                    )
+                )
+            }
+            return .finished(
+                WorkspaceCommandResult(
                     summary: "Codex App Server closed before completing the turn.",
                     status: .failed
                 )
-            }
-            return WorkspaceCommandResult(summary: "Codex App Server did not start a thread.", status: .failed)
+            )
         } catch {
-            await transport.terminate()
             if await timeoutState.didTimeOut {
-                return timeoutResult(isWaitingOnApproval: isWaitingOnApproval, traceBuffer: traceBuffer)
+                return .finished(timeoutResult(isWaitingOnApproval: isWaitingOnApproval, traceBuffer: traceBuffer))
             }
-            return WorkspaceCommandResult(summary: "Codex App Server failed: \(error.localizedDescription)", status: .failed)
+            await sessionStore.invalidate()
+            if let sessionStoreError = error as? CodexAppServerSessionStoreError {
+                return .finished(sessionStoreFailureResult(for: sessionStoreError, traceBuffer: traceBuffer))
+            }
+            if !didReceiveTurnEvent, allowDeadSessionRetry {
+                return .retry(
+                    WorkspaceCommandResult(
+                        summary: "Codex App Server failed: \(error.localizedDescription)",
+                        status: .failed
+                    )
+                )
+            }
+            return .finished(
+                WorkspaceCommandResult(summary: "Codex App Server failed: \(error.localizedDescription)", status: .failed)
+            )
         }
     }
 
-    func runComputerUse(prompt: String, cwd: String) async -> WorkspaceCommandResult {
-        await runDesktopAction(prompt: prompt, cwd: cwd)
+    private func sessionStoreFailureResult(
+        for error: CodexAppServerSessionStoreError,
+        traceBuffer: CodexAppServerTraceBuffer
+    ) -> WorkspaceCommandResult {
+        let suffix: String
+        switch error {
+        case .transportStartFailed:
+            suffix = traceBuffer.diagnosticSuffix()
+        case .closedBeforeThreadStart, .sessionInvalidated, .serverError, .unsupportedClientMethod:
+            suffix = ""
+        }
+
+        return WorkspaceCommandResult(
+            summary: error.localizedDescription + suffix,
+            status: .failed
+        )
     }
 
     private func send(
@@ -296,7 +624,7 @@ struct CodexAppServerExecutor {
         traceBuffer: CodexAppServerTraceBuffer
     ) async throws {
         try await transport.send(line: CodexAppServerProtocol.encodeLine(message))
-        recordTrace(.outbound(traceDetail(forOutboundMessage: message)), to: traceBuffer)
+        recordTrace(.outbound(codexAppServerTraceDetail(forOutboundMessage: message)), to: traceBuffer)
     }
 
     private func timeoutResult(
@@ -325,48 +653,48 @@ struct CodexAppServerExecutor {
         traceHandler(event)
     }
 
-    private func traceDetail(for event: CodexAppServerInboundEvent) -> String {
-        switch event {
-        case .response(let requestID):
-            return "response#\(requestID)"
-        case .threadStarted(let requestID, let threadID):
-            return "threadStarted#\(requestID):\(threadID)"
-        case .agentMessageDelta:
-            return "agentMessageDelta"
-        case .toolCallCompleted(let status, _, _):
-            return "toolCallCompleted:\(status)"
-        case .turnCompleted(let status):
-            return "turnCompleted:\(status)"
-        case .threadWaitingOnApproval(let isWaiting):
-            return "threadWaitingOnApproval:\(isWaiting)"
-        case .approvalRequest(let request):
-            return "approvalRequest#\(request.requestID):\(request.kind)"
-        case .dynamicToolCall(let request):
-            return "dynamicToolCall#\(request.traceIdentifier)"
-        case .unsupportedServerRequest(let requestID, let method):
-            return "unsupportedServerRequest#\(requestID):\(method)"
-        case .error(let message):
-            return "error:\(message)"
-        case .ignored:
-            return "ignored"
-        }
+}
+
+nonisolated private func codexAppServerTraceDetail(for event: CodexAppServerInboundEvent) -> String {
+    switch event {
+    case .response(let requestID):
+        return "response#\(requestID)"
+    case .threadStarted(let requestID, let threadID):
+        return "threadStarted#\(requestID):\(threadID)"
+    case .agentMessageDelta:
+        return "agentMessageDelta"
+    case .toolCallCompleted(let status, _, _):
+        return "toolCallCompleted:\(status)"
+    case .turnCompleted(let status):
+        return "turnCompleted:\(status)"
+    case .threadWaitingOnApproval(let isWaiting):
+        return "threadWaitingOnApproval:\(isWaiting)"
+    case .approvalRequest(let request):
+        return "approvalRequest#\(request.requestID):\(request.kind)"
+    case .dynamicToolCall(let request):
+        return "dynamicToolCall#\(request.traceIdentifier)"
+    case .unsupportedServerRequest(let requestID, let method):
+        return "unsupportedServerRequest#\(requestID):\(method)"
+    case .error(let message):
+        return "error:\(message)"
+    case .ignored:
+        return "ignored"
     }
+}
 
-    private func traceDetail(forOutboundMessage message: [String: Any]) -> String {
-        if let method = message["method"] as? String {
-            if let id = message["id"] {
-                return "\(method)#\(id)"
-            }
-            return method
-        }
-
+nonisolated private func codexAppServerTraceDetail(forOutboundMessage message: [String: Any]) -> String {
+    if let method = message["method"] as? String {
         if let id = message["id"] {
-            return "response#\(id)"
+            return "\(method)#\(id)"
         }
-
-        return "message"
+        return method
     }
 
+    if let id = message["id"] {
+        return "response#\(id)"
+    }
+
+    return "message"
 }
 
 private extension CodexAppServerDynamicToolCallRequest {
@@ -488,7 +816,7 @@ private enum CodexAppServerStdioTransportError: Error, LocalizedError {
 }
 
 private extension CodexAppServerDynamicToolCallRequest {
-    var traceIdentifier: String {
+    nonisolated var traceIdentifier: String {
         "\(requestID):\(namespace.map { "\($0)." } ?? "")\(tool)"
     }
 }

@@ -226,6 +226,51 @@ struct LoreleiTests {
         #expect(toolNames.filter { $0 == "screenshot" }.count == 1)
     }
 
+    @Test func companionManagerReusesAppServerSessionAcrossVoiceTurns() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAppServerSessionReuseTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAppServerSessionReuseTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [transport])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { try await factory.next() }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "First turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect Safari")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Second turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.latestResultSummary == "Second turn.")
+        #expect(await factory.callCount == 1)
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStartIDs = sentMessages.compactMap { message -> Int? in
+            guard message["method"] as? String == "turn/start" else { return nil }
+            return message["id"] as? Int
+        }
+        #expect(turnStartIDs == [3, 4])
+    }
+
     @Test func companionManagerWrapsGeneralDesktopActionsWithForegroundAppGuidance() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerGeneralDesktopActionRunnerTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerGeneralDesktopActionRunnerTests")
@@ -1872,6 +1917,122 @@ struct LoreleiTests {
         #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
     }
 
+    @Test func appServerSessionReusesTransportAcrossTurns() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factoryCallCount = AsyncCounter()
+        let executor = CodexAppServerExecutor(
+            makeTransport: {
+                await factoryCallCount.increment()
+                return transport
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let first = await executor.runDesktopAction(prompt: "first", cwd: "/Users/example")
+        let didTerminateAfterFirstTurn = await transport.didTerminate
+        let second = await executor.runDesktopAction(prompt: "second", cwd: "/Users/example")
+
+        #expect(first.status == .succeeded)
+        #expect(first.summary == "First")
+        #expect(second.status == .succeeded)
+        #expect(second.summary == "Second")
+        #expect(await factoryCallCount.value == 1)
+        #expect(!didTerminateAfterFirstTurn)
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStarts = sentMessages.filter { $0["method"] as? String == "turn/start" }
+        #expect(turnStarts.map { $0["id"] as? Int } == [3, 4])
+    }
+
+    @Test func appServerSessionRespawnsWhenCwdChanges() async throws {
+        let firstTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let secondTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-2"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [firstTransport, secondTransport])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { try await factory.next() },
+            approvalHandler: { _ in .cancel }
+        )
+
+        _ = await executor.runDesktopAction(prompt: "first", cwd: "/Users/example/one")
+        _ = await executor.runDesktopAction(prompt: "second", cwd: "/Users/example/two")
+
+        #expect(await factory.callCount == 2)
+        #expect(await firstTransport.didTerminate)
+        let sentMessages = try await secondTransport.sentJSONMessages()
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let params = try #require(threadStart["params"] as? [String: Any])
+        #expect(params["cwd"] as? String == "/Users/example/two")
+    }
+
+    @Test func appServerSessionRetriesOnceOnDeadTransport() async throws {
+        let deadTransport = ThrowingSendCodexAppServerTransport()
+        let healthyTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-2"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Recovered"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [deadTransport, healthyTransport])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { try await factory.next() },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "recover", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Recovered")
+        #expect(await factory.callCount == 2)
+        #expect(await deadTransport.didTerminate)
+    }
+
+    @Test func appServerStopInvalidatesSession() async throws {
+        let firstTransport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
+        ])
+        let secondTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-2"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Fresh"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [firstTransport, secondTransport])
+        let executor = CodexAppServerExecutor(
+            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never starts
+            // and the timeout-shape contract cannot hold.
+            turnTimeoutSeconds: 0.3,
+            makeTransport: { try await factory.next() },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let stopped = await executor.runDesktopAction(prompt: "stop", cwd: "/Users/example")
+        let fresh = await executor.runDesktopAction(prompt: "fresh", cwd: "/Users/example")
+
+        #expect(stopped.status == .failed)
+        #expect(stopped.summary.contains("Codex App Server command timed out."))
+        #expect(fresh.status == .succeeded)
+        #expect(fresh.summary == "Fresh")
+        #expect(await factory.callCount == 2)
+    }
+
     @Test func appServerExecutorAnswersToolUserInputApproval() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
@@ -1895,7 +2056,10 @@ struct LoreleiTests {
     @Test func appServerExecutorTimesOutSilentServer() async throws {
         let transport = HangingCodexAppServerTransport()
         let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 0.01,
+            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never starts
+            // and the timeout-shape contract cannot hold.
+            turnTimeoutSeconds: 0.3,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -1913,7 +2077,10 @@ struct LoreleiTests {
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
         ])
         let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 0.01,
+            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never starts
+            // and the timeout-shape contract cannot hold.
+            turnTimeoutSeconds: 0.3,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -1931,7 +2098,10 @@ struct LoreleiTests {
     @Test func appServerExecutorReportsTimeoutWhenTransportReadThrowsAfterTermination() async throws {
         let transport = ThrowingAfterTerminateCodexAppServerTransport()
         let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 0.01,
+            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never starts
+            // and the timeout-shape contract cannot hold.
+            turnTimeoutSeconds: 0.3,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -1949,8 +2119,12 @@ struct LoreleiTests {
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
             #"{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}"#
         ])
+        // 0.3s (not a knife-edge 0.01s): the scripted lines - including the
+        // waitingOnApproval status the hint depends on - must be consumed
+        // before the timer fires now that the timeout also covers session
+        // establishment.
         let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 0.01,
+            turnTimeoutSeconds: 0.3,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -2516,6 +2690,18 @@ private final class LaunchCounter: @unchecked Sendable {
     }
 }
 
+private actor AsyncCounter {
+    private var count = 0
+
+    var value: Int {
+        count
+    }
+
+    func increment() {
+        count += 1
+    }
+}
+
 private final class StringRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedValues: [String] = []
@@ -2536,6 +2722,7 @@ private final class StringRecorder: @unchecked Sendable {
 private actor FakeCodexAppServerTransport: CodexAppServerTransporting {
     private var lines: [String]
     private var recordedSentLines: [String] = []
+    private var terminated = false
 
     init(lines: [String]) {
         self.lines = lines
@@ -2556,6 +2743,16 @@ private actor FakeCodexAppServerTransport: CodexAppServerTransporting {
         }
     }
 
+    var didTerminate: Bool {
+        terminated
+    }
+
+    func sentJSONMessages() throws -> [[String: Any]] {
+        try recordedSentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+    }
+
     func send(line: String) async throws {
         recordedSentLines.append(line.trimmingCharacters(in: .whitespacesAndNewlines))
     }
@@ -2565,7 +2762,55 @@ private actor FakeCodexAppServerTransport: CodexAppServerTransporting {
         return lines.removeFirst()
     }
 
-    func terminate() async {}
+    func terminate() async {
+        terminated = true
+    }
+}
+
+private actor AppServerTransportFactoryRecorder {
+    private var transports: [CodexAppServerTransporting]
+    private var calls = 0
+
+    init(transports: [CodexAppServerTransporting]) {
+        self.transports = transports
+    }
+
+    var callCount: Int {
+        calls
+    }
+
+    func next() throws -> CodexAppServerTransporting {
+        calls += 1
+        guard !transports.isEmpty else {
+            throw CodexAppServerTestError.missingTransport
+        }
+        return transports.removeFirst()
+    }
+}
+
+private actor ThrowingSendCodexAppServerTransport: CodexAppServerTransporting {
+    private var terminated = false
+
+    var didTerminate: Bool {
+        terminated
+    }
+
+    func send(line: String) async throws {
+        throw CodexAppServerTestError.sendFailed
+    }
+
+    func nextLine() async throws -> String? {
+        nil
+    }
+
+    func terminate() async {
+        terminated = true
+    }
+}
+
+private enum CodexAppServerTestError: Error {
+    case missingTransport
+    case sendFailed
 }
 
 private actor HangingCodexAppServerTransport: CodexAppServerTransporting {
