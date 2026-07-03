@@ -48,6 +48,17 @@ enum CompanionVoiceState {
     case responding
 }
 
+struct ConversationEntry: Identifiable, Equatable, Sendable {
+    enum Role: Equatable, Sendable {
+        case user
+        case assistant
+    }
+
+    let id: UUID
+    let role: Role
+    var text: String
+}
+
 struct CompanionResponseTaskTracker {
     private(set) var currentTaskID: UUID?
 
@@ -78,6 +89,7 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var debugLog = CompanionDebugLog()
     @Published private(set) var runStatus: LoreleiRunStatus = .idle
     @Published private(set) var streamText: String = ""
+    @Published private(set) var conversationLog: [ConversationEntry] = []
     @Published private(set) var currentActivity: String?
 
     /// Screen location (global AppKit coords) of a detected UI element the
@@ -97,7 +109,6 @@ final class CompanionManager: ObservableObject {
     let workspaceSettingsStore: WorkspaceSettingsStore
     private let commandRouter = LoreleiCommandRouter()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
-    private let codexExecutor: CodexExecutor
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
@@ -107,6 +118,9 @@ final class CompanionManager: ObservableObject {
     private var codexAppServerExecutor: CodexAppServerExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var liveCodexAppServerTransport: CodexAppServerTransporting?
+    private var activeTurn: (threadID: String, turnID: String)?
+    private var outstandingSteerTranscripts: [Int: String] = [:]
+    private var currentAssistantConversationEntryID: UUID?
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -141,7 +155,6 @@ final class CompanionManager: ObservableObject {
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
-        codexExecutor: CodexExecutor? = nil,
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
         audioFeedback: BuddyAudioFeedbacking? = nil
     ) {
@@ -152,7 +165,6 @@ final class CompanionManager: ObservableObject {
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
-        self.codexExecutor = codexExecutor ?? CodexExecutor()
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
     }
 
@@ -235,6 +247,8 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         currentResponseTask = nil
         _ = resolvePendingCodexAppServerApproval(.cancel)
+        activeTurn = nil
+        outstandingSteerTranscripts.removeAll()
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
         shortcutTransitionCancellable?.cancel()
@@ -462,10 +476,36 @@ final class CompanionManager: ObservableObject {
             return
         }
 
-        Task { @MainActor in
-            await invalidateLiveCodexAppServerSessionWhenReady()
+        if let activeTurn,
+           let liveCodexAppServerTransport,
+           let codexAppServerExecutor {
+            Task { @MainActor in
+                do {
+                    let requestID = await codexAppServerExecutor.reserveRequestID()
+                    try await codexAppServerExecutor.sendInterruptRequest(
+                        id: requestID,
+                        threadID: activeTurn.threadID,
+                        turnID: activeTurn.turnID,
+                        transport: liveCodexAppServerTransport
+                    )
+                    cancelPendingCodexAppServerApprovalForStop()
+                } catch {
+                    await stopCurrentRunByInvalidatingSession()
+                }
+            }
+            return
         }
+
+        Task { @MainActor in
+            await stopCurrentRunByInvalidatingSession()
+        }
+    }
+
+    private func stopCurrentRunByInvalidatingSession() async {
+        await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
+        activeTurn = nil
+        outstandingSteerTranscripts.removeAll()
         cancelPendingCodexAppServerApprovalForStop()
         finishRun(with: WorkspaceCommandResult(summary: "Stopped.", status: .failed))
     }
@@ -485,9 +525,42 @@ final class CompanionManager: ObservableObject {
 
     /// Routes final transcripts to Lorelei's current local workspace and Codex actions.
     private func handleFinalTranscriptLocally(_ transcript: String) {
+        if let activeTurn,
+           let liveCodexAppServerTransport,
+           let codexAppServerExecutor {
+            Task { @MainActor in
+                let requestID = await codexAppServerExecutor.reserveSteerRequestID()
+                outstandingSteerTranscripts[requestID] = transcript
+                do {
+                    try await codexAppServerExecutor.sendSteerRequest(
+                        id: requestID,
+                        threadID: activeTurn.threadID,
+                        expectedTurnID: activeTurn.turnID,
+                        prompt: transcript,
+                        transport: liveCodexAppServerTransport
+                    )
+                    appendConversationEntry(role: .user, text: "↪ \(transcript)")
+                    recordDebugEvent("Steered: \(Self.conciseDebugLine(transcript))")
+                } catch {
+                    outstandingSteerTranscripts.removeValue(forKey: requestID)
+                    recordDebugEvent("Steer failed - starting a new turn")
+                    routeFinalTranscriptAsNewTurn(transcript)
+                }
+            }
+            return
+        }
+
+        routeFinalTranscriptAsNewTurn(transcript)
+    }
+
+    private func routeFinalTranscriptAsNewTurn(_ transcript: String, appendUserEntry: Bool = true) {
         currentResponseTask?.cancel()
         _ = resolvePendingCodexAppServerApproval(.cancel)
         lastTranscript = transcript
+        if appendUserEntry {
+            appendConversationEntry(role: .user, text: transcript)
+        }
+        currentAssistantConversationEntryID = nil
         recordDebugEvent("Transcript: \(Self.conciseDebugLine(transcript))")
         let action = commandRouter.route(transcript)
         recordDebugEvent("Route: \(action.debugLabel)")
@@ -506,20 +579,18 @@ final class CompanionManager: ObservableObject {
 
             switch action {
             case .codexReadOnly(let prompt):
-                let result = await codexExecutor.run(
-                    .readOnly,
+                let result = await runCodexAppServerTurn(
                     prompt: prompt,
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                    sandboxPolicy: "readOnly"
                 )
                 guard !Task.isCancelled else { return }
 
                 finishRun(with: result)
                 return
             case .codexWorkspaceWrite(let prompt):
-                let result = await codexExecutor.run(
-                    .workspaceWrite,
+                let result = await runCodexAppServerTurn(
                     prompt: CodexPromptBuilder.workspaceWritePrompt(for: prompt),
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                    sandboxPolicy: "workspaceWrite"
                 )
                 guard !Task.isCancelled else { return }
 
@@ -624,6 +695,28 @@ final class CompanionManager: ObservableObject {
 
             let executor = self.sharedCodexAppServerExecutor()
             return await executor.runDesktopAction(prompt: appServerPrompt, cwd: cwd)
+        }
+    }
+
+    private func runCodexAppServerTurn(
+        prompt: String,
+        sandboxPolicy: String,
+        extraInput: [CodexAppServerTurnInputItem] = [],
+        removeLocalImageInputsAfterRun: Bool = false
+    ) async -> WorkspaceCommandResult {
+        let cwd = codexAppServerWorkingDirectory()
+        recordDebugEvent("Codex App Server turn started")
+        recordDebugEvent("Codex App Server cwd: \(cwd)")
+
+        return await withDesktopActionOverlayHidden {
+            let executor = self.sharedCodexAppServerExecutor()
+            return await executor.runTurn(
+                prompt: prompt,
+                cwd: cwd,
+                sandboxPolicy: sandboxPolicy,
+                extraInput: extraInput,
+                removeLocalImageInputsAfterRun: removeLocalImageInputsAfterRun
+            )
         }
     }
 
@@ -765,14 +858,27 @@ final class CompanionManager: ObservableObject {
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
         streamText = ""
+        currentAssistantConversationEntryID = nil
         currentActivity = nil
         runStatus = .working("Thinking…")
     }
 
     private func handleCodexAppServerProgress(_ progress: CodexAppServerTurnProgress) {
         switch progress {
+        case .turnStarted(let threadID, let turnID):
+            activeTurn = (threadID: threadID, turnID: turnID)
+        case .turnEnded:
+            activeTurn = nil
+            outstandingSteerTranscripts.removeAll()
+        case .steerFailed(let requestID, _):
+            guard let transcript = outstandingSteerTranscripts.removeValue(forKey: requestID) else {
+                return
+            }
+            recordDebugEvent("Steer failed - starting a new turn")
+            routeFinalTranscriptAsNewTurn(transcript, appendUserEntry: false)
         case .agentMessageDelta(let delta):
             streamText += delta
+            appendAssistantDeltaToConversation(delta)
         case .toolCallStarted(let name):
             currentActivity = name
             runStatus = .working(name)
@@ -785,9 +891,49 @@ final class CompanionManager: ObservableObject {
 
     private func finishRun(with result: WorkspaceCommandResult) {
         updateLatestResultSummary(result.summary)
+        updateAssistantConversationEntry(text: result.summary)
         let succeeded = result.status == .succeeded
         finishRunStatus(success: succeeded)
         audioFeedback.play(succeeded ? .runSucceeded : .runFailed, spokenSummary: result.summary)
+    }
+
+    private func appendConversationEntry(role: ConversationEntry.Role, text: String) {
+        let entry = ConversationEntry(id: UUID(), role: role, text: text)
+        conversationLog.append(entry)
+        if role == .assistant {
+            currentAssistantConversationEntryID = entry.id
+        }
+        capConversationLog()
+    }
+
+    private func appendAssistantDeltaToConversation(_ delta: String) {
+        guard !delta.isEmpty else { return }
+        if let currentAssistantConversationEntryID,
+           let index = conversationLog.firstIndex(where: { $0.id == currentAssistantConversationEntryID }) {
+            conversationLog[index].text += delta
+        } else {
+            appendConversationEntry(role: .assistant, text: delta)
+        }
+    }
+
+    private func updateAssistantConversationEntry(text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if let currentAssistantConversationEntryID,
+           let index = conversationLog.firstIndex(where: { $0.id == currentAssistantConversationEntryID }) {
+            conversationLog[index].text = text
+        } else {
+            appendConversationEntry(role: .assistant, text: text)
+        }
+    }
+
+    private func capConversationLog() {
+        let maximumConversationEntries = 200
+        guard conversationLog.count > maximumConversationEntries else { return }
+        conversationLog.removeFirst(conversationLog.count - maximumConversationEntries)
+        if let currentAssistantConversationEntryID,
+           !conversationLog.contains(where: { $0.id == currentAssistantConversationEntryID }) {
+            self.currentAssistantConversationEntryID = nil
+        }
     }
 
     private func finishRunStatus(success: Bool) {
@@ -834,14 +980,27 @@ final class CompanionManager: ObservableObject {
         voiceState = .idle
         currentResponseTask = nil
         liveCodexAppServerTransport = nil
+        activeTurn = nil
+        outstandingSteerTranscripts.removeAll()
         scheduleTransientHideIfNeeded()
     }
 
     private func runCodexScreenRequest(_ prompt: String) async -> WorkspaceCommandResult {
-        let runner = CodexScreenContextRequestRunner(codexExecutor: codexExecutor)
+        let runner = CodexScreenContextRequestRunner()
         return await runner.run(
             prompt: prompt,
-            workspacePath: workspaceSettingsStore.selectedWorkspacePath
+            workspacePath: workspaceSettingsStore.selectedWorkspacePath,
+            runTurn: { [weak self] prompt, imagePath in
+                guard let self else {
+                    return WorkspaceCommandResult(summary: "CompanionManager is no longer available.", status: .failed)
+                }
+                return await self.runCodexAppServerTurn(
+                    prompt: prompt,
+                    sandboxPolicy: "readOnly",
+                    extraInput: [.localImage(path: imagePath)],
+                    removeLocalImageInputsAfterRun: true
+                )
+            }
         )
     }
 
@@ -874,14 +1033,12 @@ final class CompanionManager: ObservableObject {
 @MainActor
 struct CodexScreenContextRequestRunner {
     private let fileManager: FileManager
-    private let codexExecutor: CodexExecutor
     private let captureCursorScreen: @MainActor () async throws -> CompanionScreenCapture?
     private let isCancelled: () -> Bool
     private let makeTemporaryImageURL: () -> URL
 
     init(
         fileManager: FileManager = .default,
-        codexExecutor: CodexExecutor? = nil,
         captureCursorScreen: @escaping @MainActor () async throws -> CompanionScreenCapture? = {
             try await CompanionScreenCaptureUtility.captureCursorScreenAsJPEG()
         },
@@ -889,7 +1046,6 @@ struct CodexScreenContextRequestRunner {
         makeTemporaryImageURL: (() -> URL)? = nil
     ) {
         self.fileManager = fileManager
-        self.codexExecutor = codexExecutor ?? CodexExecutor()
         self.captureCursorScreen = captureCursorScreen
         self.isCancelled = isCancelled
         self.makeTemporaryImageURL = makeTemporaryImageURL ?? {
@@ -898,7 +1054,11 @@ struct CodexScreenContextRequestRunner {
         }
     }
 
-    func run(prompt: String, workspacePath: String?) async -> WorkspaceCommandResult {
+    func run(
+        prompt: String,
+        workspacePath: String?,
+        runTurn: @escaping @MainActor (String, String) async -> WorkspaceCommandResult
+    ) async -> WorkspaceCommandResult {
         guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !workspacePath.isEmpty else {
             return WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace)
@@ -937,14 +1097,7 @@ struct CodexScreenContextRequestRunner {
                 return WorkspaceCommandResult(summary: "Screen capture cancelled.", status: .cancelled)
             }
 
-            return await codexExecutor.run(
-                .readOnly,
-                prompt: prompt,
-                workspacePath: workspacePath,
-                imagePaths: [imageURL.path],
-                removeImageInputsAfterRun: true,
-                ephemeral: true
-            )
+            return await runTurn(prompt, imageURL.path)
         } catch {
             return WorkspaceCommandResult(
                 summary: "Screen capture failed: \(error.localizedDescription)",

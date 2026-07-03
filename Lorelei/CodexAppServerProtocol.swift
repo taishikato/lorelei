@@ -10,6 +10,7 @@ import Foundation
 enum CodexAppServerInboundEvent: Equatable, Sendable {
     case response(requestID: Int)
     case threadStarted(requestID: Int, threadID: String)
+    case turnStarted(threadID: String, turnID: String)
     case agentMessageDelta(String)
     case toolCallCompleted(status: String, failureMessage: String?, name: String?)
     case turnCompleted(status: String)
@@ -17,7 +18,7 @@ enum CodexAppServerInboundEvent: Equatable, Sendable {
     case approvalRequest(CodexAppServerApprovalRequest)
     case dynamicToolCall(CodexAppServerDynamicToolCallRequest)
     case unsupportedServerRequest(requestID: Int, method: String)
-    case error(String)
+    case error(requestID: Int?, message: String)
     case ignored
 }
 
@@ -56,6 +57,10 @@ struct CodexAppServerDynamicToolCallRequest: Equatable, Sendable {
 enum CodexAppServerDynamicToolContentItem: Equatable, Sendable {
     case text(String)
     case image(dataURL: String)
+}
+
+enum CodexAppServerTurnInputItem: Equatable, Sendable {
+    case localImage(path: String)
 }
 
 struct CodexAppServerDynamicToolCallResult: Equatable, Sendable {
@@ -201,26 +206,57 @@ enum CodexAppServerProtocol {
         id: Int,
         threadID: String,
         prompt: String,
-        cwd: String
+        cwd: String,
+        sandboxPolicy: String? = nil,
+        extraInput: [CodexAppServerTurnInputItem] = []
     ) -> [String: Any] {
-        let input: [[String: Any]] = [
-            [
-                "type": "text",
-                "text": prompt,
-                "text_elements": []
-            ]
+        let input = textUserInput(prompt: prompt) + extraInput.map(turnInputObject)
+        var params: [String: Any] = [
+            "threadId": threadID,
+            "cwd": cwd,
+            "model": CodexAppServerModel.turnModel,
+            "input": input,
+            "approvalPolicy": granularApprovalPolicy(),
+            "approvalsReviewer": "user"
         ]
+        if let sandboxPolicy {
+            // SandboxPolicy is an internally tagged enum in the app-server
+            // schema: {"type": "readOnly"} / {"type": "workspaceWrite"}, not a
+            // bare mode string.
+            params["sandboxPolicy"] = ["type": sandboxPolicy]
+        }
 
         return [
             "id": id,
             "method": "turn/start",
+            "params": params
+        ]
+    }
+
+    static func turnSteerRequest(
+        id: Int,
+        threadID: String,
+        expectedTurnID: String,
+        prompt: String
+    ) -> [String: Any] {
+        [
+            "id": id,
+            "method": "turn/steer",
             "params": [
                 "threadId": threadID,
-                "cwd": cwd,
-                "model": CodexAppServerModel.turnModel,
-                "input": input,
-                "approvalPolicy": granularApprovalPolicy(),
-                "approvalsReviewer": "user"
+                "expectedTurnId": expectedTurnID,
+                "input": textUserInput(prompt: prompt)
+            ]
+        ]
+    }
+
+    static func turnInterruptRequest(id: Int, threadID: String, turnID: String) -> [String: Any] {
+        [
+            "id": id,
+            "method": "turn/interrupt",
+            "params": [
+                "threadId": threadID,
+                "turnId": turnID
             ]
         ]
     }
@@ -339,7 +375,10 @@ enum CodexAppServerProtocol {
         }
 
         if let error = root["error"] as? [String: Any] {
-            return .error((error["message"] as? String) ?? "Codex App Server returned an error.")
+            return .error(
+                requestID: root["id"] as? Int,
+                message: (error["message"] as? String) ?? "Codex App Server returned an error."
+            )
         }
 
         if let id = root["id"] as? Int,
@@ -360,11 +399,18 @@ enum CodexAppServerProtocol {
         case "error":
             if let error = params["error"] as? [String: Any],
                let message = error["message"] as? String {
-                return .error(message)
+                return .error(requestID: root["id"] as? Int, message: message)
             }
-            return .error("Codex App Server returned an error.")
+            return .error(requestID: root["id"] as? Int, message: "Codex App Server returned an error.")
         case "item/agentMessage/delta":
             return .agentMessageDelta((params["delta"] as? String) ?? "")
+        case "turn/started":
+            guard let threadID = params["threadId"] as? String,
+                  let turn = params["turn"] as? [String: Any],
+                  let turnID = turn["id"] as? String else {
+                throw CodexAppServerProtocolError.missingRequiredField
+            }
+            return .turnStarted(threadID: threadID, turnID: turnID)
         case "item/completed":
             return parseCompletedItem(params: params)
         case "turn/completed":
@@ -668,6 +714,26 @@ enum CodexAppServerProtocol {
             }
         }
         return nil
+    }
+
+    private static func textUserInput(prompt: String) -> [[String: Any]] {
+        [
+            [
+                "type": "text",
+                "text": prompt,
+                "text_elements": []
+            ]
+        ]
+    }
+
+    nonisolated private static func turnInputObject(_ item: CodexAppServerTurnInputItem) -> [String: Any] {
+        switch item {
+        case .localImage(let path):
+            return [
+                "type": "localImage",
+                "path": path
+            ]
+        }
     }
 
     private static func granularApprovalPolicy() -> [String: Any] {

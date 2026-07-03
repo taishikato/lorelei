@@ -66,7 +66,7 @@ struct WorkspaceCommandExecutor {
             case .unsupported(let message):
                 return WorkspaceCommandResult(summary: message)
             case .codexDesktopAction:
-                return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
+                return WorkspaceCommandResult(summary: "Codex commands are handled by Codex App Server.")
             case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
                 break
             }
@@ -94,7 +94,7 @@ struct WorkspaceCommandExecutor {
         case .runTests:
             return WorkspaceCommandResult(summary: "No test command configured.", status: .failed)
         case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexDesktopAction:
-            return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
+            return WorkspaceCommandResult(summary: "Codex commands are handled by Codex App Server.")
         case .unsupported(let message):
             return WorkspaceCommandResult(summary: message)
         }
