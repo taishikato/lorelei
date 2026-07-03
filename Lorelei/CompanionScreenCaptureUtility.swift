@@ -48,6 +48,29 @@ enum CompanionScreenCaptureUtility {
         return capture
     }
 
+    static func captureCursorScreenAsPNG(maxDimension: Int) async throws -> Data {
+        let context = try await captureContext()
+
+        let cursorDisplay = context.content.displays.first { display in
+            let frame = context.nsScreenByDisplayID[display.displayID]?.frame ?? display.frame
+            return frame.contains(context.mouseLocation)
+        } ?? context.content.displays[0]
+
+        let capture = try await captureImage(
+            display: cursorDisplay,
+            maxDimension: maxDimension,
+            context: context
+        )
+
+        guard let pngData = NSBitmapImageRep(cgImage: capture.image)
+                .representation(using: .png, properties: [:]) else {
+            throw NSError(domain: "CompanionScreenCapture", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to encode screen capture"])
+        }
+
+        return pngData
+    }
+
     /// Captures all connected displays as JPEG data, labeling each with
     /// whether the user's cursor is on that screen. This gives the AI
     /// full context across multiple monitors.
@@ -144,25 +167,14 @@ enum CompanionScreenCaptureUtility {
                       width: CGFloat(display.width), height: CGFloat(display.height))
         let isCursorScreen = displayFrame.contains(context.mouseLocation)
 
-        let filter = SCContentFilter(display: display, excludingWindows: context.ownAppWindows)
-
-        let configuration = SCStreamConfiguration()
         let maxDimension = 1280
-        let aspectRatio = CGFloat(display.width) / CGFloat(display.height)
-        if display.width >= display.height {
-            configuration.width = maxDimension
-            configuration.height = Int(CGFloat(maxDimension) / aspectRatio)
-        } else {
-            configuration.height = maxDimension
-            configuration.width = Int(CGFloat(maxDimension) * aspectRatio)
-        }
-
-        let cgImage = try await SCScreenshotManager.captureImage(
-            contentFilter: filter,
-            configuration: configuration
+        let capturedImage = try await captureImage(
+            display: display,
+            maxDimension: maxDimension,
+            context: context
         )
 
-        guard let jpegData = NSBitmapImageRep(cgImage: cgImage)
+        guard let jpegData = NSBitmapImageRep(cgImage: capturedImage.image)
                 .representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
             return nil
         }
@@ -183,8 +195,44 @@ enum CompanionScreenCaptureUtility {
             displayWidthInPoints: Int(displayFrame.width),
             displayHeightInPoints: Int(displayFrame.height),
             displayFrame: displayFrame,
-            screenshotWidthInPixels: configuration.width,
-            screenshotHeightInPixels: configuration.height
+            screenshotWidthInPixels: capturedImage.width,
+            screenshotHeightInPixels: capturedImage.height
+        )
+    }
+
+    private struct CapturedImage {
+        let image: CGImage
+        let width: Int
+        let height: Int
+    }
+
+    private static func captureImage(
+        display: SCDisplay,
+        maxDimension: Int,
+        context: CaptureContext
+    ) async throws -> CapturedImage {
+        let filter = SCContentFilter(display: display, excludingWindows: context.ownAppWindows)
+
+        let configuration = SCStreamConfiguration()
+        let targetLongEdge = min(maxDimension, max(display.width, display.height))
+        let aspectRatio = CGFloat(display.width) / CGFloat(display.height)
+        if display.width >= display.height {
+            configuration.width = targetLongEdge
+            configuration.height = Int(CGFloat(targetLongEdge) / aspectRatio)
+        } else {
+            configuration.height = targetLongEdge
+            configuration.width = Int(CGFloat(targetLongEdge) * aspectRatio)
+        }
+
+        let cgImage = try await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: configuration
+        )
+
+        return CapturedImage(
+            image: cgImage,
+            width: configuration.width,
+            height: configuration.height
         )
     }
 }

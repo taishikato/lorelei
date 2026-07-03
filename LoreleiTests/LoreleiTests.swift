@@ -1488,6 +1488,164 @@ struct LoreleiTests {
         #expect(textContent(result)?.contains("no permission") == true)
     }
 
+    @Test func axSerializerAssignsDepthFirstIDsAndFormatsLines() throws {
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: nil,
+            frame: CGRect(x: 0, y: 25, width: 1024, height: 743),
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXGroup",
+                    title: "Toolbar",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: [
+                        DesktopUINode(
+                            role: "AXButton",
+                            title: "Save",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: false,
+                            isFocused: false,
+                            children: []
+                        )
+                    ]
+                ),
+                DesktopUINode(
+                    role: "AXTextArea",
+                    title: nil,
+                    value: "Hello",
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: true,
+                    children: []
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+
+        #expect(result.text == """
+        [e1] AXWindow "Demo" (0,25 1024x743)
+          [e2] AXGroup "Toolbar"
+            [e3] AXButton "Save" disabled
+          [e4] AXTextArea value="Hello" focused
+        """)
+        #expect(result.elementCount == 4)
+        #expect(registry == ["e1": 0, "e2": 1, "e3": 2, "e4": 3])
+    }
+
+    @Test func axSerializerPromotesChildrenOfBareStructuralNodes() throws {
+        let root = DesktopUINode(
+            role: "AXGroup",
+            title: nil,
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXButton",
+                    title: "First",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: []
+                ),
+                DesktopUINode(
+                    role: "AXSplitGroup",
+                    title: nil,
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: [
+                        DesktopUINode(
+                            role: "AXButton",
+                            title: "Second",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+
+        #expect(result.text == """
+        [e1] AXButton "First"
+        [e2] AXButton "Second"
+        """)
+        #expect(result.elementCount == 2)
+        #expect(registry == ["e1": 0, "e2": 1])
+    }
+
+    @Test func axSerializerTruncatesLongValuesAndElementCount() throws {
+        let longValue = String(repeating: "a", count: 90)
+        let children = (0..<401).map { index in
+            DesktopUINode(
+                role: "AXButton",
+                title: "Button \(index)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                children: []
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: longValue,
+            frame: CGRect(x: 10.4, y: 20.6, width: 300.2, height: 200.8),
+            isEnabled: true,
+            isFocused: false,
+            children: children
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let expectedValue = String(repeating: "a", count: 79) + "…"
+
+        #expect(lines.first == "[e1] AXWindow \"Demo\" value=\"\(expectedValue)\" (10,21 300x201)")
+        #expect(lines.last == "… truncated (2 elements omitted)")
+        #expect(result.elementCount == 400)
+        #expect(registry.count == 400)
+        #expect(registry["e1"] == 0)
+        #expect(registry["e400"] == 399)
+        #expect(registry["e401"] == nil)
+    }
+
+    @Test func axExecutorRejectsActionsWithUnknownElementID() async throws {
+        let executor = AXDesktopActionExecutor(hasAccessibilityPermission: { true })
+
+        let outcome = await executor.perform(.press, elementID: "e9")
+
+        #expect(!outcome.success)
+        #expect(outcome.message == DesktopActionError.staleElementID("e9").toolMessage)
+    }
+
+    @Test func axExecutorReportsMissingAccessibilityPermission() async throws {
+        let executor = AXDesktopActionExecutor(hasAccessibilityPermission: { false })
+
+        let result = await executor.snapshot(appName: nil)
+
+        #expect(result == .failure(.accessibilityPermissionMissing))
+    }
+
     @Test func appServerExecutorAnswersMcpElicitationApprovalWithZeroID() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
