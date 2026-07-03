@@ -89,3 +89,32 @@ case turnEnded
 **Tests (locked names):**
 - `companionManagerStopKeepsSessionForNextTurn` - stop mid-turn via interrupt; next utterance reuses the same transport (factory count 1) and sends turn/start on the SAME threadId.
 - `appServerExecutorTimeoutInterruptsBeforeTerminating` - hanging turn; timeout path sends turn/interrupt; transport that then delivers the turn-end frame -> session survives; a transport that stays silent past the grace window -> terminated + invalidated as today.
+
+---
+
+### Task 4 (added 2026-07-03 after user feedback): Conversation history in the expanded toolbar
+
+**Problem:** The expanded panel shows only the current/latest assistant stream. The user wants to always see the whole exchange - their own utterances (including steers) and the assistant responses - to trust that context is preserved.
+
+**Interfaces:**
+
+```swift
+struct ConversationEntry: Identifiable, Equatable, Sendable {
+    enum Role: Equatable, Sendable { case user, assistant }
+    let id: UUID
+    let role: Role
+    var text: String
+}
+// CompanionManager publishes:
+@Published private(set) var conversationLog: [ConversationEntry] = []
+```
+
+**Behavior:**
+- Append a `.user` entry for every accepted utterance: new-turn transcripts AND steered transcripts (steer entries prefixed "↪ " to show they joined the running turn). Unsupported/failed-route transcripts still appear as user entries followed by the failure text as an `.assistant` entry.
+- During a turn, the streaming text updates the LAST `.assistant` entry in place (create it on first delta); on completion the entry ends up holding the final summary (existing streamText/latestResultSummary behavior is unchanged for the capsule).
+- The log survives across turns while the app runs (session resets do NOT clear it - it is the user-facing record); cap at the most recent 200 entries.
+- Expanded panel: replace the single-stream area with a scrolling conversation list (user entries right-aligned or prefixed "You:", assistant entries plain; monospaced-light for assistant, medium for user; auto-scroll to bottom on updates). Stop/approval/footer behavior unchanged.
+
+**Tests (locked names):**
+- `companionManagerLogsUserAndAssistantEntriesAcrossTurns` - two voice turns over one session: log ends `[user, assistant, user, assistant]` with the right texts.
+- `companionManagerLogsSteeredUtteranceIntoConversation` - steer mid-turn: a `.user` entry with the "↪ " prefix appears while the same assistant entry keeps streaming (no new assistant entry created by the steer).
