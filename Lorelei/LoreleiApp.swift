@@ -87,6 +87,17 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     }
 
 #if DEBUG
+    /// Modern AppKit delivers scheme opens here; the kAEGetURL handler below
+    /// stays as a fallback for Apple-Event senders.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            guard let prompt = LoreleiDebugURLHandler.debugPrompt(fromURL: url) else { continue }
+            companionManager.handleDebugPrompt(prompt)
+        }
+    }
+#endif
+
+#if DEBUG
     @objc private func handleGetURLEvent(
         _ event: NSAppleEventDescriptor,
         withReplyEvent replyEvent: NSAppleEventDescriptor
