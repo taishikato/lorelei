@@ -138,8 +138,8 @@ struct LoreleiTests {
         #expect(call.prompt.contains("Codex App Server"))
         #expect(call.prompt.contains("chatgpt.com"))
         #expect(call.prompt.contains("chrome browser"))
-        #expect(call.prompt.contains("Computer Use plugin"))
-        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
         #expect(call.cwd == FileManager.default.homeDirectoryForCurrentUser.path)
         #expect(manager.latestResultSummary == "Opened through App Server.")
     }
@@ -169,8 +169,8 @@ struct LoreleiTests {
         #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
-        #expect(call.prompt.contains("Computer Use plugin"))
-        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
         #expect(call.prompt.contains("use computer use to open TextEdit and type hello"))
     }
 
@@ -202,8 +202,8 @@ struct LoreleiTests {
         #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
-        #expect(call.prompt.contains("Computer Use plugin"))
-        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
         #expect(call.prompt.contains("use computer use to open TextEdit"))
     }
 
@@ -451,9 +451,11 @@ struct LoreleiTests {
         let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open TextEdit and type hello")
 
         #expect(prompt.contains("Codex App Server"))
-        #expect(prompt.contains("Computer Use plugin for desktop control"))
-        #expect(prompt.contains("lorelei.foreground_app"))
-        #expect(prompt.contains("Do not rely on caller-side local shortcuts."))
+        #expect(prompt.contains("lorelei.desktop_snapshot"))
+        #expect(prompt.contains("lorelei.desktop_action"))
+        #expect(prompt.contains("lorelei.set_text"))
+        #expect(prompt.contains("lorelei.screenshot"))
+        #expect(prompt.contains("Do not simulate keyboard shortcuts."))
         #expect(prompt.contains("Do not commit changes."))
         #expect(!prompt.contains("non-interactive codex exec"))
         #expect(prompt.contains("open TextEdit and type hello"))
@@ -918,40 +920,11 @@ struct LoreleiTests {
         #expect(params["model"] as? String == "gpt-5.5")
     }
 
-    @Test func appServerTurnStartCanAttachComputerUseSkillInput() throws {
-        let skillPath = "/Users/example/.codex/plugins/computer-use/skills/computer-use/SKILL.md"
-        let request = CodexAppServerProtocol.turnStartRequest(
-            id: 3,
-            threadID: "thread-1",
-            prompt: "click submit",
-            cwd: "/Users/example",
-            skillInputs: [
-                CodexAppServerSkillInput(
-                    name: "computer-use:computer-use",
-                    path: skillPath
-                )
-            ]
-        )
-        let params = try #require(request["params"] as? [String: Any])
-        let input = try #require(params["input"] as? [[String: Any]])
-
-        #expect(input.count == 2)
-        #expect(input[0]["type"] as? String == "text")
-        #expect(input[1]["type"] as? String == "skill")
-        #expect(input[1]["name"] as? String == "computer-use:computer-use")
-        #expect(input[1]["path"] as? String == skillPath)
-    }
-
-    @Test func appServerThreadStartEnablesComputerUsePluginForDesktopActions() throws {
+    @Test func appServerThreadStartSendsNoPluginConfig() throws {
         let request = CodexAppServerProtocol.threadStartRequest(id: 2, cwd: "/Users/example")
         let params = try #require(request["params"] as? [String: Any])
-        let config = try #require(params["config"] as? [String: Any])
-        let plugins = try #require(config["plugins"] as? [String: Any])
-        let computerUsePlugin = try #require(plugins["computer-use@openai-bundled"] as? [String: Any])
-        let chromePluginID = "chrome@" + "openai-bundled"
 
-        #expect(plugins[chromePluginID] == nil)
-        #expect(computerUsePlugin["enabled"] as? Bool == true)
+        #expect(params["config"] == nil)
     }
 
     @Test func appServerThreadStartCanRegisterDynamicTools() throws {
@@ -1063,56 +1036,6 @@ struct LoreleiTests {
         #expect(recorder.events.isEmpty)
     }
 
-    @Test func appServerComputerUseSkillResolverFindsBundledMarketplaceSkill() throws {
-        let homeURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: homeURL) }
-        let skillURL = homeURL
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent(".tmp", isDirectory: true)
-            .appendingPathComponent("bundled-marketplaces", isDirectory: true)
-            .appendingPathComponent("openai-bundled", isDirectory: true)
-            .appendingPathComponent("plugins", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("skills", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("SKILL.md")
-        try FileManager.default.createDirectory(
-            at: skillURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try "Computer Use".write(to: skillURL, atomically: true, encoding: .utf8)
-
-        let input = try #require(CodexAppServerSkillInputResolver.computerUseSkillInput(homeDirectoryURL: homeURL))
-
-        #expect(input.name == "computer-use:computer-use")
-        #expect(input.path == skillURL.path)
-    }
-
-    @Test func appServerComputerUseSkillResolverFallsBackToPluginCacheSkill() throws {
-        let homeURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: homeURL) }
-        let skillURL = homeURL
-            .appendingPathComponent(".codex", isDirectory: true)
-            .appendingPathComponent("plugins", isDirectory: true)
-            .appendingPathComponent("cache", isDirectory: true)
-            .appendingPathComponent("openai-bundled", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("1.0.799", isDirectory: true)
-            .appendingPathComponent("skills", isDirectory: true)
-            .appendingPathComponent("computer-use", isDirectory: true)
-            .appendingPathComponent("SKILL.md")
-        try FileManager.default.createDirectory(
-            at: skillURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try "Computer Use".write(to: skillURL, atomically: true, encoding: .utf8)
-
-        let input = try #require(CodexAppServerSkillInputResolver.computerUseSkillInput(homeDirectoryURL: homeURL))
-
-        #expect(input.name == "computer-use:computer-use")
-        #expect(input.path == skillURL.path)
-    }
-
     @Test func codexExecutorReportsMissingWorkspace() async throws {
         let recorder = CodexCommandRecorder(finalMessage: "Should not run")
         let executor = CodexExecutor(
@@ -1201,7 +1124,7 @@ struct LoreleiTests {
 
     @Test func appServerProtocolParsesMcpElicitationRequestAsApproval() throws {
         let line = """
-        {"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"computer-use","mode":"form","_meta":null,"message":"Allow Computer Use to inspect Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}
+        {"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"example-server","mode":"form","_meta":null,"message":"Allow Codex to inspect Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}
         """
 
         let event = try CodexAppServerProtocol.parseInboundLine(line)
@@ -1210,8 +1133,8 @@ struct LoreleiTests {
             CodexAppServerApprovalRequest(
                 requestID: 0,
                 kind: .mcpElicitation,
-                title: "Computer Use approval",
-                detail: "Allow Computer Use to inspect Google Chrome?\nServer: computer-use",
+                title: "MCP server approval",
+                detail: "Allow Codex to inspect Google Chrome?\nServer: example-server",
                 acceptPayload: .mcpElicitationAccept,
                 declinePayload: .mcpElicitationDecline
             )
@@ -1650,7 +1573,7 @@ struct LoreleiTests {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"computer-use","mode":"form","_meta":null,"message":"Allow Codex to use Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}"#,
+            #"{"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"example-server","mode":"form","_meta":null,"message":"Allow Codex to use Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}"#,
             #"{"method":"item/agentMessage/delta","params":{"delta":"Approved and done"}}"#,
             #"{"method":"turn/completed","params":{"status":"completed"}}"#
         ])
@@ -1709,7 +1632,7 @@ struct LoreleiTests {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"mcpToolCall","status":"failed","server":"computer-use","tool":"get_app_state","result":{"content":[{"type":"text","text":"Computer Use server error -10005: cgWindowNotFound"}],"isError":true}}}}"#,
+            #"{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"mcpToolCall","status":"failed","server":"example-server","tool":"get_app_state","result":{"content":[{"type":"text","text":"Example server error"}],"isError":true}}}}"#,
             #"{"method":"item/agentMessage/delta","params":{"delta":"I could not read the Google Chrome window."}}"#,
             #"{"method":"turn/completed","params":{"status":"completed"}}"#
         ])
@@ -1771,42 +1694,6 @@ struct LoreleiTests {
         #expect(result.status == .succeeded)
         #expect(result.summary == "Done")
         #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
-    }
-
-    @Test func appServerExecutorAttachesComputerUseSkillInputToDesktopTurn() async throws {
-        let skillPath = "/Users/example/.codex/plugins/computer-use/skills/computer-use/SKILL.md"
-        let transport = FakeCodexAppServerTransport(lines: [
-            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
-            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"method":"turn/completed","params":{"status":"completed"}}"#
-        ])
-        let executor = CodexAppServerExecutor(
-            makeTransport: { transport },
-            skillInputResolver: {
-                [
-                    CodexAppServerSkillInput(
-                        name: "computer-use:computer-use",
-                        path: skillPath
-                    )
-                ]
-            },
-            approvalHandler: { _ in .cancel }
-        )
-
-        _ = await executor.runDesktopAction(prompt: "click submit", cwd: "/Users/example")
-
-        let sentMessages = try await transport.sentLines.map { line in
-            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
-        }
-        let root = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
-        let params = try #require(root["params"] as? [String: Any])
-        let input = try #require(params["input"] as? [[String: Any]])
-
-        #expect(input.contains { item in
-            item["type"] as? String == "skill"
-                && item["name"] as? String == "computer-use:computer-use"
-                && item["path"] as? String == skillPath
-        })
     }
 
     @Test func appServerExecutorAnswersToolUserInputApproval() async throws {
