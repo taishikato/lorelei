@@ -122,4 +122,4 @@ The three seams to know:
 
 ## Acknowledgements
 
-Lorelei started from [farza](https://github.com/farzaa)'s clicky (learning buddy) codebase; see `THIRD_PARTY_NOTICES.md` for the original license.
+Lorelei started from [farza](https://github.com/farzaa)'s clicky (learning buddy) codebase.
