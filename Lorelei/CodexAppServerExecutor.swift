@@ -99,12 +99,11 @@ protocol CodexAppServerTransporting: Sendable {
 enum CodexAppServerLaunch {
     static func make(
         codexExecutableURL: URL,
-        listenURL: String = "stdio://",
         fileManager: FileManager = .default
     ) -> (executableURL: URL, arguments: [String]) {
         CodexExecutor.makeLaunchCommand(
             codexExecutableURL: codexExecutableURL,
-            codexArguments: ["app-server", "--listen", listenURL],
+            codexArguments: ["app-server"],
             fileManager: fileManager
         )
     }
@@ -124,7 +123,7 @@ struct CodexAppServerExecutor {
         turnTimeoutSeconds: TimeInterval = 120,
         preflight: @escaping CodexAppServerPreflight = { _ in .completed("No preflight configured.") },
         makeTransport: @escaping () async throws -> CodexAppServerTransporting = {
-            try await CodexAppServerProcessTransport.make()
+            try await CodexAppServerStdioTransport.make()
         },
         skillInputResolver: @escaping () -> [CodexAppServerSkillInput] = {
             CodexAppServerSkillInputResolver.desktopActionSkillInputs()
@@ -468,175 +467,76 @@ private final class CodexAppServerPreflightRaceState: @unchecked Sendable {
     }
 }
 
-private actor CodexAppServerProcessTransport: CodexAppServerTransporting {
+actor CodexAppServerStdioTransport: CodexAppServerTransporting {
     private let process: Process
-    private let standardInput: FileHandle
-    private let standardOutput: FileHandle
-    private let standardError: FileHandle
-    private let webSocketTask: URLSessionWebSocketTask
-    private var outputDrainTask: Task<Void, Never>?
-    private var errorDrainTask: Task<Void, Never>?
+    private let stdinHandle: FileHandle
+    private let stdoutReader: CodexAppServerLineReader
 
     static func make(
+        codexExecutableURL: URL? = nil,
         fileManager: FileManager = .default,
         defaults: UserDefaults = .standard
-    ) async throws -> CodexAppServerProcessTransport {
-        guard let codexExecutableURL = CodexExecutableLocator(
+    ) async throws -> CodexAppServerStdioTransport {
+        guard let codexExecutableURL = codexExecutableURL ?? CodexExecutableLocator(
             fileManager: fileManager,
             defaults: defaults
         ).resolve() else {
-            throw CodexAppServerProcessTransportError.missingCodexExecutable
+            throw CodexAppServerStdioTransportError.missingCodexExecutable
         }
-
-        var lastError: Error?
-        for _ in 0..<3 {
-            do {
-                return try await make(
-                    codexExecutableURL: codexExecutableURL,
-                    fileManager: fileManager
-                )
-            } catch {
-                lastError = error
-            }
-        }
-
-        throw lastError ?? CodexAppServerProcessTransportError.startupTimedOut
-    }
-
-    private static func make(
-        codexExecutableURL: URL,
-        fileManager: FileManager
-    ) async throws -> CodexAppServerProcessTransport {
-        let port = Int.random(in: 45_000...60_000)
-        let listenURL = "ws://127.0.0.1:\(port)"
         let launch = CodexAppServerLaunch.make(
             codexExecutableURL: codexExecutableURL,
-            listenURL: listenURL,
             fileManager: fileManager
         )
-        let process = Process()
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
+        return try await make(executableURL: launch.executableURL, arguments: launch.arguments)
+    }
 
-        process.executableURL = launch.executableURL
-        process.arguments = launch.arguments
-        process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
+    static func make(executableURL: URL, arguments: [String]) async throws -> CodexAppServerStdioTransport {
+        let process = Process()
+        let stdinPipe = Pipe()
+        let stdoutPipe = Pipe()
+
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         process.environment = WorkspaceProcessRunner.launchEnvironment()
-        process.standardInput = inputPipe
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        // stderr is intentionally discarded (codex logs startup notices there).
+        // Never drain it with FileHandle.bytes: Foundation serializes all
+        // AsyncBytes reads through one shared IO executor, so a blocked stderr
+        // read would also block the stdout protocol reads and deadlock turns.
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
 
-        let standardOutput = outputPipe.fileHandleForReading
-        let standardError = errorPipe.fileHandleForReading
-        let outputDrainTask = drain(standardOutput)
-        let errorDrainTask = drain(standardError)
-
-        do {
-            try await waitUntilReady(port: port)
-        } catch {
-            outputDrainTask.cancel()
-            errorDrainTask.cancel()
-            try? inputPipe.fileHandleForWriting.close()
-            try? standardOutput.close()
-            try? standardError.close()
-            if process.isRunning {
-                process.terminate()
-            }
-            throw error
-        }
-
-        let webSocketTask = URLSession.shared.webSocketTask(
-            with: URL(string: listenURL)!
-        )
-        webSocketTask.resume()
-
-        return CodexAppServerProcessTransport(
+        return CodexAppServerStdioTransport(
             process: process,
-            standardInput: inputPipe.fileHandleForWriting,
-            standardOutput: standardOutput,
-            standardError: standardError,
-            webSocketTask: webSocketTask,
-            outputDrainTask: outputDrainTask,
-            errorDrainTask: errorDrainTask
+            stdinHandle: stdinPipe.fileHandleForWriting,
+            stdoutHandle: stdoutPipe.fileHandleForReading
         )
     }
 
     private init(
         process: Process,
-        standardInput: FileHandle,
-        standardOutput: FileHandle,
-        standardError: FileHandle,
-        webSocketTask: URLSessionWebSocketTask,
-        outputDrainTask: Task<Void, Never>,
-        errorDrainTask: Task<Void, Never>
+        stdinHandle: FileHandle,
+        stdoutHandle: FileHandle
     ) {
         self.process = process
-        self.standardInput = standardInput
-        self.standardOutput = standardOutput
-        self.standardError = standardError
-        self.webSocketTask = webSocketTask
-        self.outputDrainTask = outputDrainTask
-        self.errorDrainTask = errorDrainTask
-    }
-
-    private static func drain(_ fileHandle: FileHandle) -> Task<Void, Never> {
-        Task.detached {
-            do {
-                for try await _ in fileHandle.bytes {}
-            } catch {}
-        }
-    }
-
-    private static func waitUntilReady(port: Int) async throws {
-        let deadline = Date().addingTimeInterval(5)
-        let readyURL = URL(string: "http://127.0.0.1:\(port)/readyz")!
-
-        while Date() < deadline {
-            do {
-                var request = URLRequest(url: readyURL)
-                request.timeoutInterval = 0.2
-                let (_, response) = try await URLSession.shared.data(for: request)
-                if (response as? HTTPURLResponse)?.statusCode == 200 {
-                    return
-                }
-            } catch {}
-
-            try await Task.sleep(for: .milliseconds(100))
-        }
-
-        throw CodexAppServerProcessTransportError.startupTimedOut
+        self.stdinHandle = stdinHandle
+        self.stdoutReader = CodexAppServerLineReader(stdoutHandle: stdoutHandle)
     }
 
     func send(line: String) async throws {
-        let message = line.trimmingCharacters(in: .newlines)
-        try await webSocketTask.send(.string(message))
+        let payload = line.hasSuffix("\n") ? line : line + "\n"
+        try stdinHandle.write(contentsOf: Data(payload.utf8))
     }
 
     func nextLine() async throws -> String? {
-        let message = try await webSocketTask.receive()
-        switch message {
-        case .string(let line):
-            return line
-        case .data(let data):
-            guard let line = String(data: data, encoding: .utf8) else {
-                throw CodexAppServerProtocolError.invalidUTF8
-            }
-            return line
-        @unknown default:
-            throw CodexAppServerProcessTransportError.invalidWebSocketMessage
-        }
+        try await stdoutReader.next()
     }
 
     func terminate() async {
-        outputDrainTask?.cancel()
-        errorDrainTask?.cancel()
-        webSocketTask.cancel(with: .goingAway, reason: nil)
-        try? standardInput.close()
-        try? standardOutput.close()
-        try? standardError.close()
+        try? stdinHandle.close()
 
         if process.isRunning {
             process.terminate()
@@ -644,19 +544,25 @@ private actor CodexAppServerProcessTransport: CodexAppServerTransporting {
     }
 }
 
-private enum CodexAppServerProcessTransportError: Error, LocalizedError {
+private final class CodexAppServerLineReader: @unchecked Sendable {
+    nonisolated(unsafe) private var lines: AsyncLineSequence<FileHandle.AsyncBytes>.AsyncIterator
+
+    nonisolated init(stdoutHandle: FileHandle) {
+        self.lines = stdoutHandle.bytes.lines.makeAsyncIterator()
+    }
+
+    nonisolated func next() async throws -> String? {
+        try await lines.next()
+    }
+}
+
+private enum CodexAppServerStdioTransportError: Error, LocalizedError {
     case missingCodexExecutable
-    case startupTimedOut
-    case invalidWebSocketMessage
 
     var errorDescription: String? {
         switch self {
         case .missingCodexExecutable:
             return "Codex executable was not found."
-        case .startupTimedOut:
-            return "Codex App Server did not become ready."
-        case .invalidWebSocketMessage:
-            return "Codex App Server sent an unsupported WebSocket message."
         }
     }
 }

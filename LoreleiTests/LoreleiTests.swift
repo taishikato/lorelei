@@ -970,16 +970,56 @@ struct LoreleiTests {
         #expect(locator.resolve() == codexURL)
     }
 
-    @Test func appServerLaunchCanUseWebSocketTransport() async throws {
+    @Test func appServerLaunchUsesDefaultStdioTransport() async throws {
         let codexURL = URL(fileURLWithPath: "/usr/local/bin/codex")
 
         let launch = CodexAppServerLaunch.make(
-            codexExecutableURL: codexURL,
-            listenURL: "ws://127.0.0.1:48123"
+            codexExecutableURL: codexURL
         )
 
         #expect(launch.executableURL == codexURL)
-        #expect(launch.arguments == ["app-server", "--listen", "ws://127.0.0.1:48123"])
+        #expect(launch.arguments == ["app-server"])
+    }
+
+    @Test func stdioTransportRoundTripsOneJSONLineThroughChildProcess() async throws {
+        let transport = try await CodexAppServerStdioTransport.make(
+            executableURL: URL(fileURLWithPath: "/bin/cat"),
+            arguments: []
+        )
+
+        try await transport.send(line: "{\"id\":1,\"method\":\"initialize\"}")
+        let echoed = try await transport.nextLine()
+
+        #expect(echoed == "{\"id\":1,\"method\":\"initialize\"}")
+        await transport.terminate()
+    }
+
+    @Test func stdioTransportAppendsExactlyOneNewlinePerSend() async throws {
+        let transport = try await CodexAppServerStdioTransport.make(
+            executableURL: URL(fileURLWithPath: "/bin/cat"),
+            arguments: []
+        )
+
+        try await transport.send(line: "{\"a\":1}\n")
+        try await transport.send(line: "{\"b\":2}")
+        let first = try await transport.nextLine()
+        let second = try await transport.nextLine()
+
+        #expect(first == "{\"a\":1}")
+        #expect(second == "{\"b\":2}")
+        await transport.terminate()
+    }
+
+    @Test func stdioTransportReturnsNilAfterChildExits() async throws {
+        let transport = try await CodexAppServerStdioTransport.make(
+            executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+            arguments: []
+        )
+
+        let line = try await transport.nextLine()
+
+        #expect(line == nil)
+        await transport.terminate()
     }
 
     @Test func appServerInitializedNotificationMatchesGeneratedProtocolShape() throws {

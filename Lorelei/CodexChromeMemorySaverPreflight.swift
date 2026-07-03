@@ -348,8 +348,9 @@ if (!portLine || !browserPathLine) {
   throw new Error('DevToolsActivePort is incomplete');
 }
 
-const browserURL = `ws://127.0.0.1:${portLine}${browserPathLine}`;
-const cdp = await CDPWebSocket.connect(browserURL);
+const browserURL = new URL(browserPathLine, `http://127.0.0.1:${portLine}`);
+browserURL.protocol = 'ws:';
+const cdp = await CDPWebSocket.connect(browserURL.toString());
 
 try {
   const targetResult = await cdp.send('Target.getTargets');
