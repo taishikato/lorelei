@@ -18,7 +18,7 @@ enum CodexAppServerInboundEvent: Equatable, Sendable {
     case approvalRequest(CodexAppServerApprovalRequest)
     case dynamicToolCall(CodexAppServerDynamicToolCallRequest)
     case unsupportedServerRequest(requestID: Int, method: String)
-    case error(String)
+    case error(requestID: Int?, message: String)
     case ignored
 }
 
@@ -351,7 +351,10 @@ enum CodexAppServerProtocol {
         }
 
         if let error = root["error"] as? [String: Any] {
-            return .error((error["message"] as? String) ?? "Codex App Server returned an error.")
+            return .error(
+                requestID: root["id"] as? Int,
+                message: (error["message"] as? String) ?? "Codex App Server returned an error."
+            )
         }
 
         if let id = root["id"] as? Int,
@@ -372,9 +375,9 @@ enum CodexAppServerProtocol {
         case "error":
             if let error = params["error"] as? [String: Any],
                let message = error["message"] as? String {
-                return .error(message)
+                return .error(requestID: root["id"] as? Int, message: message)
             }
-            return .error("Codex App Server returned an error.")
+            return .error(requestID: root["id"] as? Int, message: "Codex App Server returned an error.")
         case "item/agentMessage/delta":
             return .agentMessageDelta((params["delta"] as? String) ?? "")
         case "turn/started":

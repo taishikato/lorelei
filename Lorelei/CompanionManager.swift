@@ -107,6 +107,8 @@ final class CompanionManager: ObservableObject {
     private var codexAppServerExecutor: CodexAppServerExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var liveCodexAppServerTransport: CodexAppServerTransporting?
+    private var activeTurn: (threadID: String, turnID: String)?
+    private var outstandingSteerTranscripts: [Int: String] = [:]
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -235,6 +237,8 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         currentResponseTask = nil
         _ = resolvePendingCodexAppServerApproval(.cancel)
+        activeTurn = nil
+        outstandingSteerTranscripts.removeAll()
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
         shortcutTransitionCancellable?.cancel()
@@ -466,6 +470,8 @@ final class CompanionManager: ObservableObject {
             await invalidateLiveCodexAppServerSessionWhenReady()
         }
         currentResponseTask?.cancel()
+        activeTurn = nil
+        outstandingSteerTranscripts.removeAll()
         cancelPendingCodexAppServerApprovalForStop()
         finishRun(with: WorkspaceCommandResult(summary: "Stopped.", status: .failed))
     }
@@ -485,6 +491,34 @@ final class CompanionManager: ObservableObject {
 
     /// Routes final transcripts to Lorelei's current local workspace and Codex actions.
     private func handleFinalTranscriptLocally(_ transcript: String) {
+        if let activeTurn,
+           let liveCodexAppServerTransport,
+           let codexAppServerExecutor {
+            Task { @MainActor in
+                let requestID = await codexAppServerExecutor.reserveSteerRequestID()
+                outstandingSteerTranscripts[requestID] = transcript
+                do {
+                    try await codexAppServerExecutor.sendSteerRequest(
+                        id: requestID,
+                        threadID: activeTurn.threadID,
+                        expectedTurnID: activeTurn.turnID,
+                        prompt: transcript,
+                        transport: liveCodexAppServerTransport
+                    )
+                    recordDebugEvent("Steered: \(Self.conciseDebugLine(transcript))")
+                } catch {
+                    outstandingSteerTranscripts.removeValue(forKey: requestID)
+                    recordDebugEvent("Steer failed - starting a new turn")
+                    routeFinalTranscriptAsNewTurn(transcript)
+                }
+            }
+            return
+        }
+
+        routeFinalTranscriptAsNewTurn(transcript)
+    }
+
+    private func routeFinalTranscriptAsNewTurn(_ transcript: String) {
         currentResponseTask?.cancel()
         _ = resolvePendingCodexAppServerApproval(.cancel)
         lastTranscript = transcript
@@ -771,8 +805,17 @@ final class CompanionManager: ObservableObject {
 
     private func handleCodexAppServerProgress(_ progress: CodexAppServerTurnProgress) {
         switch progress {
-        case .turnStarted, .turnEnded:
-            break
+        case .turnStarted(let threadID, let turnID):
+            activeTurn = (threadID: threadID, turnID: turnID)
+        case .turnEnded:
+            activeTurn = nil
+            outstandingSteerTranscripts.removeAll()
+        case .steerFailed(let requestID, _):
+            guard let transcript = outstandingSteerTranscripts.removeValue(forKey: requestID) else {
+                return
+            }
+            recordDebugEvent("Steer failed - starting a new turn")
+            routeFinalTranscriptAsNewTurn(transcript)
         case .agentMessageDelta(let delta):
             streamText += delta
         case .toolCallStarted(let name):
@@ -836,6 +879,8 @@ final class CompanionManager: ObservableObject {
         voiceState = .idle
         currentResponseTask = nil
         liveCodexAppServerTransport = nil
+        activeTurn = nil
+        outstandingSteerTranscripts.removeAll()
         scheduleTransientHideIfNeeded()
     }
 

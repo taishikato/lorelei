@@ -214,7 +214,7 @@ actor CodexAppServerSessionStore {
                 return session
             case .unsupportedServerRequest(_, let method):
                 throw CodexAppServerSessionStoreError.unsupportedClientMethod(method)
-            case .error(let message):
+            case .error(_, let message):
                 throw CodexAppServerSessionStoreError.serverError(message)
             case .ignored:
                 break
@@ -326,9 +326,26 @@ private struct CodexAppServerTurnAttemptResult {
     }
 }
 
+private actor CodexAppServerSteerRequestTracker {
+    private var requestIDs = Set<Int>()
+
+    func insert(_ requestID: Int) {
+        requestIDs.insert(requestID)
+    }
+
+    func remove(_ requestID: Int) {
+        requestIDs.remove(requestID)
+    }
+
+    func consume(_ requestID: Int) -> Bool {
+        requestIDs.remove(requestID) != nil
+    }
+}
+
 final class CodexAppServerExecutor {
     private let turnTimeoutSeconds: TimeInterval
     private let sessionStore: CodexAppServerSessionStore
+    private let steerRequestTracker = CodexAppServerSteerRequestTracker()
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
     private let dynamicToolHandler: CodexAppServerDynamicToolHandler
     private let traceHandler: CodexAppServerTraceHandler
@@ -403,6 +420,36 @@ final class CodexAppServerExecutor {
 
     func invalidateSession() async {
         await sessionStore.invalidate()
+    }
+
+    func reserveSteerRequestID() async -> Int {
+        let requestID = await sessionStore.nextRequestID()
+        await steerRequestTracker.insert(requestID)
+        return requestID
+    }
+
+    func sendSteerRequest(
+        id requestID: Int,
+        threadID: String,
+        expectedTurnID: String,
+        prompt: String,
+        transport: CodexAppServerTransporting
+    ) async throws {
+        do {
+            try await send(
+                CodexAppServerProtocol.turnSteerRequest(
+                    id: requestID,
+                    threadID: threadID,
+                    expectedTurnID: expectedTurnID,
+                    prompt: prompt
+                ),
+                to: transport,
+                traceBuffer: CodexAppServerTraceBuffer()
+            )
+        } catch {
+            await steerRequestTracker.remove(requestID)
+            throw error
+        }
     }
 
     private func runDesktopActionAttempt(
@@ -548,7 +595,14 @@ final class CodexAppServerExecutor {
                             status: .failed
                         )
                     )
-                case .error(let message):
+                case .error(let requestID?, let message):
+                    if await steerRequestTracker.consume(requestID) {
+                        progressHandler(.steerFailed(requestID: requestID, message: message))
+                        continue
+                    }
+                    await sessionStore.invalidate()
+                    return .finished(WorkspaceCommandResult(summary: "Codex App Server error: \(message)", status: .failed))
+                case .error(nil, let message):
                     await sessionStore.invalidate()
                     return .finished(WorkspaceCommandResult(summary: "Codex App Server error: \(message)", status: .failed))
                 case .threadWaitingOnApproval(let waitingOnApproval):
@@ -683,7 +737,10 @@ nonisolated private func codexAppServerTraceDetail(for event: CodexAppServerInbo
         return "dynamicToolCall#\(request.traceIdentifier)"
     case .unsupportedServerRequest(let requestID, let method):
         return "unsupportedServerRequest#\(requestID):\(method)"
-    case .error(let message):
+    case .error(let requestID, let message):
+        if let requestID {
+            return "error#\(requestID):\(message)"
+        }
         return "error:\(message)"
     case .ignored:
         return "ignored"

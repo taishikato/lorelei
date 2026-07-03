@@ -2393,6 +2393,103 @@ struct LoreleiTests {
         #expect(audioFeedback.events.last?.spokenSummary == "Hello")
     }
 
+    @Test func companionManagerSteersUtteranceIntoRunningTurn() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerSteerRunningTurnTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerSteerRunningTurnTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Working"}}"#
+        ])
+        let audioFeedback = BuddyAudioFeedbackRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60),
+            audioFeedback: audioFeedback
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<40 {
+            if manager.streamText == "Working" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.runStatus == .working("Thinking…"))
+        #expect(manager.streamText == "Working")
+
+        manager.handleFinalTranscriptForTesting("actually the other window")
+        for _ in 0..<40 {
+            let sentMessages = try await transport.sentJSONMessages()
+            if sentMessages.contains(where: { $0["method"] as? String == "turn/steer" }) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let steer = try #require(sentMessages.first { $0["method"] as? String == "turn/steer" })
+        let steerParams = try #require(steer["params"] as? [String: Any])
+        let steerInput = try #require(steerParams["input"] as? [[String: Any]])
+
+        #expect(steerParams["threadId"] as? String == "thread-1")
+        #expect(steerParams["expectedTurnId"] as? String == "turn-9")
+        #expect(steerInput.first?["text"] as? String == "actually the other window")
+        #expect(sentMessages.filter { $0["method"] as? String == "turn/start" }.count == 1)
+        #expect(manager.runStatus == .working("Thinking…"))
+        #expect(manager.streamText == "Working")
+        #expect(audioFeedback.events.isEmpty)
+    }
+
+    @Test func companionManagerStartsNewTurnWhenIdle() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerIdleStartsNewTurnTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerIdleStartsNewTurnTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-10","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<40 {
+            if manager.runStatus == .finished(success: true) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(manager.runStatus == .finished(success: true))
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect Safari")
+        for _ in 0..<40 {
+            let sentMessages = try await transport.sentJSONMessages()
+            if sentMessages.filter({ $0["method"] as? String == "turn/start" }).count == 2 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        #expect(sentMessages.filter { $0["method"] as? String == "turn/start" }.count == 2)
+        #expect(!sentMessages.contains { $0["method"] as? String == "turn/steer" })
+    }
+
     private func isOrderedSubsequence(
         _ expected: [LoreleiRunStatus],
         of recorded: [LoreleiRunStatus]
@@ -2886,17 +2983,26 @@ private actor HangingCodexAppServerTransport: CodexAppServerTransporting {
 
 private actor HangingAfterLinesCodexAppServerTransport: CodexAppServerTransporting {
     private var lines: [String]
+    private var recordedSentLines: [String] = []
     private var terminated = false
 
     init(lines: [String]) {
         self.lines = lines
     }
 
+    func sentJSONMessages() throws -> [[String: Any]] {
+        try recordedSentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+    }
+
     var didTerminate: Bool {
         terminated
     }
 
-    func send(line: String) async throws {}
+    func send(line: String) async throws {
+        recordedSentLines.append(line.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
 
     func nextLine() async throws -> String? {
         if !lines.isEmpty {
