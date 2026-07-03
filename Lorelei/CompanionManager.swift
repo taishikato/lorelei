@@ -74,7 +74,7 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var hasMicrophonePermission = false
     @Published private(set) var hasScreenContentPermission = false
     @Published private(set) var latestResultSummary: String?
-    @Published private(set) var pendingConfirmationTitle: String?
+    @Published private(set) var pendingApprovalTitle: String?
     @Published private(set) var debugLog = CompanionDebugLog()
 
     /// Screen location (global AppKit coords) of a detected UI element the
@@ -94,12 +94,10 @@ final class CompanionManager: ObservableObject {
     let workspaceSettingsStore: WorkspaceSettingsStore
     private let commandRouter = LoreleiCommandRouter()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
-    private let codexExecutor = CodexExecutor()
+    private let codexExecutor: CodexExecutor
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
-    private let chromeMemorySaverScriptRunner: ChromeMemorySaverScriptRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
-    private var pendingConfirmation = PendingCommandConfirmation()
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
@@ -132,15 +130,15 @@ final class CompanionManager: ObservableObject {
         speechOutput: SpeechOutputing? = nil,
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
-        chromeMemorySaverScriptRunner: ChromeMemorySaverScriptRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
+        codexExecutor: CodexExecutor? = nil,
         overlayWindowManager: (any OverlayWindowManaging)? = nil
     ) {
         self.speechOutput = speechOutput ?? SpeechOutputClient()
         self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
-        self.chromeMemorySaverScriptRunner = chromeMemorySaverScriptRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
+        self.codexExecutor = codexExecutor ?? CodexExecutor()
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
     }
 
@@ -201,30 +199,12 @@ final class CompanionManager: ObservableObject {
         recordDebugEvent("Result: \(Self.conciseDebugLine(summary))")
     }
 
-    func setPendingConfirmationTitle(_ title: String?) {
-        pendingConfirmationTitle = title
+    func acceptPendingApproval() {
+        _ = resolvePendingCodexAppServerApproval(.accept)
     }
 
-    func confirmPendingCommand() {
-        if resolvePendingCodexAppServerApproval(.accept) {
-            return
-        }
-
-        guard let action = pendingConfirmation.confirm() else { return }
-        pendingConfirmationTitle = nil
-        recordDebugEvent("Confirmed: \(action.debugLabel)")
-        executeConfirmedCommand(action)
-    }
-
-    func cancelPendingCommand() {
-        if resolvePendingCodexAppServerApproval(.cancel) {
-            updateLatestResultSummary("Cancelled.")
-            return
-        }
-
-        pendingConfirmation.cancel()
-        pendingConfirmationTitle = nil
-        recordDebugEvent("Cancelled pending confirmation")
+    func cancelPendingApproval() {
+        guard resolvePendingCodexAppServerApproval(.cancel) else { return }
         updateLatestResultSummary("Cancelled.")
     }
 
@@ -461,8 +441,6 @@ final class CompanionManager: ObservableObject {
     private func handleFinalTranscriptLocally(_ transcript: String) {
         currentResponseTask?.cancel()
         _ = resolvePendingCodexAppServerApproval(.cancel)
-        pendingConfirmation.cancel()
-        setPendingConfirmationTitle(nil)
         lastTranscript = transcript
         recordDebugEvent("Transcript: \(Self.conciseDebugLine(transcript))")
         let action = commandRouter.route(transcript)
@@ -480,23 +458,34 @@ final class CompanionManager: ObservableObject {
             }
 
             switch action {
-            case .codexReadOnly:
-                requestPendingConfirmation(
-                    title: "Run Codex read-only?",
-                    action: action
+            case .codexReadOnly(let prompt):
+                let result = await codexExecutor.run(
+                    .readOnly,
+                    prompt: prompt,
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
                 )
+                guard !Task.isCancelled else { return }
+
+                updateLatestResultSummary(result.summary)
+                speechOutput.speak(result.spokenStatus)
                 return
-            case .codexWorkspaceWrite:
-                requestPendingConfirmation(
-                    title: "Run Codex with workspace write access?",
-                    action: action
+            case .codexWorkspaceWrite(let prompt):
+                let result = await codexExecutor.run(
+                    .workspaceWrite,
+                    prompt: CodexPromptBuilder.workspaceWritePrompt(for: prompt),
+                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
                 )
+                guard !Task.isCancelled else { return }
+
+                updateLatestResultSummary(result.summary)
+                speechOutput.speak(result.spokenStatus)
                 return
-            case .codexDesktopAction, .codexChromeBrowserOpen:
-                requestPendingConfirmation(
-                    title: "Run Codex desktop action?",
-                    action: action
-                )
+            case .codexDesktopAction(let prompt):
+                let result = await runCodexAppServerDesktopAction(prompt: prompt)
+                guard !Task.isCancelled else { return }
+
+                updateLatestResultSummary(result.summary)
+                speechOutput.speak(result.spokenStatus)
                 return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
@@ -520,37 +509,23 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    private func requestPendingConfirmation(title: String, action: LoreleiCommandAction) {
-        _ = resolvePendingCodexAppServerApproval(.cancel)
-        pendingConfirmation.request(title: title, action: action)
-        pendingConfirmationTitle = title
-        recordDebugEvent("Waiting for confirmation: \(title)")
-        let result = WorkspaceCommandResult(
-            summary: "Needs confirmation before running Codex.",
-            status: .needsConfirmation
-        )
-        updateLatestResultSummary(result.summary)
-        speechOutput.speak(result.spokenStatus)
-    }
-
     private func requestCodexAppServerApproval(
         _ request: CodexAppServerApprovalRequest
     ) async -> CodexAppServerApprovalDecision {
         await withCheckedContinuation { continuation in
             _ = resolvePendingCodexAppServerApproval(.cancel)
-            pendingConfirmation.cancel()
             pendingCodexAppServerApproval = continuation
-            pendingConfirmationTitle = request.title
+            pendingApprovalTitle = request.title
             recordDebugEvent("Waiting for App Server approval: \(request.title)")
             updateLatestResultSummary(request.detail)
-            speechOutput.speak(WorkspaceCommandResult(summary: request.detail, status: .needsConfirmation).spokenStatus)
+            speechOutput.speak("Needs approval")
         }
     }
 
     private func resolvePendingCodexAppServerApproval(_ decision: CodexAppServerApprovalDecision) -> Bool {
         guard let continuation = pendingCodexAppServerApproval else { return false }
         pendingCodexAppServerApproval = nil
-        pendingConfirmationTitle = nil
+        pendingApprovalTitle = nil
         switch decision {
         case .accept:
             recordDebugEvent("App Server approval accepted")
@@ -561,14 +536,8 @@ final class CompanionManager: ObservableObject {
         return true
     }
 
-    private func runCodexAppServerDesktopAction(
-        prompt: String,
-        wrapGenericPrompt: Bool = true
-    ) async -> WorkspaceCommandResult {
-        let appServerPrompt = CodexPromptBuilder.appServerDesktopActionPrompt(
-            for: prompt,
-            wrapGenericGuidance: wrapGenericPrompt
-        )
+    private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
+        let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(for: prompt)
         let cwd = codexAppServerWorkingDirectory()
         recordDebugEvent("Codex App Server desktop action started")
         recordDebugEvent("Codex App Server cwd: \(cwd)")
@@ -579,10 +548,6 @@ final class CompanionManager: ObservableObject {
             }
 
             let foregroundTool = CodexAppServerDesktopForegroundTool()
-            let chromePreflight = CodexChromeMemorySaverPreflight(scriptRunner: self.chromeMemorySaverScriptRunner)
-            let preflight: CodexAppServerPreflight = { _ in
-                await chromePreflight.run(prompt: prompt)
-            }
             let dynamicToolSpecsResolver = {
                 [CodexAppServerDesktopForegroundTool.spec]
             }
@@ -601,7 +566,6 @@ final class CompanionManager: ObservableObject {
             let executor: CodexAppServerExecutor
             if let codexAppServerTransportFactory = self.codexAppServerTransportFactory {
                 executor = CodexAppServerExecutor(
-                    preflight: preflight,
                     makeTransport: codexAppServerTransportFactory,
                     dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                     dynamicToolHandler: dynamicToolHandler,
@@ -610,7 +574,6 @@ final class CompanionManager: ObservableObject {
                 )
             } else {
                 executor = CodexAppServerExecutor(
-                    preflight: preflight,
                     dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                     dynamicToolHandler: dynamicToolHandler,
                     traceHandler: traceHandler,
@@ -670,42 +633,6 @@ final class CompanionManager: ObservableObject {
         }
 
         return FileManager.default.homeDirectoryForCurrentUser.path
-    }
-
-    private func executeConfirmedCommand(_ action: LoreleiCommandAction) {
-        currentResponseTask?.cancel()
-        let taskID = responseTaskTracker.begin()
-        currentResponseTask = Task { @MainActor in
-            defer { finishResponseTaskIfCurrent(taskID) }
-            voiceState = .processing
-
-            let result: WorkspaceCommandResult
-            switch action {
-            case .codexReadOnly(let prompt):
-                result = await codexExecutor.run(
-                    .readOnly,
-                    prompt: prompt,
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
-                )
-            case .codexWorkspaceWrite(let prompt):
-                result = await codexExecutor.run(
-                    .workspaceWrite,
-                    prompt: CodexPromptBuilder.workspaceWritePrompt(for: prompt),
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
-                )
-            case .codexDesktopAction(let prompt):
-                result = await runCodexAppServerDesktopAction(prompt: prompt)
-            case .codexChromeBrowserOpen(let prompt):
-                result = await runCodexAppServerDesktopAction(prompt: prompt, wrapGenericPrompt: false)
-            default:
-                result = WorkspaceCommandResult(summary: "Unsupported confirmed command.", status: .failed)
-            }
-
-            guard !Task.isCancelled else { return }
-
-            updateLatestResultSummary(result.summary)
-            speechOutput.speak(result.spokenStatus)
-        }
     }
 
     private func finishResponseTaskIfCurrent(_ taskID: UUID) {

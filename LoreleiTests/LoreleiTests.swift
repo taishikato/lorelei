@@ -110,7 +110,7 @@ struct LoreleiTests {
         #expect(manager.workspaceSettingsStore.selectedWorkspacePath == "/Users/example/SharedProject")
     }
 
-    @Test func companionManagerRunsDesktopActionThroughInjectedAppServerRunnerAfterConfirmation() async throws {
+    @Test func companionManagerRunsDesktopActionThroughInjectedAppServerRunnerImmediately() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionRunnerTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionRunnerTests")
         let store = WorkspaceSettingsStore(defaults: defaults)
@@ -125,16 +125,6 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if recorder.calls.count == 1,
                manager.latestResultSummary == "Opened through App Server." {
                 break
@@ -142,16 +132,14 @@ struct LoreleiTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         #expect(recorder.calls.count == 1)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
-        #expect(call.prompt.contains("https://chatgpt.com"))
-        #expect(call.prompt.contains("Google Chrome"))
-        #expect(call.prompt.contains("Chrome plugin"))
-        #expect(call.prompt.contains("Do not use Computer Use"))
-        #expect(call.prompt.contains("Do not call lorelei.foreground_app"))
-        #expect(!call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
-        #expect(!call.prompt.contains("call lorelei.foreground_app before visual inspection"))
+        #expect(call.prompt.contains("chatgpt.com"))
+        #expect(call.prompt.contains("chrome browser"))
+        #expect(call.prompt.contains("Computer Use plugin"))
+        #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
         #expect(call.cwd == FileManager.default.homeDirectoryForCurrentUser.path)
         #expect(manager.latestResultSummary == "Opened through App Server.")
     }
@@ -171,16 +159,6 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if recorder.calls.count == 1,
                manager.latestResultSummary == "Typed through App Server." {
                 break
@@ -188,67 +166,12 @@ struct LoreleiTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
         #expect(call.prompt.contains("Computer Use plugin"))
         #expect(call.prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
         #expect(call.prompt.contains("use computer use to open TextEdit and type hello"))
-    }
-
-    @Test func companionManagerSkipsChromeMemorySaverPreflightForGeneralDesktopAction() async throws {
-        let defaults = UserDefaults(suiteName: "CompanionManagerChromePreflightSkipTests")!
-        defaults.removePersistentDomain(forName: "CompanionManagerChromePreflightSkipTests")
-        let store = WorkspaceSettingsStore(defaults: defaults)
-        let runner = ChromeMemorySaverScriptRunnerRecorder(
-            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":6,"woken":2}"#, stderr: "")
-        )
-        let transport = FakeCodexAppServerTransport(lines: [
-            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
-            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"method":"item/agentMessage/delta","params":{"delta":"Opened TextEdit."}}"#,
-            #"{"method":"turn/completed","params":{"status":"completed"}}"#
-        ])
-        let manager = CompanionManager(
-            speechOutput: SilentSpeechOutput(),
-            workspaceSettingsStore: store,
-            chromeMemorySaverScriptRunner: { _, timeoutSeconds in
-                runner.run(timeoutSeconds: timeoutSeconds)
-            },
-            codexAppServerTransportFactory: { transport }
-        )
-
-        manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
-        for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
-            if manager.latestResultSummary == "Opened TextEdit." {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.latestResultSummary == "Opened TextEdit.")
-        #expect(runner.calls.isEmpty)
-        #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
-
-        let sentMessages = try await transport.sentLines.map { line in
-            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
-        }
-        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
-        let params = try #require(turnStart["params"] as? [String: Any])
-        let input = try #require(params["input"] as? [[String: Any]])
-        let userText = try #require(input.first?["text"] as? String)
-        #expect(userText.contains("Codex App Server"))
-        #expect(userText.contains("Computer Use plugin"))
-        #expect(userText.contains("use computer use to open TextEdit and type hello"))
     }
 
     @Test func companionManagerDoesNotLetUserTextBypassGenericDesktopGuidance() async throws {
@@ -269,16 +192,6 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting(transcript)
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if recorder.calls.count == 1,
                manager.latestResultSummary == "Handled through App Server." {
                 break
@@ -286,6 +199,7 @@ struct LoreleiTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
         #expect(call.prompt.contains("Computer Use plugin"))
@@ -316,26 +230,52 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if manager.latestResultSummary == "Desktop action finished." {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         #expect(overlayWindowManager.events == ["show", "hide", "show"])
         #expect(manager.isOverlayVisible)
         #expect(manager.latestResultSummary == "Desktop action finished.")
     }
 
-    @Test func companionManagerRecordsDebugLogForConfirmedDesktopAction() async throws {
+    @Test func companionManagerRunsWorkspaceWriteCodexCommandImmediately() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerWorkspaceWriteImmediateTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerWorkspaceWriteImmediateTests")
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = directoryURL.path
+        let recorder = CodexCommandRecorder(finalMessage: "Updated README.")
+        let codexExecutor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexExecutor: codexExecutor
+        )
+
+        manager.handleFinalTranscriptForTesting("update the readme")
+        for _ in 0..<20 {
+            if recorder.arguments != nil,
+               manager.latestResultSummary == "Updated README." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingApprovalTitle == nil)
+        #expect(manager.latestResultSummary == "Updated README.")
+        #expect(recorder.arguments?.contains("workspace-write") == true)
+        #expect(recorder.arguments?.contains(CodexPromptBuilder.workspaceWritePrompt(for: "update the readme")) == true)
+    }
+
+    @Test func companionManagerRecordsDebugLogForImmediateDesktopAction() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDebugLogDesktopActionTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDebugLogDesktopActionTests")
         let store = WorkspaceSettingsStore(defaults: defaults)
@@ -350,24 +290,15 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if manager.latestResultSummary == "Opened through App Server." {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         #expect(manager.debugLogText.contains("Transcript: Open chatgpt.com in a new tab on chrome browser"))
         #expect(manager.debugLogText.contains("Route: Codex desktop action"))
-        #expect(manager.debugLogText.contains("Waiting for confirmation: Run Codex desktop action?"))
-        #expect(manager.debugLogText.contains("Confirmed: Codex desktop action"))
         #expect(manager.debugLogText.contains("Codex App Server desktop action started"))
         #expect(manager.debugLogText.contains("Result: Opened through App Server."))
     }
@@ -494,55 +425,19 @@ struct LoreleiTests {
         #expect(router.route("open the browser and search for Swift concurrency") == .codexDesktopAction("open the browser and search for Swift concurrency"))
     }
 
-    @Test func routerMapsChromeURLRequestToAppServerDesktopAction() async throws {
+    @Test func routerMapsBrowserRequestsToDesktopAction() async throws {
         let router = LoreleiCommandRouter()
+        let openTranscript = "open gmail in chrome"
+        let typingTranscript = "type hello into the search box in chrome"
 
-        let action = router.route("Open chatgpt.com in a new tab on chrome browser")
-
-        guard case .codexChromeBrowserOpen(let prompt) = action else {
-            Issue.record("Expected App Server Chrome browser open action, got \(action)")
-            return
-        }
-        #expect(prompt.contains("https://chatgpt.com"))
-        #expect(prompt.contains("Google Chrome"))
-        #expect(prompt.contains("Chrome plugin"))
-        #expect(prompt.contains("Do not use Computer Use"))
-        #expect(prompt.contains("Do not call lorelei.foreground_app"))
-        #expect(prompt.contains("Do not search"))
-    }
-
-    @Test func routerMapsChromeTypingRequestToDesktopActionWithoutReadOnlyCodex() async throws {
-        let router = LoreleiCommandRouter()
-        let transcript = "No open ChatGPT in chrome browser and then type in what should I do around Tokyo station"
-
-        #expect(router.route(transcript) == .codexDesktopAction(transcript))
-    }
-
-    @Test func routerDoesNotUseURLOnlyPromptWhenChromeRequestNeedsTyping() async throws {
-        let router = LoreleiCommandRouter()
-        let transcript = "Open chatgpt.com in chrome browser and then type in what should I do around Tokyo station"
-
-        #expect(router.route(transcript) == .codexDesktopAction(transcript))
+        #expect(router.route(openTranscript) == .codexDesktopAction(openTranscript))
+        #expect(router.route(typingTranscript) == .codexDesktopAction(typingTranscript))
     }
 
     @Test func routerMapsExplicitComputerUsePhraseToCodexDesktopAction() async throws {
         let router = LoreleiCommandRouter()
 
         #expect(router.route("use computer use to open System Settings") == .codexDesktopAction("use computer use to open System Settings"))
-    }
-
-    @Test func confirmationPolicyAllowsOnlySafeLocalAndScopedScreenCommandsImmediately() async throws {
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitStatus))
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitDiff))
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .runTests))
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .codexScreen("look at my screen")))
-    }
-
-    @Test func confirmationPolicyRequiresPanelConfirmationForBroadCodexWriteAndDesktopActionCommands() async throws {
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexReadOnly("explain this")))
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexWorkspaceWrite("fix the test")))
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexDesktopAction("click submit")))
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexChromeBrowserOpen("open chatgpt.com")))
     }
 
     @Test func workspaceWritePromptIncludesNoCommitGuard() async throws {
@@ -556,43 +451,12 @@ struct LoreleiTests {
         let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open TextEdit and type hello")
 
         #expect(prompt.contains("Codex App Server"))
-        #expect(prompt.contains("Chrome plugin"))
-        #expect(prompt.contains("Computer Use plugin"))
-        #expect(prompt.contains("visual UI inspection"))
+        #expect(prompt.contains("Computer Use plugin for desktop control"))
         #expect(prompt.contains("lorelei.foreground_app"))
         #expect(prompt.contains("Do not rely on caller-side local shortcuts."))
         #expect(prompt.contains("Do not commit changes."))
         #expect(!prompt.contains("non-interactive codex exec"))
         #expect(prompt.contains("open TextEdit and type hello"))
-    }
-
-    @Test func desktopActionPromptKeepsBrowserAutomationOnChromePluginWhenVisualInspectionIsNotNeeded() async throws {
-        let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open ChatGPT in Chrome and type hello")
-
-        #expect(prompt.contains("browser typing, clicking, and search"))
-        #expect(prompt.contains("prefer the Codex Chrome plugin"))
-        #expect(prompt.contains("without visual desktop inspection"))
-    }
-
-    @Test func desktopActionPromptScopesForegroundAppToNonChromeOpeningOnly() async throws {
-        let prompt = CodexPromptBuilder.desktopActionPrompt(for: "open chatgpt.com in Chrome")
-
-        #expect(prompt.contains("non-Chrome app opening or non-Chrome URL opening"))
-        #expect(!prompt.contains("For non-Chrome app or URL opening"))
-    }
-
-    @Test func pendingConfirmationStoresAndClearsAction() async throws {
-        var confirmation = PendingCommandConfirmation()
-        confirmation.request(
-            title: "Run Codex with workspace write access?",
-            action: .codexWorkspaceWrite("fix the test")
-        )
-
-        #expect(confirmation.title == "Run Codex with workspace write access?")
-        #expect(confirmation.action == .codexWorkspaceWrite("fix the test"))
-        #expect(confirmation.confirm() == .codexWorkspaceWrite("fix the test"))
-        #expect(confirmation.title == nil)
-        #expect(confirmation.action == nil)
     }
 
     @Test func responseTaskTrackerIgnoresStaleTaskCleanup() async throws {
@@ -614,7 +478,6 @@ struct LoreleiTests {
         #expect(WorkspaceCommandResult(summary: "OK", status: .succeeded).spokenStatus == "Done")
         #expect(WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace).spokenStatus == "No workspace selected")
         #expect(WorkspaceCommandResult(summary: "Failed", status: .failed).spokenStatus == "Failed")
-        #expect(WorkspaceCommandResult(summary: "Needs confirmation.", status: .needsConfirmation).spokenStatus == "Needs confirmation")
     }
 
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {
@@ -749,15 +612,6 @@ struct LoreleiTests {
         let executor = WorkspaceCommandExecutor()
 
         let result = await executor.run(.codexDesktopAction("open https://chatgpt.com in Chrome"), workspacePath: nil)
-
-        #expect(result.summary == "Codex commands are handled by CodexExecutor.")
-        #expect(result.status == .succeeded)
-    }
-
-    @Test func workspaceExecutorDoesNotRunChromeBrowserOpenLocally() async throws {
-        let executor = WorkspaceCommandExecutor()
-
-        let result = await executor.run(.codexChromeBrowserOpen("open https://chatgpt.com in Chrome"), workspacePath: nil)
 
         #expect(result.summary == "Codex commands are handled by CodexExecutor.")
         #expect(result.status == .succeeded)
@@ -970,16 +824,56 @@ struct LoreleiTests {
         #expect(locator.resolve() == codexURL)
     }
 
-    @Test func appServerLaunchCanUseWebSocketTransport() async throws {
+    @Test func appServerLaunchUsesDefaultStdioTransport() async throws {
         let codexURL = URL(fileURLWithPath: "/usr/local/bin/codex")
 
         let launch = CodexAppServerLaunch.make(
-            codexExecutableURL: codexURL,
-            listenURL: "ws://127.0.0.1:48123"
+            codexExecutableURL: codexURL
         )
 
         #expect(launch.executableURL == codexURL)
-        #expect(launch.arguments == ["app-server", "--listen", "ws://127.0.0.1:48123"])
+        #expect(launch.arguments == ["app-server"])
+    }
+
+    @Test func stdioTransportRoundTripsOneJSONLineThroughChildProcess() async throws {
+        let transport = try await CodexAppServerStdioTransport.make(
+            executableURL: URL(fileURLWithPath: "/bin/cat"),
+            arguments: []
+        )
+
+        try await transport.send(line: "{\"id\":1,\"method\":\"initialize\"}")
+        let echoed = try await transport.nextLine()
+
+        #expect(echoed == "{\"id\":1,\"method\":\"initialize\"}")
+        await transport.terminate()
+    }
+
+    @Test func stdioTransportAppendsExactlyOneNewlinePerSend() async throws {
+        let transport = try await CodexAppServerStdioTransport.make(
+            executableURL: URL(fileURLWithPath: "/bin/cat"),
+            arguments: []
+        )
+
+        try await transport.send(line: "{\"a\":1}\n")
+        try await transport.send(line: "{\"b\":2}")
+        let first = try await transport.nextLine()
+        let second = try await transport.nextLine()
+
+        #expect(first == "{\"a\":1}")
+        #expect(second == "{\"b\":2}")
+        await transport.terminate()
+    }
+
+    @Test func stdioTransportReturnsNilAfterChildExits() async throws {
+        let transport = try await CodexAppServerStdioTransport.make(
+            executableURL: URL(fileURLWithPath: "/usr/bin/true"),
+            arguments: []
+        )
+
+        let line = try await transport.nextLine()
+
+        #expect(line == nil)
+        await transport.terminate()
     }
 
     @Test func appServerInitializedNotificationMatchesGeneratedProtocolShape() throws {
@@ -1012,6 +906,18 @@ struct LoreleiTests {
         #expect(granular["mcp_elicitations"] as? Bool == true)
     }
 
+    @Test func appServerTurnStartRequestPinsModelToGPT55() throws {
+        let request = CodexAppServerProtocol.turnStartRequest(
+            id: 3,
+            threadID: "thread-1",
+            prompt: "open Gmail",
+            cwd: "/Users/example"
+        )
+        let params = try #require(request["params"] as? [String: Any])
+
+        #expect(params["model"] as? String == "gpt-5.5")
+    }
+
     @Test func appServerTurnStartCanAttachComputerUseSkillInput() throws {
         let skillPath = "/Users/example/.codex/plugins/computer-use/skills/computer-use/SKILL.md"
         let request = CodexAppServerProtocol.turnStartRequest(
@@ -1036,25 +942,15 @@ struct LoreleiTests {
         #expect(input[1]["path"] as? String == skillPath)
     }
 
-    @Test func appServerThreadStartEnablesChromeAndComputerUsePluginsForDesktopActions() throws {
-        let request = CodexAppServerProtocol.threadStartRequest(id: 2, cwd: "/Users/example")
-        let params = try #require(request["params"] as? [String: Any])
-        let config = try #require(params["config"] as? [String: Any])
-        let plugins = try #require(config["plugins"] as? [String: Any])
-        let chromePlugin = try #require(plugins["chrome@openai-bundled"] as? [String: Any])
-        let computerUsePlugin = try #require(plugins["computer-use@openai-bundled"] as? [String: Any])
-
-        #expect(chromePlugin["enabled"] as? Bool == true)
-        #expect(computerUsePlugin["enabled"] as? Bool == true)
-    }
-
     @Test func appServerThreadStartEnablesComputerUsePluginForDesktopActions() throws {
         let request = CodexAppServerProtocol.threadStartRequest(id: 2, cwd: "/Users/example")
         let params = try #require(request["params"] as? [String: Any])
         let config = try #require(params["config"] as? [String: Any])
         let plugins = try #require(config["plugins"] as? [String: Any])
         let computerUsePlugin = try #require(plugins["computer-use@openai-bundled"] as? [String: Any])
+        let chromePluginID = "chrome@" + "openai-bundled"
 
+        #expect(plugins[chromePluginID] == nil)
         #expect(computerUsePlugin["enabled"] as? Bool == true)
     }
 
@@ -1495,179 +1391,6 @@ struct LoreleiTests {
         #expect(event == .unsupportedServerRequest(requestID: 45, method: "item/unknown/request"))
     }
 
-    @Test func appServerExecutorRunsPreflightBeforeStartingTransport() async throws {
-        let preflightCounter = LaunchCounter()
-        let transportCounter = LaunchCounter()
-        let orderRecorder = EventOrderRecorder()
-        let transport = FakeCodexAppServerTransport(lines: [
-            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
-            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
-            #"{"method":"turn/completed","params":{"status":"completed"}}"#
-        ])
-        let executor = CodexAppServerExecutor(
-            preflight: { _ in
-                orderRecorder.record("preflight")
-                preflightCounter.increment()
-                return .completed("Chrome preflight ok")
-            },
-            makeTransport: {
-                orderRecorder.record("transport")
-                transportCounter.increment()
-                return transport
-            },
-            approvalHandler: { _ in .cancel }
-        )
-
-        let result = await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
-
-        #expect(result.status == .succeeded)
-        #expect(result.summary == "Done")
-        #expect(preflightCounter.value == 1)
-        #expect(transportCounter.value == 1)
-        #expect(orderRecorder.events == ["preflight", "transport"])
-    }
-
-    @Test func appServerExecutorStopsWhenPreflightFails() async throws {
-        let transportCounter = LaunchCounter()
-        let executor = CodexAppServerExecutor(
-            preflight: { _ in .failed("Chrome preflight failed.") },
-            makeTransport: {
-                transportCounter.increment()
-                return FakeCodexAppServerTransport(lines: [])
-            },
-            approvalHandler: { _ in .cancel }
-        )
-
-        let result = await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
-
-        #expect(result.status == .failed)
-        #expect(result.summary.contains("Chrome preflight failed."))
-        #expect(transportCounter.value == 0)
-    }
-
-    @Test func appServerExecutorTimesOutHangingPreflightBeforeStartingTransport() async throws {
-        let transportCounter = LaunchCounter()
-        let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 0.01,
-            preflight: { _ in
-                try? await Task.sleep(for: .seconds(5))
-                return .completed("Too late.")
-            },
-            makeTransport: {
-                transportCounter.increment()
-                return FakeCodexAppServerTransport(lines: [])
-            },
-            approvalHandler: { _ in .cancel }
-        )
-
-        let result = await withTimeout(seconds: 1) {
-            await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
-        }
-
-        let commandResult = try #require(result)
-        #expect(commandResult.status == .failed)
-        #expect(commandResult.summary.contains("Codex App Server preflight timed out."))
-        #expect(commandResult.summary.contains("Trace:"))
-        #expect(commandResult.summary.contains("preflight timed out"))
-        #expect(transportCounter.value == 0)
-    }
-
-    @Test func appServerExecutorIncludesPreflightTraceWhenTransportFailsToStart() async throws {
-        struct StartupError: LocalizedError {
-            var errorDescription: String? { "transport unavailable" }
-        }
-
-        let executor = CodexAppServerExecutor(
-            preflight: { _ in .completed("Chrome preflight ok") },
-            makeTransport: {
-                throw StartupError()
-            },
-            approvalHandler: { _ in .cancel }
-        )
-
-        let result = await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
-
-        #expect(result.status == .failed)
-        #expect(result.summary.contains("Codex App Server failed to start: transport unavailable"))
-        #expect(result.summary.contains("Trace:"))
-        #expect(result.summary.contains("preflight Chrome preflight ok"))
-    }
-
-    @Test func chromeMemorySaverPreflightSkipsNonChromePrompt() async throws {
-        let runner = ChromeMemorySaverScriptRunnerRecorder(
-            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":0,"woken":0}"#, stderr: "")
-        )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
-            runner.run(timeoutSeconds: timeoutSeconds)
-        })
-
-        let result = await preflight.run(prompt: "open TextEdit")
-
-        #expect(result == .completed("Chrome preflight skipped: prompt does not mention Chrome or a browser."))
-        #expect(runner.calls.isEmpty)
-        #expect(runner.timeoutSecondsValues.isEmpty)
-    }
-
-    @Test func chromeMemorySaverPreflightSkipsExplicitSafariBrowserPrompt() async throws {
-        let runner = ChromeMemorySaverScriptRunnerRecorder(
-            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":0,"woken":0}"#, stderr: "")
-        )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
-            runner.run(timeoutSeconds: timeoutSeconds)
-        })
-
-        let result = await preflight.run(prompt: "open apple.com in Safari browser")
-
-        #expect(result == .completed("Chrome preflight skipped: prompt targets a non-Chrome browser."))
-        #expect(runner.calls.isEmpty)
-        #expect(runner.timeoutSecondsValues.isEmpty)
-    }
-
-    @Test func chromeMemorySaverPreflightRunsForChromePromptAndReportsWakeCount() async throws {
-        let runner = ChromeMemorySaverScriptRunnerRecorder(
-            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":6,"woken":2}"#, stderr: "")
-        )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
-            runner.run(timeoutSeconds: timeoutSeconds)
-        })
-
-        let result = await preflight.run(prompt: "open chatgpt.com in Chrome")
-
-        #expect(result == .completed("Chrome preflight checked 6 tabs and woke 2 sleeping tabs."))
-        #expect(runner.calls.count == 1)
-        #expect(runner.timeoutSecondsValues == [8])
-    }
-
-    @Test func chromeMemorySaverPreflightRunsForGenericBrowserPrompt() async throws {
-        let runner = ChromeMemorySaverScriptRunnerRecorder(
-            execution: WorkspaceProcessExecution(reason: .exited(0), stdout: #"{"ok":true,"pageTargets":3,"woken":1}"#, stderr: "")
-        )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
-            runner.run(timeoutSeconds: timeoutSeconds)
-        })
-
-        let result = await preflight.run(prompt: "open a browser tab")
-
-        #expect(result == .completed("Chrome preflight checked 3 tabs and woke 1 sleeping tabs."))
-        #expect(runner.calls.count == 1)
-        #expect(runner.timeoutSecondsValues == [8])
-    }
-
-    @Test func chromeMemorySaverPreflightWarnsButDoesNotFailWhenScriptFails() async throws {
-        let runner = ChromeMemorySaverScriptRunnerRecorder(
-            execution: WorkspaceProcessExecution(reason: .exited(1), stdout: "", stderr: "DevToolsActivePort missing")
-        )
-        let preflight = CodexChromeMemorySaverPreflight(scriptRunner: { _, timeoutSeconds in
-            runner.run(timeoutSeconds: timeoutSeconds)
-        })
-
-        let result = await preflight.run(prompt: "open chatgpt.com in Chrome")
-
-        #expect(result == .warning("Chrome preflight could not complete: DevToolsActivePort missing"))
-        #expect(runner.timeoutSecondsValues == [8])
-    }
-
     @Test func appServerExecutorStartsThreadAndTurn() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
@@ -1900,53 +1623,6 @@ struct LoreleiTests {
         #expect(eventLines.contains("outbound response#47"))
     }
 
-    @Test func liveAppServerOpensChromeThroughChromePlugin() async throws {
-        let liveMarkerPath = "/tmp/lorelei-live-app-server-foreground-test"
-        guard ProcessInfo.processInfo.environment["LORELEI_LIVE_APP_SERVER_FOREGROUND_TEST"] == "1"
-                || FileManager.default.fileExists(atPath: liveMarkerPath) else {
-            return
-        }
-
-        let traceRecorder = AppServerTraceRecorder()
-        let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 45,
-            traceHandler: { event in
-                traceRecorder.record(event)
-            },
-            approvalHandler: { _ in .accept }
-        )
-        let action = LoreleiCommandRouter().route("Open chatgpt.com in a new tab on chrome browser")
-        guard case .codexChromeBrowserOpen(let prompt) = action else {
-            Issue.record("Expected App Server Chrome browser open action, got \(action)")
-            return
-        }
-
-        #expect(prompt.contains("Chrome plugin"))
-        #expect(prompt.contains("Do not call lorelei.foreground_app"))
-        #expect(!prompt.contains("Before Computer Use inspects a desktop app, call lorelei.foreground_app"))
-
-        let result = await executor.runDesktopAction(
-            prompt: prompt,
-            cwd: FileManager.default.homeDirectoryForCurrentUser.path
-        )
-
-        if result.status != .succeeded {
-            let trace = traceRecorder.eventLines
-                .joined(separator: "\n")
-            Issue.record(
-                """
-                Live App Server Chrome plugin smoke failed.
-                Status: \(result.status)
-                Summary: \(result.summary)
-                Trace:
-                \(trace)
-                """
-            )
-        }
-        #expect(result.status == .succeeded)
-        #expect(result.summary.localizedCaseInsensitiveContains("Chrome"))
-    }
-
     private func makeTemporaryGitRepository() throws -> URL {
         let repositoryURL = try makeTemporaryDirectory()
         try runGitTestCommand(["init"], in: repositoryURL)
@@ -2069,23 +1745,6 @@ private final class LaunchCounter: @unchecked Sendable {
     }
 }
 
-private final class EventOrderRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recordedEvents: [String] = []
-
-    var events: [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedEvents
-    }
-
-    func record(_ event: String) {
-        lock.lock()
-        recordedEvents.append(event)
-        lock.unlock()
-    }
-}
-
 private final class StringRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var recordedValues: [String] = []
@@ -2099,41 +1758,6 @@ private final class StringRecorder: @unchecked Sendable {
     func record(_ value: String) {
         lock.lock()
         recordedValues.append(value)
-        lock.unlock()
-    }
-}
-
-private final class ChromeMemorySaverScriptRunnerRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recordedCalls: [String] = []
-    private var recordedTimeoutSecondsValues: [TimeInterval] = []
-    private let execution: WorkspaceProcessExecution
-
-    var calls: [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedCalls
-    }
-
-    var timeoutSecondsValues: [TimeInterval] {
-        lock.lock()
-        defer { lock.unlock() }
-        return recordedTimeoutSecondsValues
-    }
-
-    init(execution: WorkspaceProcessExecution) {
-        self.execution = execution
-    }
-
-    func run(timeoutSeconds: TimeInterval) -> WorkspaceProcessExecution {
-        record(timeoutSeconds: timeoutSeconds)
-        return execution
-    }
-
-    private func record(timeoutSeconds: TimeInterval) {
-        lock.lock()
-        recordedCalls.append("script")
-        recordedTimeoutSecondsValues.append(timeoutSeconds)
         lock.unlock()
     }
 }

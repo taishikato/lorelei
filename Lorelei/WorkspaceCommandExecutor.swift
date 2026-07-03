@@ -13,7 +13,6 @@ enum WorkspaceCommandResultStatus: Equatable, Sendable {
     case failed
     case cancelled
     case missingWorkspace
-    case needsConfirmation
 }
 
 struct WorkspaceCommandResult: Equatable, Sendable {
@@ -33,8 +32,6 @@ struct WorkspaceCommandResult: Equatable, Sendable {
             return "Failed"
         case .missingWorkspace:
             return "No workspace selected"
-        case .needsConfirmation:
-            return "Needs confirmation"
         }
     }
 }
@@ -68,7 +65,7 @@ struct WorkspaceCommandExecutor {
             switch action {
             case .unsupported(let message):
                 return WorkspaceCommandResult(summary: message)
-            case .codexDesktopAction, .codexChromeBrowserOpen:
+            case .codexDesktopAction:
                 return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
             case .gitStatus, .gitDiff, .runTests, .codexReadOnly, .codexWorkspaceWrite, .codexScreen:
                 break
@@ -96,7 +93,7 @@ struct WorkspaceCommandExecutor {
             return await runGitDiff(workspacePath: workspacePath)
         case .runTests:
             return WorkspaceCommandResult(summary: "No test command configured.", status: .failed)
-        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexDesktopAction, .codexChromeBrowserOpen:
+        case .codexReadOnly, .codexWorkspaceWrite, .codexScreen, .codexDesktopAction:
             return WorkspaceCommandResult(summary: "Codex commands are handled by CodexExecutor.")
         case .unsupported(let message):
             return WorkspaceCommandResult(summary: message)

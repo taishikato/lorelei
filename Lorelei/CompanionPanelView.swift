@@ -168,30 +168,30 @@ struct CompanionPanelView: View {
                     value: companionManager.latestResultSummary ?? "No result yet"
                 )
 
-                pendingConfirmationBlock
+                pendingApprovalBlock
 
                 debugBlock
             }
         }
     }
 
-    private var pendingConfirmationBlock: some View {
+    private var pendingApprovalBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             fieldBlock(
-                title: "Pending Confirmation",
-                value: companionManager.pendingConfirmationTitle ?? "No pending confirmation"
+                title: "Pending Approval",
+                value: companionManager.pendingApprovalTitle ?? "No pending approval"
             )
 
-            if companionManager.pendingConfirmationTitle != nil {
+            if companionManager.pendingApprovalTitle != nil {
                 HStack(spacing: 8) {
-                    Button("Confirm") {
-                        companionManager.confirmPendingCommand()
+                    Button("Approve") {
+                        companionManager.acceptPendingApproval()
                     }
                     .buttonStyle(PanelButtonStyle(kind: .primary))
                     .pointerCursor()
 
                     Button("Cancel") {
-                        companionManager.cancelPendingCommand()
+                        companionManager.cancelPendingApproval()
                     }
                     .buttonStyle(PanelButtonStyle(kind: .secondary))
                     .pointerCursor()
