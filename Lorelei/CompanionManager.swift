@@ -76,6 +76,9 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var latestResultSummary: String?
     @Published private(set) var pendingApprovalTitle: String?
     @Published private(set) var debugLog = CompanionDebugLog()
+    @Published private(set) var runStatus: LoreleiRunStatus = .idle
+    @Published private(set) var streamText: String = ""
+    @Published private(set) var currentActivity: String?
 
     /// Screen location (global AppKit coords) of a detected UI element the
     /// buddy should fly to and point at. Parsed from Claude's response;
@@ -98,8 +101,10 @@ final class CompanionManager: ObservableObject {
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
+    private let runStatusIdleReturnDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
+    private var liveCodexAppServerTransport: CodexAppServerTransporting?
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -110,6 +115,7 @@ final class CompanionManager: ObservableObject {
     private var audioPowerCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
+    private var runStatusIdleReturnTask: Task<Void, Never>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
     /// speaks again before the delay elapses.
     private var transientHideTask: Task<Void, Never>?
@@ -132,6 +138,7 @@ final class CompanionManager: ObservableObject {
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
+        runStatusIdleReturnDelay: Duration = .seconds(4),
         codexExecutor: CodexExecutor? = nil,
         overlayWindowManager: (any OverlayWindowManaging)? = nil
     ) {
@@ -139,6 +146,7 @@ final class CompanionManager: ObservableObject {
         self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
+        self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.codexExecutor = codexExecutor ?? CodexExecutor()
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
     }
@@ -222,6 +230,8 @@ final class CompanionManager: ObservableObject {
         currentResponseTask?.cancel()
         currentResponseTask = nil
         _ = resolvePendingCodexAppServerApproval(.cancel)
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
         shortcutTransitionCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
@@ -383,6 +393,7 @@ final class CompanionManager: ObservableObject {
         switch transition {
         case .pressed:
             guard !buddyDictationManager.isDictationInProgress else { return }
+            setRunStatusListening()
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
@@ -418,6 +429,7 @@ final class CompanionManager: ObservableObject {
                 )
             }
         case .released:
+            setRunStatusTranscribing()
             // Cancel the pending start task in case the user released the shortcut
             // before the async startPushToTalk had a chance to begin recording.
             // Without this, a quick press-and-release drops the release event and
@@ -435,6 +447,36 @@ final class CompanionManager: ObservableObject {
 #if DEBUG
     func handleFinalTranscriptForTesting(_ transcript: String) {
         handleFinalTranscriptLocally(transcript)
+    }
+#endif
+
+    func stopCurrentRun() {
+        guard currentResponseTask != nil
+            || liveCodexAppServerTransport != nil
+            || pendingCodexAppServerApproval != nil
+        else {
+            return
+        }
+
+        Task { @MainActor in
+            await terminateLiveCodexAppServerTransportWhenReady()
+        }
+        currentResponseTask?.cancel()
+        cancelPendingCodexAppServerApprovalForStop()
+        updateLatestResultSummary("Stopped.")
+        finishRunStatus(success: false)
+    }
+
+#if DEBUG
+    func simulateShortcutTransitionForTesting(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
+        switch transition {
+        case .pressed:
+            setRunStatusListening()
+        case .released:
+            setRunStatusTranscribing()
+        case .none:
+            break
+        }
     }
 #endif
 
@@ -458,6 +500,8 @@ final class CompanionManager: ObservableObject {
                 return
             }
 
+            beginRunStatus()
+
             switch action {
             case .codexReadOnly(let prompt):
                 let result = await codexExecutor.run(
@@ -467,7 +511,7 @@ final class CompanionManager: ObservableObject {
                 )
                 guard !Task.isCancelled else { return }
 
-                updateLatestResultSummary(result.summary)
+                finishRun(with: result)
                 speechOutput.speak(result.spokenStatus)
                 return
             case .codexWorkspaceWrite(let prompt):
@@ -478,21 +522,21 @@ final class CompanionManager: ObservableObject {
                 )
                 guard !Task.isCancelled else { return }
 
-                updateLatestResultSummary(result.summary)
+                finishRun(with: result)
                 speechOutput.speak(result.spokenStatus)
                 return
             case .codexDesktopAction(let prompt):
                 let result = await runCodexAppServerDesktopAction(prompt: prompt)
                 guard !Task.isCancelled else { return }
 
-                updateLatestResultSummary(result.summary)
+                finishRun(with: result)
                 speechOutput.speak(result.spokenStatus)
                 return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
                 guard !Task.isCancelled else { return }
 
-                updateLatestResultSummary(result.summary)
+                finishRun(with: result)
                 speechOutput.speak(result.spokenStatus)
                 return
             case .gitStatus, .gitDiff, .runTests, .unsupported:
@@ -505,7 +549,7 @@ final class CompanionManager: ObservableObject {
             )
             guard !Task.isCancelled else { return }
 
-            updateLatestResultSummary(result.summary)
+            finishRun(with: result)
             speechOutput.speak(result.spokenStatus)
         }
     }
@@ -517,6 +561,9 @@ final class CompanionManager: ObservableObject {
             _ = resolvePendingCodexAppServerApproval(.cancel)
             pendingCodexAppServerApproval = continuation
             pendingApprovalTitle = request.title
+            runStatusIdleReturnTask?.cancel()
+            runStatusIdleReturnTask = nil
+            runStatus = .needsApproval(request.title)
             recordDebugEvent("Waiting for App Server approval: \(request.title)")
             updateLatestResultSummary(request.detail)
             speechOutput.speak("Needs approval")
@@ -527,6 +574,7 @@ final class CompanionManager: ObservableObject {
         guard let continuation = pendingCodexAppServerApproval else { return false }
         pendingCodexAppServerApproval = nil
         pendingApprovalTitle = nil
+        runStatus = .working(currentActivity ?? "Thinking…")
         switch decision {
         case .accept:
             recordDebugEvent("App Server approval accepted")
@@ -535,6 +583,24 @@ final class CompanionManager: ObservableObject {
         }
         continuation.resume(returning: decision)
         return true
+    }
+
+    private func cancelPendingCodexAppServerApprovalForStop() {
+        guard let continuation = pendingCodexAppServerApproval else { return }
+        pendingCodexAppServerApproval = nil
+        pendingApprovalTitle = nil
+        recordDebugEvent("App Server approval cancelled")
+        continuation.resume(returning: .cancel)
+    }
+
+    private func terminateLiveCodexAppServerTransportWhenReady() async {
+        for _ in 0..<20 {
+            if let transport = liveCodexAppServerTransport {
+                await transport.terminate()
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
     }
 
     private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
@@ -574,6 +640,16 @@ final class CompanionManager: ObservableObject {
                     self?.recordDebugEvent("App Server: \(event.logLine)")
                 }
             }
+            let progressHandler: CodexAppServerTurnProgressHandler = { [weak self] progress in
+                Task { @MainActor [weak self] in
+                    self?.handleCodexAppServerProgress(progress)
+                }
+            }
+            let transportReadyHandler: @Sendable (CodexAppServerTransporting) -> Void = { [weak self] transport in
+                Task { @MainActor [weak self] in
+                    self?.liveCodexAppServerTransport = transport
+                }
+            }
             let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision = { [weak self] request in
                 guard let self else { return .cancel }
                 return await self.requestCodexAppServerApproval(request)
@@ -585,6 +661,8 @@ final class CompanionManager: ObservableObject {
                     dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                     dynamicToolHandler: dynamicToolHandler,
                     traceHandler: traceHandler,
+                    progressHandler: progressHandler,
+                    onTransportReady: transportReadyHandler,
                     approvalHandler: approvalHandler
                 )
             } else {
@@ -592,6 +670,8 @@ final class CompanionManager: ObservableObject {
                     dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                     dynamicToolHandler: dynamicToolHandler,
                     traceHandler: traceHandler,
+                    progressHandler: progressHandler,
+                    onTransportReady: transportReadyHandler,
                     approvalHandler: approvalHandler
                 )
             }
@@ -636,6 +716,61 @@ final class CompanionManager: ObservableObject {
         debugLog.append(line)
     }
 
+    private func setRunStatusListening() {
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        runStatus = .listening
+    }
+
+    private func setRunStatusTranscribing() {
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        runStatus = .transcribing
+    }
+
+    private func beginRunStatus() {
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        streamText = ""
+        currentActivity = nil
+        runStatus = .working("Thinking…")
+    }
+
+    private func handleCodexAppServerProgress(_ progress: CodexAppServerTurnProgress) {
+        switch progress {
+        case .agentMessageDelta(let delta):
+            streamText += delta
+        case .toolCallStarted(let name):
+            currentActivity = name
+            runStatus = .working(name)
+        case .toolCallCompleted(let name, _):
+            if currentActivity == name {
+                currentActivity = nil
+            }
+        }
+    }
+
+    private func finishRun(with result: WorkspaceCommandResult) {
+        updateLatestResultSummary(result.summary)
+        finishRunStatus(success: result.status == .succeeded)
+    }
+
+    private func finishRunStatus(success: Bool) {
+        runStatusIdleReturnTask?.cancel()
+        currentActivity = nil
+        runStatus = .finished(success: success)
+        runStatusIdleReturnTask = Task { @MainActor [runStatusIdleReturnDelay] in
+            do {
+                try await Task.sleep(for: runStatusIdleReturnDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            runStatus = .idle
+            streamText = ""
+        }
+    }
+
     private static func conciseDebugLine(_ line: String, maxCharacters: Int = 240) -> String {
         let flattened = line
             .replacingOccurrences(of: "\n", with: " ")
@@ -663,6 +798,7 @@ final class CompanionManager: ObservableObject {
         guard responseTaskTracker.finishIfCurrent(taskID) else { return }
         voiceState = .idle
         currentResponseTask = nil
+        liveCodexAppServerTransport = nil
         scheduleTransientHideIfNeeded()
     }
 

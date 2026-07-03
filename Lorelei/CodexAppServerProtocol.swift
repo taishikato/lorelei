@@ -11,7 +11,7 @@ enum CodexAppServerInboundEvent: Equatable, Sendable {
     case response(requestID: Int)
     case threadStarted(requestID: Int, threadID: String)
     case agentMessageDelta(String)
-    case toolCallCompleted(status: String, failureMessage: String?)
+    case toolCallCompleted(status: String, failureMessage: String?, name: String?)
     case turnCompleted(status: String)
     case threadWaitingOnApproval(Bool)
     case approvalRequest(CodexAppServerApprovalRequest)
@@ -573,8 +573,23 @@ enum CodexAppServerProtocol {
             ?? "completed"
         return .toolCallCompleted(
             status: status,
-            failureMessage: status == "failed" ? mcpToolFailureMessage(from: item) : nil
+            failureMessage: status == "failed" ? mcpToolFailureMessage(from: item) : nil,
+            name: mcpToolName(from: item)
         )
+    }
+
+    private static func mcpToolName(from item: [String: Any]) -> String? {
+        let server = trimmedString(item["server"])
+        let tool = trimmedString(item["tool"])
+
+        switch (server, tool) {
+        case let (server?, tool?):
+            return "\(server).\(tool)"
+        case let (nil, tool?):
+            return tool
+        default:
+            return nil
+        }
     }
 
     private static func mcpToolFailureMessage(from item: [String: Any]) -> String? {

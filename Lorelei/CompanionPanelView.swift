@@ -27,15 +27,10 @@ struct CompanionPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-
-            Divider()
-                .background(DS.Colors.borderSubtle)
-
             VStack(alignment: .leading, spacing: 16) {
                 workspaceSection
-                voiceSection
-                runSection
+                permissionsSection
+                debugDisclosure
             }
             .padding(16)
 
@@ -48,54 +43,6 @@ struct CompanionPanelView: View {
         }
         .frame(width: 320)
         .background(panelBackground)
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Text("Lorelei")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(DS.Colors.textPrimary)
-
-            statusChip
-
-            Spacer()
-
-            Button {
-                NotificationCenter.default.post(name: .loreleiDismissPanel, object: nil)
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(DS.Colors.textTertiary)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
-            }
-            .buttonStyle(.plain)
-            .pointerCursor()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-    }
-
-    private var statusChip: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(statusDotColor)
-                .frame(width: 6, height: 6)
-
-            Text(statusText)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(DS.Colors.textSecondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            Capsule()
-                .fill(DS.Colors.surface2)
-        )
-        .overlay(
-            Capsule()
-                .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
-        )
     }
 
     private var workspaceSection: some View {
@@ -135,87 +82,40 @@ struct CompanionPanelView: View {
         }
     }
 
-    private var voiceSection: some View {
-        section("Voice") {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Hold Control+Option to talk.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(DS.Colors.textSecondary)
+    private var permissionsSection: some View {
+        section("Permissions") {
+            VStack(spacing: 2) {
+                microphonePermissionRow
+                accessibilityPermissionRow
+                screenRecordingPermissionRow
 
-                VStack(spacing: 2) {
-                    microphonePermissionRow
-                    accessibilityPermissionRow
-                    screenRecordingPermissionRow
-
-                    if companionManager.hasScreenRecordingPermission {
-                        screenContentPermissionRow
-                    }
+                if companionManager.hasScreenRecordingPermission {
+                    screenContentPermissionRow
                 }
-
-                fieldBlock(
-                    title: "Last Transcript",
-                    value: companionManager.lastTranscript ?? "No transcript yet"
-                )
             }
         }
     }
 
-    private var runSection: some View {
-        section("Run") {
-            VStack(alignment: .leading, spacing: 10) {
-                fieldBlock(
-                    title: "Latest Result",
-                    value: companionManager.latestResultSummary ?? "No result yet"
-                )
-
-                pendingApprovalBlock
-
-                debugBlock
-            }
-        }
-    }
-
-    private var pendingApprovalBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            fieldBlock(
-                title: "Pending Approval",
-                value: companionManager.pendingApprovalTitle ?? "No pending approval"
-            )
-
-            if companionManager.pendingApprovalTitle != nil {
-                HStack(spacing: 8) {
-                    Button("Approve") {
-                        companionManager.acceptPendingApproval()
-                    }
-                    .buttonStyle(PanelButtonStyle(kind: .primary))
-                    .pointerCursor()
-
-                    Button("Cancel") {
-                        companionManager.cancelPendingApproval()
-                    }
-                    .buttonStyle(PanelButtonStyle(kind: .secondary))
-                    .pointerCursor()
-                }
-            }
+    private var debugDisclosure: some View {
+        DisclosureGroup {
+            debugBlock
+        } label: {
+            Text("Debug Log")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(DS.Colors.textTertiary)
         }
     }
 
     private var debugBlock: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Debug")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
-
-            ScrollView {
-                Text(companionManager.debugLogText)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(DS.Colors.textSecondary)
-                    .lineLimit(nil)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: 74, maxHeight: 112)
+        ScrollView {
+            Text(companionManager.debugLogText)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(DS.Colors.textSecondary)
+                .lineLimit(nil)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(minHeight: 74, maxHeight: 112)
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
@@ -305,30 +205,6 @@ struct CompanionPanelView: View {
         }
     }
 
-    private func fieldBlock(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(DS.Colors.textTertiary)
-
-            Text(value)
-                .font(.system(size: 12))
-                .foregroundColor(DS.Colors.textSecondary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                .fill(DS.Colors.surface1)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
-        )
-    }
-
     private func permissionRow(
         title: String,
         iconName: String,
@@ -410,31 +286,6 @@ struct CompanionPanelView: View {
             .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 2)
     }
 
-    private var statusDotColor: Color {
-        switch companionManager.voiceState {
-        case .idle:
-            return companionManager.allPermissionsGranted ? DS.Colors.success : DS.Colors.warning
-        case .listening:
-            return DS.Colors.blue400
-        case .processing, .responding:
-            return DS.Colors.blue400
-        }
-    }
-
-    private var statusText: String {
-        guard companionManager.allPermissionsGranted else { return "Setup" }
-
-        switch companionManager.voiceState {
-        case .idle:
-            return "Ready"
-        case .listening:
-            return "Listening"
-        case .processing:
-            return "Processing"
-        case .responding:
-            return "Responding"
-        }
-    }
 }
 
 private struct PanelButtonStyle: ButtonStyle {
