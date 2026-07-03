@@ -352,7 +352,7 @@ struct BlueCursorView: View {
             timer?.invalidate()
             navigationAnimationTimer?.invalidate()
         }
-        .onChange(of: companionManager.detectedElementScreenLocation) { newLocation in
+        .onChange(of: companionManager.detectedElementScreenLocation) { _, newLocation in
             // When a UI element location is detected, navigate the buddy to
             // that position so it points at the element.
             guard let screenLocation = newLocation,
@@ -414,7 +414,7 @@ struct BlueCursorView: View {
             // mouse movement — it completes its full animation and return flight.
             // Only during the RETURN flight do we allow cursor movement to cancel
             // (so the buddy snaps to following if the user moves while it's flying back).
-            if self.buddyNavigationMode == .navigatingToTarget && self.isReturningToCursor {
+            if case .navigatingToTarget = self.buddyNavigationMode, self.isReturningToCursor {
                 let currentMouseInSwiftUI = self.convertScreenPointToSwiftUICoordinates(mouseLocation)
                 let distanceFromNavigationStart = hypot(
                     currentMouseInSwiftUI.x - self.cursorPositionWhenNavigationStarted.x,
@@ -427,7 +427,7 @@ struct BlueCursorView: View {
             }
 
             // During forward navigation or pointing, just skip cursor tracking
-            if self.buddyNavigationMode != .followingCursor {
+            guard case .followingCursor = self.buddyNavigationMode else {
                 return
             }
 

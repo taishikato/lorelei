@@ -1308,6 +1308,20 @@ struct LoreleiTests {
         ])
     }
 
+    @Test func foregroundActivationPlanYieldsThenActivatesThenOpensBundleFallbackForRunningApps() throws {
+        #expect(LiveDesktopForegrounding.activationPlan(isAppAlreadyRunning: true) == [
+            .yieldActivationToRunningApplication,
+            .activateRunningApplication,
+            .openApplicationActivatingBundleURL
+        ])
+    }
+
+    @Test func foregroundActivationPlanOpensApplicationForNotRunningApps() throws {
+        #expect(LiveDesktopForegrounding.activationPlan(isAppAlreadyRunning: false) == [
+            .openApplicationActivatingBundleURL
+        ])
+    }
+
     @Test func foregroundDynamicToolReportsMissingTarget() async throws {
         let recorder = ForegroundEnvironmentRecorder(onscreenResults: [])
         let tool = CodexAppServerDesktopForegroundTool(environment: recorder.environment())
@@ -1770,6 +1784,50 @@ struct LoreleiTests {
         #expect(registry == ["e1": 0, "e2": 1])
     }
 
+    @Test func axSerializerIncludesHintsAndRoleDescriptionsWhenTheyAddInformation() throws {
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Notes",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXButton",
+                    title: "New Folder",
+                    roleDescription: "toolbar button",
+                    value: nil,
+                    hint: "Create a new folder",
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: []
+                ),
+                DesktopUINode(
+                    role: "AXButton",
+                    title: "New Note",
+                    roleDescription: "New Note",
+                    value: nil,
+                    hint: "New Note",
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: []
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+
+        #expect(result.text == """
+        [e1] AXWindow "Notes"
+          [e2] AXButton "New Folder" roleDescription="toolbar button" hint="Create a new folder"
+          [e3] AXButton "New Note"
+        """)
+    }
+
     @Test func axSerializerTruncatesLongValuesAndElementCount() throws {
         let longValue = String(repeating: "a", count: 90)
         let children = (0..<401).map { index in
@@ -1822,6 +1880,15 @@ struct LoreleiTests {
         let result = await executor.snapshot(appName: nil)
 
         #expect(result == .failure(.accessibilityPermissionMissing))
+    }
+
+    @Test func appServerExecutorDefaultTurnTimeoutIsFiveMinutes() async throws {
+        let executor = CodexAppServerExecutor(
+            makeTransport: { FakeCodexAppServerTransport(lines: []) },
+            approvalHandler: { _ in .accept }
+        )
+
+        #expect(executor.defaultedTurnTimeoutSecondsForTesting == 300)
     }
 
     @Test func appServerExecutorAnswersMcpElicitationApprovalWithZeroID() async throws {

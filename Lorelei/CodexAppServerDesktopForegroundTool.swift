@@ -205,7 +205,24 @@ private extension CodexAppServerJSONValue {
     }
 }
 
-private enum LiveDesktopForegrounding {
+enum LiveDesktopForegrounding {
+    enum ActivationStep: Equatable {
+        case yieldActivationToRunningApplication
+        case activateRunningApplication
+        case openApplicationActivatingBundleURL
+    }
+
+    static func activationPlan(isAppAlreadyRunning: Bool) -> [ActivationStep] {
+        if isAppAlreadyRunning {
+            return [
+                .yieldActivationToRunningApplication,
+                .activateRunningApplication,
+                .openApplicationActivatingBundleURL
+            ]
+        }
+        return [.openApplicationActivatingBundleURL]
+    }
+
     @MainActor
     static func openURL(
         _ url: URL,
@@ -237,26 +254,34 @@ private enum LiveDesktopForegrounding {
             appName: appName,
             bundleIdentifier: bundleIdentifier
         ).first {
-            return runningApplication.activate(options: [.activateAllWindows])
+            NSApp.yieldActivation(to: runningApplication)
+            if runningApplication.activate(options: [.activateAllWindows]) {
+                return true
+            }
+
+            guard let appURL = runningApplication.bundleURL
+                ?? applicationURL(appName: appName, bundleIdentifier: bundleIdentifier) else {
+                return false
+            }
+            return await openApplication(at: appURL)
         }
 
         guard let appURL = applicationURL(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return false
         }
 
+        return await openApplication(at: appURL)
+    }
+
+    @MainActor
+    private static func openApplication(at appURL: URL) async -> Bool {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         configuration.createsNewApplicationInstance = false
 
         return await withCheckedContinuation { continuation in
             NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { runningApplication, error in
-                guard error == nil, let runningApplication else {
-                    continuation.resume(returning: false)
-                    return
-                }
-                continuation.resume(
-                    returning: runningApplication.activate(options: [.activateAllWindows])
-                )
+                continuation.resume(returning: error == nil && runningApplication != nil)
             }
         }
     }

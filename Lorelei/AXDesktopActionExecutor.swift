@@ -13,11 +13,35 @@ import Foundation
 struct DesktopUINode: Equatable, Sendable {
     let role: String
     let title: String?
+    let roleDescription: String?
     let value: String?
+    let hint: String?
     let frame: CGRect?
     let isEnabled: Bool
     let isFocused: Bool
     let children: [DesktopUINode]
+
+    init(
+        role: String,
+        title: String?,
+        roleDescription: String? = nil,
+        value: String?,
+        hint: String? = nil,
+        frame: CGRect?,
+        isEnabled: Bool,
+        isFocused: Bool,
+        children: [DesktopUINode]
+    ) {
+        self.role = role
+        self.title = title
+        self.roleDescription = roleDescription
+        self.value = value
+        self.hint = hint
+        self.frame = frame
+        self.isEnabled = isEnabled
+        self.isFocused = isFocused
+        self.children = children
+    }
 }
 
 @MainActor
@@ -218,8 +242,14 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
         if let title = normalizedText(node.title) {
             line += " \"\(escaped(title))\""
         }
+        if let roleDescription = additionalText(node.roleDescription, beyond: [node.title, node.role]) {
+            line += " roleDescription=\"\(escaped(truncated(roleDescription)))\""
+        }
         if let value = normalizedText(node.value) {
             line += " value=\"\(escaped(truncated(value)))\""
+        }
+        if let hint = additionalText(node.hint, beyond: [node.title]) {
+            line += " hint=\"\(escaped(truncated(hint)))\""
         }
         if node.role == "AXWindow", let frame = node.frame {
             line += " (\(rounded(frame.origin.x)),\(rounded(frame.origin.y)) \(rounded(frame.width))x\(rounded(frame.height)))"
@@ -242,6 +272,14 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
             return value
         }
         return String(value.prefix(79)) + "…"
+    }
+
+    private static func additionalText(_ value: String?, beyond existingValues: [String?]) -> String? {
+        guard let normalizedValue = normalizedText(value) else {
+            return nil
+        }
+        let normalizedExistingValues = Set(existingValues.compactMap { normalizedText($0)?.lowercased() })
+        return normalizedExistingValues.contains(normalizedValue.lowercased()) ? nil : normalizedValue
     }
 
     private static func escaped(_ value: String) -> String {
@@ -291,11 +329,10 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
 
         let node = DesktopUINode(
             role: stringAttribute(kAXRoleAttribute as CFString, of: element) ?? "AXUnknown",
-            title: firstTextAttribute(
-                [kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString, "AXLabel" as CFString],
-                of: element
-            ),
+            title: firstTextAttribute([kAXTitleAttribute as CFString, "AXLabel" as CFString], of: element),
+            roleDescription: stringAttribute(kAXRoleDescriptionAttribute as CFString, of: element),
             value: valueString(of: element),
+            hint: firstTextAttribute([kAXDescriptionAttribute as CFString, kAXHelpAttribute as CFString], of: element),
             frame: frame(of: element),
             isEnabled: boolAttribute(kAXEnabledAttribute as CFString, of: element) ?? true,
             isFocused: boolAttribute(kAXFocusedAttribute as CFString, of: element) ?? false,
