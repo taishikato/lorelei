@@ -542,6 +542,54 @@ struct LoreleiTests {
         #expect(LoreleiToolbarView.statusLabel(for: .finished(success: false)) == "Failed")
     }
 
+    @Test func toolbarAutoExpandsOnApprovalRequest() async throws {
+        let defaults = UserDefaults(suiteName: "ToolbarAutoExpansionApprovalTests")!
+        defaults.removePersistentDomain(forName: "ToolbarAutoExpansionApprovalTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":44,"method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","questions":[{"id":"approval","header":"Computer Use","question":"Allow control?","isOther":false,"isSecret":false,"options":[{"label":"Accept","description":"Allow."},{"label":"Decline","description":"Stop."}]}]}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+        let controller = LoreleiToolbarController(companionManager: manager)
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if controller.isExpanded {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+        #expect(controller.isExpanded)
+    }
+
+    @Test func settingsPanelFrameFallsBackToScreenCenter() async throws {
+        let screenFrame = CGRect(x: 0, y: 0, width: 2000, height: 1200)
+        let panelSize = CGSize(width: 320, height: 380)
+
+        let nilAnchorFrame = MenuBarPanelManager.settingsPanelFrame(
+            anchorFrame: nil,
+            screenFrame: screenFrame,
+            panelSize: panelSize
+        )
+        let offscreenAnchorFrame = MenuBarPanelManager.settingsPanelFrame(
+            anchorFrame: CGRect(x: -500, y: 2000, width: 24, height: 24),
+            screenFrame: screenFrame,
+            panelSize: panelSize
+        )
+
+        #expect(nilAnchorFrame == CGRect(x: 840, y: 410, width: 320, height: 380))
+        #expect(offscreenAnchorFrame == nilAnchorFrame)
+    }
+
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {
         let executor = WorkspaceCommandExecutor()
 

@@ -18,16 +18,23 @@ final class LoreleiToolbarExpansionState: ObservableObject {
 final class LoreleiToolbarController {
     private enum Metrics {
         static let collapsedSize = CGSize(width: 260, height: 36)
-        static let expandedSize = CGSize(width: 460, height: 220)
+        static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
     }
 
     private let companionManager: CompanionManager
     private let expansionState = LoreleiToolbarExpansionState()
+    private var runStatusCancellable: AnyCancellable?
     private var panel: NSPanel?
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
+        runStatusCancellable = companionManager.$runStatus
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] runStatus in
+                guard case .needsApproval = runStatus else { return }
+                self?.setExpanded(true)
+            }
     }
 
     func show() {

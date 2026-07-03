@@ -45,7 +45,9 @@ final class MenuBarPanelManager: NSObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.hidePanel()
+            Task { @MainActor [weak self] in
+                self?.hidePanel()
+            }
         }
     }
 
@@ -177,23 +179,46 @@ final class MenuBarPanelManager: NSObject {
 
     private func positionPanelBelowStatusItem() {
         guard let panel else { return }
-        guard let buttonWindow = statusItem?.button?.window else { return }
-
-        let statusItemFrame = buttonWindow.frame
         let gapBelowMenuBar: CGFloat = 4
 
         // Calculate the panel's content height from the hosting view's fitting size
         // so the panel snugly wraps the SwiftUI content instead of using a fixed height.
         let fittingSize = panel.contentView?.fittingSize ?? CGSize(width: panelWidth, height: panelHeight)
         let actualPanelHeight = fittingSize.height
+        let buttonWindow = statusItem?.button?.window
+        let screenFrame = (buttonWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? CGRect(x: 0, y: 0, width: panelWidth, height: actualPanelHeight)
 
-        // Horizontally center the panel beneath the status item icon
-        let panelOriginX = statusItemFrame.midX - (panelWidth / 2)
-        let panelOriginY = statusItemFrame.minY - actualPanelHeight - gapBelowMenuBar
+        let frame = Self.settingsPanelFrame(
+            anchorFrame: buttonWindow?.frame,
+            screenFrame: screenFrame,
+            panelSize: CGSize(width: panelWidth, height: actualPanelHeight),
+            gapBelowMenuBar: gapBelowMenuBar
+        )
 
-        panel.setFrame(
-            NSRect(x: panelOriginX, y: panelOriginY, width: panelWidth, height: actualPanelHeight),
-            display: true
+        panel.setFrame(frame, display: true)
+    }
+
+    static func settingsPanelFrame(
+        anchorFrame: CGRect?,
+        screenFrame: CGRect,
+        panelSize: CGSize,
+        gapBelowMenuBar: CGFloat = 4
+    ) -> CGRect {
+        guard let anchorFrame, screenFrame.intersects(anchorFrame) else {
+            return CGRect(
+                x: screenFrame.midX - (panelSize.width / 2),
+                y: screenFrame.midY - (panelSize.height / 2),
+                width: panelSize.width,
+                height: panelSize.height
+            )
+        }
+
+        return CGRect(
+            x: anchorFrame.midX - (panelSize.width / 2),
+            y: anchorFrame.minY - panelSize.height - gapBelowMenuBar,
+            width: panelSize.width,
+            height: panelSize.height
         )
     }
 
