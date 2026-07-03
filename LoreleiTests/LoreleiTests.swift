@@ -2156,6 +2156,56 @@ struct LoreleiTests {
         #expect(await transport.didTerminate)
     }
 
+    @Test func appServerExecutorTimeoutInterruptsBeforeTerminating() async throws {
+        let completingTransport = InterruptCompletingCodexAppServerTransport(
+            initialLines: [
+                #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+                #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+                #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
+            ],
+            interruptCompletionLines: [
+                #"{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"interrupted"}}}"#
+            ]
+        )
+        let completingExecutor = CodexAppServerExecutor(
+            turnTimeoutSeconds: 0.05,
+            timeoutInterruptGraceSeconds: 0.5,
+            makeTransport: { completingTransport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let completingResult = await completingExecutor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+        let completingMessages = try await completingTransport.sentJSONMessages()
+        let interrupt = try #require(completingMessages.first { $0["method"] as? String == "turn/interrupt" })
+        let interruptParams = try #require(interrupt["params"] as? [String: Any])
+
+        #expect(completingResult.status == .failed)
+        #expect(completingResult.summary.contains("Codex App Server command timed out."))
+        #expect(interruptParams["threadId"] as? String == "thread-1")
+        #expect(interruptParams["turnId"] as? String == "turn-9")
+        #expect(!(await completingTransport.didTerminate))
+
+        let silentTransport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
+        ])
+        let silentExecutor = CodexAppServerExecutor(
+            turnTimeoutSeconds: 0.05,
+            timeoutInterruptGraceSeconds: 0.05,
+            makeTransport: { silentTransport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let silentResult = await silentExecutor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+        let silentMessages = try await silentTransport.sentJSONMessages()
+
+        #expect(silentResult.status == .failed)
+        #expect(silentResult.summary.contains("Codex App Server command timed out."))
+        #expect(silentMessages.contains { $0["method"] as? String == "turn/interrupt" })
+        #expect(await silentTransport.didTerminate)
+    }
+
     @Test func appServerExecutorRegistersAndAnswersDynamicToolCalls() async throws {
         let dynamicTool = CodexAppServerDynamicToolSpec(
             name: "foreground_app",
@@ -2490,6 +2540,72 @@ struct LoreleiTests {
         #expect(!sentMessages.contains { $0["method"] as? String == "turn/steer" })
     }
 
+    @Test func companionManagerStopKeepsSessionForNextTurn() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerStopKeepsSessionTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerStopKeepsSessionTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let factoryCallCount = AsyncCounter()
+        let transport = InterruptCompletingCodexAppServerTransport(
+            initialLines: [
+                #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+                #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+                #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+                #"{"method":"item/agentMessage/delta","params":{"delta":"Working"}}"#
+            ],
+            interruptCompletionLines: [
+                #"{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"interrupted"}}}"#,
+                #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-10","items":[],"status":"inProgress"}}}"#,
+                #"{"method":"item/agentMessage/delta","params":{"delta":"Still here"}}"#,
+                #"{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-10","items":[],"status":"completed"}}}"#
+            ]
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: {
+                await factoryCallCount.increment()
+                return transport
+            },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<40 {
+            if manager.streamText == "Working" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.stopCurrentRun()
+        for _ in 0..<40 {
+            if manager.latestResultSummary == "Stopped." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.handleFinalTranscriptForTesting("use computer use to keep going")
+        for _ in 0..<40 {
+            if manager.latestResultSummary == "Still here" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let interrupt = try #require(sentMessages.first { $0["method"] as? String == "turn/interrupt" })
+        let interruptParams = try #require(interrupt["params"] as? [String: Any])
+        let turnStarts = sentMessages.filter { $0["method"] as? String == "turn/start" }
+
+        #expect(interruptParams["threadId"] as? String == "thread-1")
+        #expect(interruptParams["turnId"] as? String == "turn-9")
+        #expect(turnStarts.count == 2)
+        #expect(turnStarts.compactMap { ($0["params"] as? [String: Any])?["threadId"] as? String } == ["thread-1", "thread-1"])
+        #expect(await factoryCallCount.value == 1)
+        #expect(!(await transport.didTerminate))
+    }
+
     private func isOrderedSubsequence(
         _ expected: [LoreleiRunStatus],
         of recorded: [LoreleiRunStatus]
@@ -2609,7 +2725,18 @@ struct LoreleiTests {
 
         manager.stopCurrentRun()
 
-        #expect(audioFeedback.events.contains(BuddyAudioFeedbackRecorder.Event(cue: .runFailed, spokenSummary: "Stopped.")))
+        // Stop now resolves asynchronously (interrupt-or-invalidate hops to a
+        // main-actor task), so poll for the cue instead of asserting one tick
+        // after the call.
+        let expectedEvent = BuddyAudioFeedbackRecorder.Event(cue: .runFailed, spokenSummary: "Stopped.")
+        for _ in 0..<100 {
+            if audioFeedback.events.contains(expectedEvent) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(audioFeedback.events.contains(expectedEvent))
     }
 
     @Test func companionManagerPlaysApprovalCue() async throws {
@@ -3013,6 +3140,57 @@ private actor HangingAfterLinesCodexAppServerTransport: CodexAppServerTransporti
             try? await Task.sleep(for: .milliseconds(5))
         }
         return nil
+    }
+
+    func terminate() async {
+        terminated = true
+    }
+}
+
+private actor InterruptCompletingCodexAppServerTransport: CodexAppServerTransporting {
+    private var lines: [String]
+    private var interruptCompletionLines: [String]
+    private var recordedSentLines: [String] = []
+    private var terminated = false
+
+    init(initialLines: [String], interruptCompletionLines: [String]) {
+        self.lines = initialLines
+        self.interruptCompletionLines = interruptCompletionLines
+    }
+
+    var didTerminate: Bool {
+        terminated
+    }
+
+    func sentJSONMessages() throws -> [[String: Any]] {
+        try recordedSentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+    }
+
+    func send(line: String) async throws {
+        let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        recordedSentLines.append(trimmedLine)
+        guard let data = trimmedLine.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              root["method"] as? String == "turn/interrupt" else {
+            return
+        }
+
+        lines.append(contentsOf: interruptCompletionLines)
+        interruptCompletionLines = []
+    }
+
+    func nextLine() async throws -> String? {
+        if !lines.isEmpty {
+            return lines.removeFirst()
+        }
+
+        while !terminated && lines.isEmpty {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        guard !terminated else { return nil }
+        return lines.removeFirst()
     }
 
     func terminate() async {

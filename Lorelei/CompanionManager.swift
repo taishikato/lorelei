@@ -466,9 +466,33 @@ final class CompanionManager: ObservableObject {
             return
         }
 
-        Task { @MainActor in
-            await invalidateLiveCodexAppServerSessionWhenReady()
+        if let activeTurn,
+           let liveCodexAppServerTransport,
+           let codexAppServerExecutor {
+            Task { @MainActor in
+                do {
+                    let requestID = await codexAppServerExecutor.reserveRequestID()
+                    try await codexAppServerExecutor.sendInterruptRequest(
+                        id: requestID,
+                        threadID: activeTurn.threadID,
+                        turnID: activeTurn.turnID,
+                        transport: liveCodexAppServerTransport
+                    )
+                    cancelPendingCodexAppServerApprovalForStop()
+                } catch {
+                    await stopCurrentRunByInvalidatingSession()
+                }
+            }
+            return
         }
+
+        Task { @MainActor in
+            await stopCurrentRunByInvalidatingSession()
+        }
+    }
+
+    private func stopCurrentRunByInvalidatingSession() async {
+        await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
         activeTurn = nil
         outstandingSteerTranscripts.removeAll()

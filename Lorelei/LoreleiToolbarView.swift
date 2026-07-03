@@ -48,7 +48,7 @@ struct LoreleiToolbarView: View {
     }
 
     private var collapsedCapsule: some View {
-        Button(action: toggleExpansion) {
+        Button(action: { deferredAction(toggleExpansion) }) {
             HStack(spacing: 9) {
                 statusDot
                 Text(Self.statusLabel(for: companionManager.runStatus))
@@ -99,7 +99,7 @@ struct LoreleiToolbarView: View {
 
             Spacer()
 
-            Button(action: toggleExpansion) {
+            Button(action: { deferredAction(toggleExpansion) }) {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -171,12 +171,12 @@ struct LoreleiToolbarView: View {
 
             HStack(spacing: 8) {
                 Button("Accept") {
-                    companionManager.acceptPendingApproval()
+                    deferredAction { companionManager.acceptPendingApproval() }
                 }
                 .buttonStyle(.borderedProminent)
 
                 Button("Decline") {
-                    companionManager.cancelPendingApproval()
+                    deferredAction { companionManager.cancelPendingApproval() }
                 }
                 .buttonStyle(.bordered)
             }
@@ -199,7 +199,7 @@ struct LoreleiToolbarView: View {
 
             if showsStopButton {
                 Button("Stop") {
-                    companionManager.stopCurrentRun()
+                    deferredAction { companionManager.stopCurrentRun() }
                 }
                 .buttonStyle(.bordered)
             }
@@ -272,5 +272,20 @@ struct LoreleiToolbarView: View {
         case .finished(let success):
             success ? .gray : .red
         }
+    }
+}
+
+/// Runs a state-mutating button action on the next main-actor tick.
+///
+/// Toolbar buttons (expand/collapse, Stop, Accept/Decline) synchronously
+/// mutate state that removes their own subtree from the view hierarchy.
+/// Doing that inside the gesture dispatch crashes SwiftUI's button gesture
+/// callbacks (EXC_BAD_ACCESS in MainActor.assumeIsolated) when stream
+/// updates are re-rendering the panel at the same time - deferring one tick
+/// lets the gesture finish before the hierarchy changes.
+@MainActor
+func deferredAction(_ action: @escaping @MainActor () -> Void) {
+    Task { @MainActor in
+        action()
     }
 }

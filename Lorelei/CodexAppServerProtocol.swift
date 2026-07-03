@@ -237,6 +237,17 @@ enum CodexAppServerProtocol {
         ]
     }
 
+    static func turnInterruptRequest(id: Int, threadID: String, turnID: String) -> [String: Any] {
+        [
+            "id": id,
+            "method": "turn/interrupt",
+            "params": [
+                "threadId": threadID,
+                "turnId": turnID
+            ]
+        ]
+    }
+
     static func approvalResponse(id: Int, payload: CodexAppServerApprovalPayload) -> [String: Any] {
         switch payload {
         case .toolUserInput(let questionID, let answer):

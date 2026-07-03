@@ -145,6 +145,7 @@ actor CodexAppServerSessionStore {
         onTransportReady: @Sendable (CodexAppServerTransporting) -> Void
     ) async throws -> LiveSession {
         if let liveSession, liveSession.cwd == cwd {
+            onTransportReady(liveSession.transport)
             onLifecycleEvent(.reused)
             return liveSession
         }
@@ -344,6 +345,7 @@ private actor CodexAppServerSteerRequestTracker {
 
 final class CodexAppServerExecutor {
     private let turnTimeoutSeconds: TimeInterval
+    private let timeoutInterruptGraceSeconds: TimeInterval
     private let sessionStore: CodexAppServerSessionStore
     private let steerRequestTracker = CodexAppServerSteerRequestTracker()
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
@@ -355,6 +357,7 @@ final class CodexAppServerExecutor {
 
     init(
         turnTimeoutSeconds: TimeInterval = 120,
+        timeoutInterruptGraceSeconds: TimeInterval = 5,
         makeTransport: @escaping () async throws -> CodexAppServerTransporting = {
             try await CodexAppServerStdioTransport.make()
         },
@@ -372,6 +375,7 @@ final class CodexAppServerExecutor {
         approvalHandler: @escaping (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
+        self.timeoutInterruptGraceSeconds = timeoutInterruptGraceSeconds
         self.sessionStore = CodexAppServerSessionStore(
             makeTransport: makeTransport,
             onLifecycleEvent: onSessionLifecycleEvent
@@ -428,6 +432,10 @@ final class CodexAppServerExecutor {
         return requestID
     }
 
+    func reserveRequestID() async -> Int {
+        await sessionStore.nextRequestID()
+    }
+
     func sendSteerRequest(
         id requestID: Int,
         threadID: String,
@@ -452,6 +460,23 @@ final class CodexAppServerExecutor {
         }
     }
 
+    func sendInterruptRequest(
+        id requestID: Int,
+        threadID: String,
+        turnID: String,
+        transport: CodexAppServerTransporting
+    ) async throws {
+        try await send(
+            CodexAppServerProtocol.turnInterruptRequest(
+                id: requestID,
+                threadID: threadID,
+                turnID: turnID
+            ),
+            to: transport,
+            traceBuffer: CodexAppServerTraceBuffer()
+        )
+    }
+
     private func runDesktopActionAttempt(
         prompt: String,
         cwd: String,
@@ -459,14 +484,49 @@ final class CodexAppServerExecutor {
         allowDeadSessionRetry: Bool
     ) async -> CodexAppServerTurnAttemptResult {
         let timeoutState = CodexAppServerTimeoutState()
-        let timeoutTask = Task { [turnTimeoutSeconds, sessionStore, timeoutState] in
+        let timeoutTask = Task { [
+            turnTimeoutSeconds,
+            timeoutInterruptGraceSeconds,
+            sessionStore,
+            timeoutState,
+            traceBuffer,
+            traceHandler
+        ] in
             do {
                 try await Task.sleep(for: .seconds(turnTimeoutSeconds))
             } catch {
                 return
             }
             await timeoutState.markTimedOut()
-            await sessionStore.invalidateCurrentConnectionForTimeout()
+            guard let activeTurn = await timeoutState.activeTurn else {
+                await sessionStore.invalidateCurrentConnectionForTimeout()
+                return
+            }
+
+            do {
+                let requestID = await sessionStore.nextRequestID()
+                let message = CodexAppServerProtocol.turnInterruptRequest(
+                    id: requestID,
+                    threadID: activeTurn.threadID,
+                    turnID: activeTurn.turnID
+                )
+                try await activeTurn.transport.send(line: CodexAppServerProtocol.encodeLine(message))
+                traceBuffer.record(.outbound(codexAppServerTraceDetail(forOutboundMessage: message)))
+                traceHandler(.outbound(codexAppServerTraceDetail(forOutboundMessage: message)))
+            } catch {
+                await sessionStore.invalidate(onlyIfToken: activeTurn.connectionToken)
+                return
+            }
+
+            do {
+                try await Task.sleep(for: .seconds(timeoutInterruptGraceSeconds))
+            } catch {
+                return
+            }
+
+            if await timeoutState.didTimeOut {
+                await sessionStore.invalidate(onlyIfToken: activeTurn.connectionToken)
+            }
         }
         defer { timeoutTask.cancel() }
 
@@ -532,6 +592,12 @@ final class CodexAppServerExecutor {
                 recordTrace(.inbound(codexAppServerTraceDetail(for: event)), to: traceBuffer)
                 switch event {
                 case .turnStarted(let threadID, let turnID):
+                    await timeoutState.setActiveTurn(
+                        threadID: threadID,
+                        turnID: turnID,
+                        transport: session.transport,
+                        connectionToken: session.connectionToken
+                    )
                     progressHandler(.turnStarted(threadID: threadID, turnID: turnID))
                 case .agentMessageDelta(let delta):
                     progressHandler(.agentMessageDelta(delta))
@@ -577,6 +643,10 @@ final class CodexAppServerExecutor {
                         )
                     )
                 case .turnCompleted(let status):
+                    await timeoutState.clearActiveTurn()
+                    if await timeoutState.didTimeOut {
+                        return .finished(timeoutResult(isWaitingOnApproval: isWaitingOnApproval, traceBuffer: traceBuffer))
+                    }
                     if status == "completed" {
                         let summary = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
                         if let pendingToolFailure {
@@ -591,7 +661,7 @@ final class CodexAppServerExecutor {
                     }
                     return .finished(
                         WorkspaceCommandResult(
-                            summary: "Codex App Server turn ended with status: \(status)",
+                            summary: "Stopped.",
                             status: .failed
                         )
                     )
@@ -769,14 +839,44 @@ private extension CodexAppServerDynamicToolCallRequest {
 }
 
 private actor CodexAppServerTimeoutState {
+    struct ActiveTurn: Sendable {
+        let threadID: String
+        let turnID: String
+        let transport: CodexAppServerTransporting
+        let connectionToken: Int
+    }
+
     private var timedOut = false
+    private var currentActiveTurn: ActiveTurn?
 
     var didTimeOut: Bool {
         timedOut
     }
 
+    var activeTurn: ActiveTurn? {
+        currentActiveTurn
+    }
+
     func markTimedOut() {
         timedOut = true
+    }
+
+    func setActiveTurn(
+        threadID: String,
+        turnID: String,
+        transport: CodexAppServerTransporting,
+        connectionToken: Int
+    ) {
+        currentActiveTurn = ActiveTurn(
+            threadID: threadID,
+            turnID: turnID,
+            transport: transport,
+            connectionToken: connectionToken
+        )
+    }
+
+    func clearActiveTurn() {
+        currentActiveTurn = nil
     }
 }
 
