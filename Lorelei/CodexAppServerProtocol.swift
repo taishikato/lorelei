@@ -223,6 +223,11 @@ enum CodexAppServerApprovalPayload: Equatable, Sendable {
     case mcpElicitationCancel
 }
 
+enum CodexAppServerModel {
+    /// Spec decision: App Server turns run on gpt-5.5, pinned per-turn.
+    static let turnModel = "gpt-5.5"
+}
+
 enum CodexAppServerProtocol {
     static func initializeRequest(id: Int) -> [String: Any] {
         [
@@ -296,6 +301,7 @@ enum CodexAppServerProtocol {
             "params": [
                 "threadId": threadID,
                 "cwd": cwd,
+                "model": CodexAppServerModel.turnModel,
                 "input": input,
                 "approvalPolicy": granularApprovalPolicy(),
                 "approvalsReviewer": "user"

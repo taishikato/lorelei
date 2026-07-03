@@ -1052,6 +1052,18 @@ struct LoreleiTests {
         #expect(granular["mcp_elicitations"] as? Bool == true)
     }
 
+    @Test func appServerTurnStartRequestPinsModelToGPT55() throws {
+        let request = CodexAppServerProtocol.turnStartRequest(
+            id: 3,
+            threadID: "thread-1",
+            prompt: "open Gmail",
+            cwd: "/Users/example"
+        )
+        let params = try #require(request["params"] as? [String: Any])
+
+        #expect(params["model"] as? String == "gpt-5.5")
+    }
+
     @Test func appServerTurnStartCanAttachComputerUseSkillInput() throws {
         let skillPath = "/Users/example/.codex/plugins/computer-use/skills/computer-use/SKILL.md"
         let request = CodexAppServerProtocol.turnStartRequest(
