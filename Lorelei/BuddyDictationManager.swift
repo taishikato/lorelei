@@ -11,7 +11,6 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
-import Speech
 
 enum BuddyPushToTalkShortcut {
     enum ShortcutOption {
@@ -201,7 +200,6 @@ enum BuddyPushToTalkShortcut {
 
 enum BuddyDictationPermissionProblem {
     case microphoneAccessDenied
-    case speechRecognitionDenied
 }
 
 private enum BuddyDictationStartSource {
@@ -254,11 +252,6 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     }
 
     var needsInitialPermissionPrompt: Bool {
-        if transcriptionProvider.requiresSpeechRecognitionPermission {
-            return AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
-                || SFSpeechRecognizer.authorizationStatus() == .notDetermined
-        }
-
         return AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
     }
 
@@ -366,7 +359,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             // the app forward, we can safely continue into the permission check.
         }
 
-        let hasPermissions = await requestMicrophoneAndSpeechPermissionsWithoutDuplicatePrompts()
+        let hasPermissions = await requestMicrophonePermissionWithoutDuplicatePrompts()
         isPreparingToRecord = false
 
         if hasPermissions {
@@ -404,7 +397,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         currentPermissionProblem = nil
         isPreparingToRecord = true
 
-        guard await requestMicrophoneAndSpeechPermissionsWithoutDuplicatePrompts() else {
+        guard await requestMicrophonePermissionWithoutDuplicatePrompts() else {
             print("🎙️ BuddyDictationManager: permissions missing or denied")
             isPreparingToRecord = false
             return
@@ -731,34 +724,24 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         recordedAudioPowerHistory = updatedRecordedAudioPowerHistory
     }
 
-    private func requestMicrophoneAndSpeechPermissionsIfNeeded() async -> Bool {
+    private func requestMicrophonePermissionIfNeededForDictation() async -> Bool {
         let hasMicrophonePermission = await requestMicrophonePermissionIfNeeded()
         guard hasMicrophonePermission else {
             lastErrorMessage = "microphone permission is required for push to talk."
             return false
         }
 
-        guard transcriptionProvider.requiresSpeechRecognitionPermission else {
-            return true
-        }
-
-        let hasSpeechRecognitionPermission = await requestSpeechRecognitionPermissionIfNeeded()
-        guard hasSpeechRecognitionPermission else {
-            lastErrorMessage = "speech recognition permission is required for push to talk."
-            return false
-        }
-
         return true
     }
 
-    /// macOS can show the microphone/speech sheet again if we accidentally fan out
+    /// macOS can show the microphone sheet again if we accidentally fan out
     /// multiple permission requests before the first one finishes. We keep exactly
     /// one in-flight request task so rapid repeat presses all await the same result.
     ///
     /// After the task completes, we skip re-requesting for a short cooldown period
     /// so macOS has time to update its authorization cache. This prevents the
     /// permission dialog from popping up again on rapid follow-up presses.
-    private func requestMicrophoneAndSpeechPermissionsWithoutDuplicatePrompts() async -> Bool {
+    private func requestMicrophonePermissionWithoutDuplicatePrompts() async -> Bool {
         // If a permission request is already in-flight, reuse it.
         if let activePermissionRequestTask {
             return await activePermissionRequestTask.value
@@ -774,7 +757,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         }
 
         let permissionRequestTask = Task { @MainActor in
-            await self.requestMicrophoneAndSpeechPermissionsIfNeeded()
+            await self.requestMicrophonePermissionIfNeededForDictation()
         }
 
         activePermissionRequestTask = permissionRequestTask
@@ -807,36 +790,12 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         }
     }
 
-    private func requestSpeechRecognitionPermissionIfNeeded() async -> Bool {
-        switch SFSpeechRecognizer.authorizationStatus() {
-        case .authorized:
-            currentPermissionProblem = nil
-            return true
-        case .notDetermined:
-            let isGranted = await withCheckedContinuation { continuation in
-                SFSpeechRecognizer.requestAuthorization { authorizationStatus in
-                    continuation.resume(returning: authorizationStatus == .authorized)
-                }
-            }
-            currentPermissionProblem = isGranted ? nil : .speechRecognitionDenied
-            return isGranted
-        case .denied, .restricted:
-            currentPermissionProblem = .speechRecognitionDenied
-            return false
-        @unknown default:
-            currentPermissionProblem = .speechRecognitionDenied
-            return false
-        }
-    }
-
     func openRelevantPrivacySettings() {
         let settingsURLString: String
 
         switch currentPermissionProblem {
         case .microphoneAccessDenied:
             settingsURLString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-        case .speechRecognitionDenied:
-            settingsURLString = "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
         case nil:
             settingsURLString = "x-apple.systempreferences:com.apple.preference.security"
         }
