@@ -540,6 +540,26 @@ struct LoreleiTests {
         #expect(frame == CGRect(x: 870, y: 1156, width: 260, height: 36))
     }
 
+    @Test func cursorCapsuleSitsRightOfCursor() async throws {
+        let origin = BlueCursorView.capsuleOrigin(
+            cursorPoint: CGPoint(x: 500, y: 500),
+            capsuleSize: CGSize(width: 140, height: 34),
+            screenFrame: CGRect(x: 0, y: 0, width: 2000, height: 1200)
+        )
+
+        #expect(origin == CGPoint(x: 518, y: 483))
+    }
+
+    @Test func cursorCapsuleFlipsLeftNearRightEdge() async throws {
+        let origin = BlueCursorView.capsuleOrigin(
+            cursorPoint: CGPoint(x: 1950, y: 500),
+            capsuleSize: CGSize(width: 140, height: 34),
+            screenFrame: CGRect(x: 0, y: 0, width: 2000, height: 1200)
+        )
+
+        #expect(origin == CGPoint(x: 1792, y: 483))
+    }
+
     @Test func toolbarStatusLabelReflectsRunStatus() async throws {
         #expect(LoreleiToolbarView.statusLabel(for: .idle) == "Ready")
         #expect(LoreleiToolbarView.statusLabel(for: .listening) == "Listening…")
