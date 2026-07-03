@@ -144,6 +144,46 @@ struct LoreleiTests {
         #expect(manager.latestResultSummary == "Opened through App Server.")
     }
 
+    @Test func companionManagerRegistersDesktopToolSuiteWithForegroundTool() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDesktopToolSuiteRegistrationTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDesktopToolSuiteRegistrationTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Registered tools."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Registered tools." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadStartParams = try #require(threadStart["params"] as? [String: Any])
+        let dynamicTools = try #require(threadStartParams["dynamicTools"] as? [[String: Any]])
+        let toolNames = dynamicTools.compactMap { $0["name"] as? String }
+
+        #expect(toolNames.count == 5)
+        #expect(toolNames.filter { $0 == "foreground_app" }.count == 1)
+        #expect(toolNames.filter { $0 == "desktop_snapshot" }.count == 1)
+        #expect(toolNames.filter { $0 == "desktop_action" }.count == 1)
+        #expect(toolNames.filter { $0 == "set_text" }.count == 1)
+        #expect(toolNames.filter { $0 == "screenshot" }.count == 1)
+    }
+
     @Test func companionManagerWrapsGeneralDesktopActionsWithForegroundAppGuidance() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerGeneralDesktopActionRunnerTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerGeneralDesktopActionRunnerTests")
