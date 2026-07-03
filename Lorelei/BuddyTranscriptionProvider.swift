@@ -31,25 +31,26 @@ protocol BuddyTranscriptionProvider {
 
 enum BuddyTranscriptionProviderFactory {
     private enum PreferredProvider: String {
-        case appleSpeech = "apple"
+        case apple = "apple"
     }
 
     static func makeDefaultProvider() -> any BuddyTranscriptionProvider {
-        let provider = resolveProvider()
+        let preferredProviderRawValue = AppBundleConfiguration
+            .stringValue(forKey: "VoiceTranscriptionProvider")
+        let provider = makeProvider(preferredProviderRawValue: preferredProviderRawValue)
         print("🎙️ Transcription: using \(provider.displayName)")
         return provider
     }
 
-    private static func resolveProvider() -> any BuddyTranscriptionProvider {
-        let preferredProviderRawValue = AppBundleConfiguration
-            .stringValue(forKey: "VoiceTranscriptionProvider")?
+    static func makeProvider(preferredProviderRawValue: String?) -> any BuddyTranscriptionProvider {
+        let normalizedPreferredProviderRawValue = preferredProviderRawValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let preferredProvider = preferredProviderRawValue.flatMap(PreferredProvider.init(rawValue:))
+        let preferredProvider = normalizedPreferredProviderRawValue.flatMap(PreferredProvider.init(rawValue:))
 
-        if preferredProvider == .appleSpeech {
-            return AppleSpeechTranscriptionProvider()
+        switch preferredProvider {
+        case .apple, nil:
+            return SpeechAnalyzerTranscriptionProvider()
         }
-
-        return AppleSpeechTranscriptionProvider()
     }
 }

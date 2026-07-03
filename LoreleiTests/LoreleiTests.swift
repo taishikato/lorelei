@@ -42,6 +42,20 @@ struct LoreleiTests {
         #expect(reducer.finalizedText == "open textedit type hello")
     }
 
+    @Test func defaultTranscriptionProviderUsesSpeechAnalyzer() async throws {
+        let provider = BuddyTranscriptionProviderFactory.makeProvider(preferredProviderRawValue: nil)
+
+        #expect(provider is SpeechAnalyzerTranscriptionProvider)
+        #expect(!provider.requiresSpeechRecognitionPermission)
+    }
+
+    @Test func appleTranscriptionProviderConfigUsesSpeechAnalyzer() async throws {
+        let provider = BuddyTranscriptionProviderFactory.makeProvider(preferredProviderRawValue: "apple")
+
+        #expect(provider is SpeechAnalyzerTranscriptionProvider)
+        #expect(!provider.requiresSpeechRecognitionPermission)
+    }
+
     @Test func firstPermissionRequestUsesSystemPromptOnly() async throws {
         let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
             hasPermissionNow: false,
