@@ -72,6 +72,16 @@ enum CodexAppServerDesktopToolSuite {
                         ])
                     ])
                 ])
+            ),
+            CodexAppServerDynamicToolSpec(
+                name: "screenshot",
+                namespace: namespace,
+                description: "Fallback visual capture for when lorelei.desktop_snapshot does not expose the needed information, such as canvas or Electron app content. Use the accessibility snapshot first when possible.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "additionalProperties": .bool(false),
+                    "properties": .object([:])
+                ])
             )
         ]
     }
@@ -92,6 +102,8 @@ enum CodexAppServerDesktopToolSuite {
             return await handleAction(request, executor: executor)
         case "set_text":
             return await handleSetText(request, executor: executor)
+        case "screenshot":
+            return await handleScreenshot(executor: executor)
         default:
             return .failure("Unsupported dynamic tool: \(qualifiedName(request))")
         }
@@ -171,6 +183,22 @@ enum CodexAppServerDesktopToolSuite {
 
         let outcome = await executor.setText(text, elementID: elementID, mode: mode)
         return CodexAppServerDynamicToolCallResult(success: outcome.success, contentText: outcome.message)
+    }
+
+    @MainActor
+    private static func handleScreenshot(
+        executor: any DesktopActionExecuting
+    ) async -> CodexAppServerDynamicToolCallResult {
+        switch await executor.screenshot() {
+        case .success(let data):
+            let dataURL = "data:image/png;base64,\(data.base64EncodedString())"
+            return CodexAppServerDynamicToolCallResult(
+                success: true,
+                contentItems: [.image(dataURL: dataURL)]
+            )
+        case .failure(let error):
+            return .failure(error.toolMessage)
+        }
     }
 
     private static func qualifiedName(_ request: CodexAppServerDynamicToolCallRequest) -> String {

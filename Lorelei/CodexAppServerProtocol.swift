@@ -58,9 +58,23 @@ struct CodexAppServerDynamicToolCallRequest: Equatable, Sendable {
     let arguments: CodexAppServerJSONValue
 }
 
+enum CodexAppServerDynamicToolContentItem: Equatable, Sendable {
+    case text(String)
+    case image(dataURL: String)
+}
+
 struct CodexAppServerDynamicToolCallResult: Equatable, Sendable {
     let success: Bool
-    let contentText: String
+    let contentItems: [CodexAppServerDynamicToolContentItem]
+
+    init(success: Bool, contentItems: [CodexAppServerDynamicToolContentItem]) {
+        self.success = success
+        self.contentItems = contentItems
+    }
+
+    init(success: Bool, contentText: String) {
+        self.init(success: success, contentItems: [.text(contentText)])
+    }
 }
 
 enum CodexAppServerJSONValue: Equatable, Sendable {
@@ -390,12 +404,20 @@ enum CodexAppServerProtocol {
             "id": id,
             "result": [
                 "success": result.success,
-                "contentItems": [
-                    [
-                        "type": "inputText",
-                        "text": result.contentText
-                    ]
-                ]
+                "contentItems": result.contentItems.map { item in
+                    switch item {
+                    case .text(let text):
+                        return [
+                            "type": "inputText",
+                            "text": text
+                        ]
+                    case .image(let dataURL):
+                        return [
+                            "type": "inputImage",
+                            "imageUrl": dataURL
+                        ]
+                    }
+                }
             ]
         ]
     }

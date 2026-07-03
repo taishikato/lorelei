@@ -1019,8 +1019,8 @@ struct LoreleiTests {
         ])))
 
         #expect(result.success)
-        #expect(result.contentText.contains("Google Chrome"))
-        #expect(result.contentText.contains("onscreen"))
+        #expect(textContent(result)?.contains("Google Chrome") == true)
+        #expect(textContent(result)?.contains("onscreen") == true)
         #expect(recorder.events == [
             "open:https://chatgpt.com:Google Chrome:com.google.Chrome",
             "activate:Google Chrome:com.google.Chrome",
@@ -1059,7 +1059,7 @@ struct LoreleiTests {
         let result = await tool.handle(foregroundToolRequest(arguments: .object([:])))
 
         #expect(!result.success)
-        #expect(result.contentText.contains("appName or bundleIdentifier"))
+        #expect(textContent(result)?.contains("appName or bundleIdentifier") == true)
         #expect(recorder.events.isEmpty)
     }
 
@@ -1283,15 +1283,37 @@ struct LoreleiTests {
         #expect(firstItem["text"] as? String == "Chrome is onscreen.")
     }
 
+    @Test func dynamicToolCallResponseEncodesImageContentItems() throws {
+        let response = CodexAppServerProtocol.dynamicToolCallResponse(
+            id: 48,
+            result: CodexAppServerDynamicToolCallResult(
+                success: true,
+                contentItems: [
+                    .text("done"),
+                    .image(dataURL: "data:image/png;base64,AA==")
+                ]
+            )
+        )
+        let result = try #require(response["result"] as? [String: Any])
+        let contentItems = try #require(result["contentItems"] as? [[String: Any]])
+
+        #expect(contentItems.count == 2)
+        #expect(contentItems[0]["type"] as? String == "inputText")
+        #expect(contentItems[0]["text"] as? String == "done")
+        #expect(contentItems[1]["type"] as? String == "inputImage")
+        #expect(contentItems[1]["imageUrl"] as? String == "data:image/png;base64,AA==")
+    }
+
     @Test func desktopToolSuiteRegistersSnapshotActionAndSetTextSpecs() throws {
         let specs = CodexAppServerDesktopToolSuite.toolSpecs()
 
-        #expect(specs.map(\.namespace) == ["lorelei", "lorelei", "lorelei"])
-        #expect(specs.map(\.name) == ["desktop_snapshot", "desktop_action", "set_text"])
+        #expect(specs.map(\.namespace) == ["lorelei", "lorelei", "lorelei", "lorelei"])
+        #expect(specs.map(\.name) == ["desktop_snapshot", "desktop_action", "set_text", "screenshot"])
 
         let snapshotSpec = try #require(specs.first { $0.name == "desktop_snapshot" })
         let actionSpec = try #require(specs.first { $0.name == "desktop_action" })
         let setTextSpec = try #require(specs.first { $0.name == "set_text" })
+        let screenshotSpec = try #require(specs.first { $0.name == "screenshot" })
 
         guard case .object(let snapshotSchema) = snapshotSpec.inputSchema,
               case .object(let snapshotProperties) = snapshotSchema["properties"],
@@ -1307,6 +1329,8 @@ struct LoreleiTests {
         #expect(snapshotProperties["app"] != nil)
         #expect(actionSchema["required"] == .array([.string("elementId"), .string("action")]))
         #expect(setTextSchema["required"] == .array([.string("elementId"), .string("text")]))
+        #expect(screenshotSpec.description.contains("Fallback"))
+        #expect(screenshotSpec.description.contains("lorelei.desktop_snapshot"))
 
         guard case .object(let actionProperty) = actionProperties["action"],
               case .array(let actionEnum) = actionProperty["enum"],
@@ -1336,9 +1360,9 @@ struct LoreleiTests {
         )
 
         #expect(defaultResult.success)
-        #expect(defaultResult.contentText == "[e1] AXWindow \"Demo\" (0,0 100x100)")
+        #expect(defaultResult.contentItems == [.text("[e1] AXWindow \"Demo\" (0,0 100x100)")])
         #expect(appResult.success)
-        #expect(appResult.contentText == "[e1] AXWindow \"Demo\" (0,0 100x100)")
+        #expect(appResult.contentItems == [.text("[e1] AXWindow \"Demo\" (0,0 100x100)")])
         #expect(executor.snapshotAppNames == [nil, "TextEdit"])
     }
 
@@ -1357,7 +1381,7 @@ struct LoreleiTests {
         )
 
         #expect(result.success)
-        #expect(result.contentText == "ok")
+        #expect(result.contentItems == [.text("ok")])
         #expect(executor.performCalls.count == 1)
         #expect(executor.performCalls.first?.0 == .press)
         #expect(executor.performCalls.first?.1 == "e2")
@@ -1418,7 +1442,7 @@ struct LoreleiTests {
         )
 
         #expect(!result.success)
-        #expect(result.contentText == "Unknown or stale elementId 'e9'. Call lorelei.desktop_snapshot again before acting.")
+        #expect(result.contentItems == [.text("Unknown or stale elementId 'e9'. Call lorelei.desktop_snapshot again before acting.")])
     }
 
     @Test func desktopToolSuiteRejectsUnknownToolName() async throws {
@@ -1430,7 +1454,38 @@ struct LoreleiTests {
         )
 
         #expect(!result.success)
-        #expect(result.contentText.contains("desktop_spin"))
+        #expect(textContent(result)?.contains("desktop_spin") == true)
+    }
+
+    @Test func desktopToolSuiteScreenshotReturnsImageItem() async throws {
+        let executor = FakeDesktopActionExecutor()
+        executor.screenshotResult = .success(Data([0x89, 0x50, 0x4e, 0x47]))
+
+        let result = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(tool: "screenshot", arguments: .object([:])),
+            executor: executor
+        )
+
+        #expect(result.success)
+        #expect(result.contentItems.count == 1)
+        guard case .image(let dataURL) = result.contentItems.first else {
+            Issue.record("Expected screenshot to return an image content item.")
+            return
+        }
+        #expect(dataURL.hasPrefix("data:image/png;base64,"))
+    }
+
+    @Test func desktopToolSuiteScreenshotFailureIsToolFailure() async throws {
+        let executor = FakeDesktopActionExecutor()
+        executor.screenshotResult = .failure(.captureFailed("no permission"))
+
+        let result = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(tool: "screenshot", arguments: .object([:])),
+            executor: executor
+        )
+
+        #expect(!result.success)
+        #expect(textContent(result)?.contains("no permission") == true)
     }
 
     @Test func appServerExecutorAnswersMcpElicitationApprovalWithZeroID() async throws {
@@ -1848,6 +1903,14 @@ struct LoreleiTests {
             tool: tool,
             arguments: arguments
         )
+    }
+
+    private func textContent(_ result: CodexAppServerDynamicToolCallResult) -> String? {
+        guard result.contentItems.count == 1,
+              case .text(let text) = result.contentItems[0] else {
+            return nil
+        }
+        return text
     }
 }
 
