@@ -110,7 +110,7 @@ struct LoreleiTests {
         #expect(manager.workspaceSettingsStore.selectedWorkspacePath == "/Users/example/SharedProject")
     }
 
-    @Test func companionManagerRunsDesktopActionThroughInjectedAppServerRunnerAfterConfirmation() async throws {
+    @Test func companionManagerRunsDesktopActionThroughInjectedAppServerRunnerImmediately() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionRunnerTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionRunnerTests")
         let store = WorkspaceSettingsStore(defaults: defaults)
@@ -125,16 +125,6 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if recorder.calls.count == 1,
                manager.latestResultSummary == "Opened through App Server." {
                 break
@@ -142,6 +132,7 @@ struct LoreleiTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         #expect(recorder.calls.count == 1)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
@@ -171,16 +162,6 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if recorder.calls.count == 1,
                manager.latestResultSummary == "Typed through App Server." {
                 break
@@ -188,6 +169,7 @@ struct LoreleiTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
         #expect(call.prompt.contains("Computer Use plugin"))
@@ -219,22 +201,13 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if manager.latestResultSummary == "Opened TextEdit." {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         #expect(manager.latestResultSummary == "Opened TextEdit.")
         #expect(runner.calls.isEmpty)
         #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
@@ -269,16 +242,6 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting(transcript)
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        #expect(manager.pendingConfirmationTitle == "Run Codex desktop action?")
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if recorder.calls.count == 1,
                manager.latestResultSummary == "Handled through App Server." {
                 break
@@ -286,6 +249,7 @@ struct LoreleiTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         let call = try #require(recorder.calls.first)
         #expect(call.prompt.contains("Codex App Server"))
         #expect(call.prompt.contains("Computer Use plugin"))
@@ -316,26 +280,52 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if manager.latestResultSummary == "Desktop action finished." {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         #expect(overlayWindowManager.events == ["show", "hide", "show"])
         #expect(manager.isOverlayVisible)
         #expect(manager.latestResultSummary == "Desktop action finished.")
     }
 
-    @Test func companionManagerRecordsDebugLogForConfirmedDesktopAction() async throws {
+    @Test func companionManagerRunsWorkspaceWriteCodexCommandImmediately() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerWorkspaceWriteImmediateTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerWorkspaceWriteImmediateTests")
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = directoryURL.path
+        let recorder = CodexCommandRecorder(finalMessage: "Updated README.")
+        let codexExecutor = CodexExecutor(
+            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
+            commandRunner: recorder.run
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexExecutor: codexExecutor
+        )
+
+        manager.handleFinalTranscriptForTesting("update the readme")
+        for _ in 0..<20 {
+            if recorder.arguments != nil,
+               manager.latestResultSummary == "Updated README." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingApprovalTitle == nil)
+        #expect(manager.latestResultSummary == "Updated README.")
+        #expect(recorder.arguments?.contains("workspace-write") == true)
+        #expect(recorder.arguments?.contains(CodexPromptBuilder.workspaceWritePrompt(for: "update the readme")) == true)
+    }
+
+    @Test func companionManagerRecordsDebugLogForImmediateDesktopAction() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDebugLogDesktopActionTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDebugLogDesktopActionTests")
         let store = WorkspaceSettingsStore(defaults: defaults)
@@ -350,24 +340,15 @@ struct LoreleiTests {
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {
-            if manager.pendingConfirmationTitle == "Run Codex desktop action?" {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-
-        manager.confirmPendingCommand()
-        for _ in 0..<20 {
             if manager.latestResultSummary == "Opened through App Server." {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        #expect(manager.pendingApprovalTitle == nil)
         #expect(manager.debugLogText.contains("Transcript: Open chatgpt.com in a new tab on chrome browser"))
         #expect(manager.debugLogText.contains("Route: Codex desktop action"))
-        #expect(manager.debugLogText.contains("Waiting for confirmation: Run Codex desktop action?"))
-        #expect(manager.debugLogText.contains("Confirmed: Codex desktop action"))
         #expect(manager.debugLogText.contains("Codex App Server desktop action started"))
         #expect(manager.debugLogText.contains("Result: Opened through App Server."))
     }
@@ -531,20 +512,6 @@ struct LoreleiTests {
         #expect(router.route("use computer use to open System Settings") == .codexDesktopAction("use computer use to open System Settings"))
     }
 
-    @Test func confirmationPolicyAllowsOnlySafeLocalAndScopedScreenCommandsImmediately() async throws {
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitStatus))
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .gitDiff))
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .runTests))
-        #expect(!LoreleiConfirmationPolicy.requiresConfirmation(for: .codexScreen("look at my screen")))
-    }
-
-    @Test func confirmationPolicyRequiresPanelConfirmationForBroadCodexWriteAndDesktopActionCommands() async throws {
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexReadOnly("explain this")))
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexWorkspaceWrite("fix the test")))
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexDesktopAction("click submit")))
-        #expect(LoreleiConfirmationPolicy.requiresConfirmation(for: .codexChromeBrowserOpen("open chatgpt.com")))
-    }
-
     @Test func workspaceWritePromptIncludesNoCommitGuard() async throws {
         let prompt = CodexPromptBuilder.workspaceWritePrompt(for: "fix the test")
 
@@ -581,20 +548,6 @@ struct LoreleiTests {
         #expect(!prompt.contains("For non-Chrome app or URL opening"))
     }
 
-    @Test func pendingConfirmationStoresAndClearsAction() async throws {
-        var confirmation = PendingCommandConfirmation()
-        confirmation.request(
-            title: "Run Codex with workspace write access?",
-            action: .codexWorkspaceWrite("fix the test")
-        )
-
-        #expect(confirmation.title == "Run Codex with workspace write access?")
-        #expect(confirmation.action == .codexWorkspaceWrite("fix the test"))
-        #expect(confirmation.confirm() == .codexWorkspaceWrite("fix the test"))
-        #expect(confirmation.title == nil)
-        #expect(confirmation.action == nil)
-    }
-
     @Test func responseTaskTrackerIgnoresStaleTaskCleanup() async throws {
         var tracker = CompanionResponseTaskTracker()
 
@@ -614,7 +567,6 @@ struct LoreleiTests {
         #expect(WorkspaceCommandResult(summary: "OK", status: .succeeded).spokenStatus == "Done")
         #expect(WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace).spokenStatus == "No workspace selected")
         #expect(WorkspaceCommandResult(summary: "Failed", status: .failed).spokenStatus == "Failed")
-        #expect(WorkspaceCommandResult(summary: "Needs confirmation.", status: .needsConfirmation).spokenStatus == "Needs confirmation")
     }
 
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {

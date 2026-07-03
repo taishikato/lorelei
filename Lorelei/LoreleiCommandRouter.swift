@@ -49,17 +49,6 @@ enum LoreleiCommandAction: Equatable, Sendable {
     }
 }
 
-struct LoreleiConfirmationPolicy {
-    static func requiresConfirmation(for action: LoreleiCommandAction) -> Bool {
-        switch action {
-        case .codexReadOnly, .codexWorkspaceWrite, .codexDesktopAction, .codexChromeBrowserOpen:
-            return true
-        case .gitStatus, .gitDiff, .runTests, .codexScreen, .unsupported:
-            return false
-        }
-    }
-}
-
 struct CodexPromptBuilder {
     static func workspaceWritePrompt(for prompt: String) -> String {
         """
@@ -98,26 +87,6 @@ struct CodexPromptBuilder {
         """
     }
 
-}
-
-struct PendingCommandConfirmation {
-    private(set) var title: String?
-    private(set) var action: LoreleiCommandAction?
-
-    mutating func request(title: String, action: LoreleiCommandAction) {
-        self.title = title
-        self.action = action
-    }
-
-    mutating func confirm() -> LoreleiCommandAction? {
-        defer { cancel() }
-        return action
-    }
-
-    mutating func cancel() {
-        title = nil
-        action = nil
-    }
 }
 
 struct LoreleiCommandRouter {

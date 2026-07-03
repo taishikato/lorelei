@@ -13,7 +13,6 @@ enum WorkspaceCommandResultStatus: Equatable, Sendable {
     case failed
     case cancelled
     case missingWorkspace
-    case needsConfirmation
 }
 
 struct WorkspaceCommandResult: Equatable, Sendable {
@@ -33,8 +32,6 @@ struct WorkspaceCommandResult: Equatable, Sendable {
             return "Failed"
         case .missingWorkspace:
             return "No workspace selected"
-        case .needsConfirmation:
-            return "Needs confirmation"
         }
     }
 }
