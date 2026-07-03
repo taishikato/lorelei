@@ -101,6 +101,7 @@ final class CompanionManager: ObservableObject {
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
+    private let audioFeedback: BuddyAudioFeedbacking
     private let runStatusIdleReturnDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
@@ -140,9 +141,12 @@ final class CompanionManager: ObservableObject {
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         codexExecutor: CodexExecutor? = nil,
-        overlayWindowManager: (any OverlayWindowManaging)? = nil
+        overlayWindowManager: (any OverlayWindowManaging)? = nil,
+        audioFeedback: BuddyAudioFeedbacking? = nil
     ) {
-        self.speechOutput = speechOutput ?? SpeechOutputClient()
+        let resolvedSpeechOutput = speechOutput ?? SpeechOutputClient()
+        self.speechOutput = resolvedSpeechOutput
+        self.audioFeedback = audioFeedback ?? BuddyAudioFeedback(speechOutput: resolvedSpeechOutput)
         self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
@@ -463,8 +467,7 @@ final class CompanionManager: ObservableObject {
         }
         currentResponseTask?.cancel()
         cancelPendingCodexAppServerApprovalForStop()
-        updateLatestResultSummary("Stopped.")
-        finishRunStatus(success: false)
+        finishRun(with: WorkspaceCommandResult(summary: "Stopped.", status: .failed))
     }
 
 #if DEBUG
@@ -495,8 +498,7 @@ final class CompanionManager: ObservableObject {
             voiceState = .processing
 
             if case let .unsupported(message) = action {
-                updateLatestResultSummary(message)
-                speechOutput.speak(WorkspaceCommandResult(summary: message, status: .failed).spokenStatus)
+                finishRun(with: WorkspaceCommandResult(summary: message, status: .failed))
                 return
             }
 
@@ -512,7 +514,6 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 finishRun(with: result)
-                speechOutput.speak(result.spokenStatus)
                 return
             case .codexWorkspaceWrite(let prompt):
                 let result = await codexExecutor.run(
@@ -523,21 +524,18 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 finishRun(with: result)
-                speechOutput.speak(result.spokenStatus)
                 return
             case .codexDesktopAction(let prompt):
                 let result = await runCodexAppServerDesktopAction(prompt: prompt)
                 guard !Task.isCancelled else { return }
 
                 finishRun(with: result)
-                speechOutput.speak(result.spokenStatus)
                 return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
                 guard !Task.isCancelled else { return }
 
                 finishRun(with: result)
-                speechOutput.speak(result.spokenStatus)
                 return
             case .gitStatus, .gitDiff, .runTests, .unsupported:
                 break
@@ -550,7 +548,6 @@ final class CompanionManager: ObservableObject {
             guard !Task.isCancelled else { return }
 
             finishRun(with: result)
-            speechOutput.speak(result.spokenStatus)
         }
     }
 
@@ -566,7 +563,7 @@ final class CompanionManager: ObservableObject {
             runStatus = .needsApproval(request.title)
             recordDebugEvent("Waiting for App Server approval: \(request.title)")
             updateLatestResultSummary(request.detail)
-            speechOutput.speak("Needs approval")
+            audioFeedback.play(.approvalRequested, spokenSummary: nil)
         }
     }
 
@@ -719,13 +716,21 @@ final class CompanionManager: ObservableObject {
     private func setRunStatusListening() {
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
+        let shouldPlayCue = runStatus != .listening
         runStatus = .listening
+        if shouldPlayCue {
+            audioFeedback.play(.listeningStarted, spokenSummary: nil)
+        }
     }
 
     private func setRunStatusTranscribing() {
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
+        let shouldPlayCue = runStatus != .transcribing
         runStatus = .transcribing
+        if shouldPlayCue {
+            audioFeedback.play(.listeningEnded, spokenSummary: nil)
+        }
     }
 
     private func beginRunStatus() {
@@ -752,7 +757,9 @@ final class CompanionManager: ObservableObject {
 
     private func finishRun(with result: WorkspaceCommandResult) {
         updateLatestResultSummary(result.summary)
-        finishRunStatus(success: result.status == .succeeded)
+        let succeeded = result.status == .succeeded
+        finishRunStatus(success: succeeded)
+        audioFeedback.play(succeeded ? .runSucceeded : .runFailed, spokenSummary: result.summary)
     }
 
     private func finishRunStatus(success: Bool) {

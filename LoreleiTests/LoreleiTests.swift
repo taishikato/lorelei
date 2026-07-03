@@ -523,6 +523,13 @@ struct LoreleiTests {
         #expect(WorkspaceCommandResult(summary: "Failed", status: .failed).spokenStatus == "Failed")
     }
 
+    @Test func firstSentenceCutsAtTerminatorAndCap() async throws {
+        #expect(BuddyAudioFeedback.firstSentence("Opened Gmail. Then waited.") == "Opened Gmail.")
+        #expect(BuddyAudioFeedback.firstSentence(String(repeating: "a", count: 300)).count == 120)
+        #expect(BuddyAudioFeedback.firstSentence(String(repeating: "a", count: 300)).hasSuffix("…"))
+        #expect(BuddyAudioFeedback.firstSentence("Gmailを開きました。次に…") == "Gmailを開きました。")
+    }
+
     @Test func toolbarPanelFrameCentersAtTopOfScreen() async throws {
         let frame = LoreleiToolbarController.panelFrame(
             screenFrame: CGRect(x: 0, y: 0, width: 2000, height: 1200),
@@ -2067,6 +2074,40 @@ struct LoreleiTests {
         #expect(manager.streamText == "Hello")
     }
 
+    @Test func companionManagerPlaysCuesThroughVoiceTurn() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAudioVoiceTurnTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAudioVoiceTurnTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let audioFeedback = BuddyAudioFeedbackRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60),
+            audioFeedback: audioFeedback
+        )
+
+        manager.simulateShortcutTransitionForTesting(.pressed)
+        manager.simulateShortcutTransitionForTesting(.released)
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<200 {
+            if audioFeedback.events.contains(where: { $0.cue == .runSucceeded }) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(audioFeedback.events.map(\.cue) == [.listeningStarted, .listeningEnded, .runSucceeded])
+        #expect(audioFeedback.events.last?.spokenSummary == "Hello")
+    }
+
     private func isOrderedSubsequence(
         _ expected: [LoreleiRunStatus],
         of recorded: [LoreleiRunStatus]
@@ -2157,6 +2198,66 @@ struct LoreleiTests {
         #expect(await transport.didTerminate)
         #expect(manager.latestResultSummary == "Stopped.")
         #expect(manager.runStatus == .finished(success: false))
+    }
+
+    @Test func companionManagerPlaysFailureCueOnStop() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAudioStopTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAudioStopTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
+        ])
+        let audioFeedback = BuddyAudioFeedbackRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60),
+            audioFeedback: audioFeedback
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.runStatus == .working("Thinking…") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.stopCurrentRun()
+
+        #expect(audioFeedback.events.contains(BuddyAudioFeedbackRecorder.Event(cue: .runFailed, spokenSummary: "Stopped.")))
+    }
+
+    @Test func companionManagerPlaysApprovalCue() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAudioApprovalTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAudioApprovalTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":44,"method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","questions":[{"id":"approval","header":"Computer Use","question":"Allow control?","isOther":false,"isSecret":false,"options":[{"label":"Accept","description":"Allow."},{"label":"Decline","description":"Stop."}]}]}}"#
+        ])
+        let audioFeedback = BuddyAudioFeedbackRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60),
+            audioFeedback: audioFeedback
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(audioFeedback.events.filter { $0.cue == .approvalRequested }.count == 1)
+        #expect(audioFeedback.events.first { $0.cue == .approvalRequested }?.spokenSummary == nil)
     }
 
     @Test func companionManagerStopWithoutRunIsNoOp() {
@@ -2576,6 +2677,20 @@ private actor BlockingCodexAppServerTransport: CodexAppServerTransporting {
 @MainActor
 private final class SilentSpeechOutput: SpeechOutputing {
     func speak(_ text: String) {}
+}
+
+@MainActor
+private final class BuddyAudioFeedbackRecorder: BuddyAudioFeedbacking {
+    struct Event: Equatable {
+        let cue: BuddyAudioCue
+        let spokenSummary: String?
+    }
+
+    private(set) var events: [Event] = []
+
+    func play(_ cue: BuddyAudioCue, spokenSummary: String?) {
+        events.append(Event(cue: cue, spokenSummary: spokenSummary))
+    }
 }
 
 @MainActor
