@@ -181,6 +181,8 @@ struct BlueCursorView: View {
     @State private var isReturningToCursor: Bool = false
 
     private let fullWelcomeMessage = "hey! i'm lorelei"
+    private static let listeningCapsuleSize = CGSize(width: 140, height: 34)
+    private static let listeningCapsuleCursorSpacing: CGFloat = 18
 
     private let navigationPointerPhrases = [
         "right here!",
@@ -190,6 +192,18 @@ struct BlueCursorView: View {
         "here it is!",
         "found it!"
     ]
+
+    static func capsuleOrigin(cursorPoint: CGPoint, capsuleSize: CGSize, screenFrame: CGRect) -> CGPoint {
+        let rightOriginX = cursorPoint.x + listeningCapsuleCursorSpacing
+        let leftOriginX = cursorPoint.x - listeningCapsuleCursorSpacing - capsuleSize.width
+        let unclampedX = rightOriginX + capsuleSize.width > screenFrame.maxX ? leftOriginX : rightOriginX
+        let unclampedY = cursorPoint.y - capsuleSize.height / 2
+
+        return CGPoint(
+            x: min(max(unclampedX, screenFrame.minX), screenFrame.maxX - capsuleSize.width),
+            y: min(max(unclampedY, screenFrame.minY), screenFrame.maxY - capsuleSize.height)
+        )
+    }
 
     var body: some View {
         ZStack {
@@ -288,12 +302,17 @@ struct BlueCursorView: View {
                     value: triangleRotationDegrees
                 )
 
-            // Blue waveform — replaces the triangle while listening
-            BlueCursorWaveformView(audioPowerLevel: companionManager.currentAudioPowerLevel)
-                .opacity(buddyIsVisibleOnThisScreen && companionManager.voiceState == .listening ? cursorOpacity : 0)
-                .position(cursorPosition)
-                .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
-                .animation(.easeIn(duration: 0.15), value: companionManager.voiceState)
+            // Blue waveform capsule — replaces the triangle while listening.
+            GlassEffectContainer {
+                BlueCursorWaveformView(audioPowerLevel: companionManager.currentAudioPowerLevel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .glassEffect(.regular.interactive(), in: Capsule())
+            }
+            .frame(width: Self.listeningCapsuleSize.width, height: Self.listeningCapsuleSize.height)
+            .opacity(buddyIsVisibleOnThisScreen && companionManager.runStatus == .listening ? cursorOpacity : 0)
+            .position(listeningCapsuleCenter)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
+            .animation(.easeIn(duration: 0.15), value: companionManager.runStatus)
 
             // Blue spinner — shown while the AI is processing (transcription + Claude + waiting for TTS)
             BlueCursorSpinnerView()
@@ -369,6 +388,19 @@ struct BlueCursorView: View {
         case .navigatingToTarget, .pointingAtTarget:
             return true
         }
+    }
+
+    private var listeningCapsuleCenter: CGPoint {
+        let origin = Self.capsuleOrigin(
+            cursorPoint: cursorPosition,
+            capsuleSize: Self.listeningCapsuleSize,
+            screenFrame: CGRect(origin: .zero, size: screenFrame.size)
+        )
+
+        return CGPoint(
+            x: origin.x + Self.listeningCapsuleSize.width / 2,
+            y: origin.y + Self.listeningCapsuleSize.height / 2
+        )
     }
 
     // MARK: - Cursor Tracking
