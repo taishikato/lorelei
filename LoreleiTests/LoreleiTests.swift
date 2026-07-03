@@ -186,6 +186,46 @@ struct LoreleiTests {
         #expect(manager.latestResultSummary == "Opened through App Server.")
     }
 
+    @Test func debugRunURLParsesPromptAndRejectsOthers() async throws {
+        let url = try #require(URL(string: "lorelei://run?prompt=%E3%83%A1%E3%83%A2%20%E3%82%92%20%E9%96%8B%E3%81%84%E3%81%A6"))
+
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: url) == "メモ を 開いて")
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://other")!) == nil)
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "https://run?prompt=open")!) == nil)
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://run")!) == nil)
+    }
+
+    @Test func companionManagerHandlesDebugPromptLikeTranscript() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDebugPromptTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDebugPromptTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Inspected TextEdit."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleDebugPrompt("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Inspected TextEdit." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        #expect(manager.conversationLog.first?.role == .user)
+        #expect(manager.conversationLog.first?.text == "use computer use to inspect TextEdit")
+        #expect(sentMessages.contains { $0["method"] as? String == "turn/start" })
+    }
+
     @Test func companionManagerRegistersDesktopToolSuiteWithForegroundTool() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopToolSuiteRegistrationTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopToolSuiteRegistrationTests")

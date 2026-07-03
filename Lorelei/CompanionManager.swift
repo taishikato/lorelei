@@ -467,6 +467,10 @@ final class CompanionManager: ObservableObject {
     func handleFinalTranscriptForTesting(_ transcript: String) {
         handleFinalTranscriptLocally(transcript)
     }
+
+    func handleDebugPrompt(_ prompt: String) {
+        handleFinalTranscriptLocally(prompt)
+    }
 #endif
 
     func stopCurrentRun() {

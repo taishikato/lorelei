@@ -7,8 +7,23 @@
 //  opens a floating panel with companion voice controls.
 //
 
+import AppKit
 import ServiceManagement
 import SwiftUI
+
+enum LoreleiDebugURLHandler {
+    static func debugPrompt(fromURL url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme == "lorelei",
+              components.host == "run",
+              let prompt = components.queryItems?.first(where: { $0.name == "prompt" })?.value
+        else {
+            return nil
+        }
+
+        return prompt
+    }
+}
 
 @main
 struct LoreleiApp: App {
@@ -49,6 +64,14 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         toolbarController = LoreleiToolbarController(companionManager: companionManager)
         companionManager.start()
+#if DEBUG
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+#endif
         toolbarController?.show()
         // Auto-open the panel only when permissions are missing or revoked.
         if !companionManager.allPermissionsGranted {
@@ -62,6 +85,22 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         companionManager.stop()
     }
+
+#if DEBUG
+    @objc private func handleGetURLEvent(
+        _ event: NSAppleEventDescriptor,
+        withReplyEvent replyEvent: NSAppleEventDescriptor
+    ) {
+        guard let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: urlString),
+              let prompt = LoreleiDebugURLHandler.debugPrompt(fromURL: url)
+        else {
+            return
+        }
+
+        companionManager.handleDebugPrompt(prompt)
+    }
+#endif
 
     /// Registers the app as a login item so it launches automatically on
     /// startup. Uses SMAppService which shows the app in System Settings >
