@@ -454,7 +454,7 @@ struct LoreleiTests {
 
         #expect(manager.pendingApprovalTitle == nil)
         #expect(manager.latestResultSummary == "Updated README.")
-        #expect(params["sandboxPolicy"] as? String == "workspace-write")
+        #expect((params["sandboxPolicy"] as? [String: Any])?["type"] as? String == "workspaceWrite")
         #expect(input.first?["text"] as? String == CodexPromptBuilder.workspaceWritePrompt(for: "update the readme"))
     }
 
@@ -1129,13 +1129,13 @@ struct LoreleiTests {
             threadID: "thread-1",
             prompt: "look at my screen",
             cwd: "/Users/example",
-            sandboxPolicy: "read-only",
+            sandboxPolicy: "readOnly",
             extraInput: [.localImage(path: "/tmp/lorelei-screen.jpg")]
         )
         let params = try #require(request["params"] as? [String: Any])
         let input = try #require(params["input"] as? [[String: Any]])
 
-        #expect(params["sandboxPolicy"] as? String == "read-only")
+        #expect((params["sandboxPolicy"] as? [String: Any])?["type"] as? String == "readOnly")
         #expect(input.count == 2)
         #expect(input[0]["type"] as? String == "text")
         #expect(input[0]["text"] as? String == "look at my screen")
@@ -2626,7 +2626,7 @@ struct LoreleiTests {
         #expect(await factoryCallCount.value == 1)
         #expect(turnStarts.count == 2)
         #expect(secondParams["threadId"] as? String == "thread-1")
-        #expect(secondParams["sandboxPolicy"] as? String == "read-only")
+        #expect((secondParams["sandboxPolicy"] as? [String: Any])?["type"] as? String == "readOnly")
         #expect(secondInput.first?["text"] as? String == "what did you just do")
     }
 
@@ -2682,7 +2682,7 @@ struct LoreleiTests {
         #expect(await factoryCallCount.value == 1)
         #expect(turnStarts.count == 2)
         #expect(secondParams["threadId"] as? String == "thread-1")
-        #expect(secondParams["sandboxPolicy"] as? String == "workspace-write")
+        #expect((secondParams["sandboxPolicy"] as? [String: Any])?["type"] as? String == "workspaceWrite")
         #expect(secondInput.first?["text"] as? String == CodexPromptBuilder.workspaceWritePrompt(for: "fix the failing test"))
     }
 

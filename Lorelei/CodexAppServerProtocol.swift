@@ -220,7 +220,10 @@ enum CodexAppServerProtocol {
             "approvalsReviewer": "user"
         ]
         if let sandboxPolicy {
-            params["sandboxPolicy"] = sandboxPolicy
+            // SandboxPolicy is an internally tagged enum in the app-server
+            // schema: {"type": "readOnly"} / {"type": "workspaceWrite"}, not a
+            // bare mode string.
+            params["sandboxPolicy"] = ["type": sandboxPolicy]
         }
 
         return [

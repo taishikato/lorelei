@@ -581,7 +581,7 @@ final class CompanionManager: ObservableObject {
             case .codexReadOnly(let prompt):
                 let result = await runCodexAppServerTurn(
                     prompt: prompt,
-                    sandboxPolicy: "read-only"
+                    sandboxPolicy: "readOnly"
                 )
                 guard !Task.isCancelled else { return }
 
@@ -590,7 +590,7 @@ final class CompanionManager: ObservableObject {
             case .codexWorkspaceWrite(let prompt):
                 let result = await runCodexAppServerTurn(
                     prompt: CodexPromptBuilder.workspaceWritePrompt(for: prompt),
-                    sandboxPolicy: "workspace-write"
+                    sandboxPolicy: "workspaceWrite"
                 )
                 guard !Task.isCancelled else { return }
 
@@ -996,7 +996,7 @@ final class CompanionManager: ObservableObject {
                 }
                 return await self.runCodexAppServerTurn(
                     prompt: prompt,
-                    sandboxPolicy: "read-only",
+                    sandboxPolicy: "readOnly",
                     extraInput: [.localImage(path: imagePath)],
                     removeLocalImageInputsAfterRun: true
                 )
