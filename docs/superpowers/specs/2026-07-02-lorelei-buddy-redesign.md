@@ -66,11 +66,13 @@ Technical decisions made by the planner:
 | Phase | Scope | Plan |
 |-------|-------|------|
 | 1 | Merge PR #1; rename to Lorelei; delete ClickyAnalytics and OpenAI STT provider; bump deployment target to 26.0 | `docs/superpowers/plans/2026-07-02-phase-1-merge-rename-cleanup.md` |
-| 2 | App Server stdio migration; schema generation; remove confirmation flow and Chrome routing; single execution path | written at phase start |
-| 3 | Computer use: `DesktopActionExecuting` seam, MCP shim + socket relay, AX executor, screenshot tool | written at phase start |
-| 4 | Floating glass toolbar (collapsed status + expanded stream/stop/approval) | written at phase start |
-| 5 | Cursor capsule waveform + sound cues + TTS summaries | written at phase start |
-| 6 | STT migration to SpeechDetector + DictationTranscriber | written at phase start |
+| 2 | App Server stdio migration; schema generation; remove confirmation flow and Chrome routing; single execution path | `docs/superpowers/plans/2026-07-02-phase-2-stdio-single-path.md` (PR #4) |
+| 3 | Computer use via dynamic tools: `DesktopActionExecuting` seam, AX executor, screenshot tool | `docs/superpowers/plans/2026-07-03-phase-3-computer-use-tools.md` (PR #5) |
+| 4 | Floating glass toolbar (collapsed status + expanded stream/stop/approval) | `docs/superpowers/plans/2026-07-03-phase-4-glass-toolbar.md` (PR #6) |
+| 5 | Cursor capsule waveform + sound cues + TTS summaries | `docs/superpowers/plans/2026-07-03-phase-5-cursor-capsule-audio.md` (PR #7) |
+| 6 | STT migration to SpeechAnalyzer/DictationTranscriber | `docs/superpowers/plans/2026-07-03-phase-6-speechanalyzer-stt.md` |
+
+All six phases landed 2026-07-02/03. Known limitation: transcription locale follows the system (en on this machine); Japanese STT is tracked in issue #8.
 
 ## Test seams
 
