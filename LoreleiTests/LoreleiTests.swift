@@ -15,6 +15,33 @@ import CoreGraphics
 @MainActor
 struct LoreleiTests {
 
+    @Test func speechAnalyzerReducerCombinesVolatileAndFinalizedText() async throws {
+        var reducer = SpeechAnalyzerTranscriptReducer()
+
+        reducer.applyVolatile("hel")
+        #expect(reducer.currentTranscript == "hel")
+
+        reducer.applyVolatile("hello wor")
+        #expect(reducer.currentTranscript == "hello wor")
+
+        reducer.applyFinalized("hello world")
+        #expect(reducer.currentTranscript == "hello world")
+        #expect(reducer.finalizedText == "hello world")
+        #expect(reducer.volatileText.isEmpty)
+
+        reducer.applyVolatile("again")
+        #expect(reducer.currentTranscript == "hello world again")
+    }
+
+    @Test func speechAnalyzerReducerFinalizeIsIdempotentPerSegment() async throws {
+        var reducer = SpeechAnalyzerTranscriptReducer()
+
+        reducer.applyFinalized("open textedit")
+        reducer.applyFinalized("type hello")
+
+        #expect(reducer.finalizedText == "open textedit type hello")
+    }
+
     @Test func firstPermissionRequestUsesSystemPromptOnly() async throws {
         let presentationDestination = WindowPositionManager.permissionRequestPresentationDestination(
             hasPermissionNow: false,

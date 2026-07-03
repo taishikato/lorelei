@@ -8,6 +8,60 @@
 import AVFoundation
 import Foundation
 
+final class BuddyAudioBufferConverter {
+    private let targetAudioFormat: AVAudioFormat
+    private var audioConverter: AVAudioConverter?
+    private var currentInputFormatDescription: String?
+
+    init(targetAudioFormat: AVAudioFormat) {
+        self.targetAudioFormat = targetAudioFormat
+    }
+
+    func convertIfNeeded(_ audioBuffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard audioBuffer.format.settings.description != targetAudioFormat.settings.description else {
+            return audioBuffer
+        }
+
+        let inputFormatDescription = audioBuffer.format.settings.description
+
+        if currentInputFormatDescription != inputFormatDescription {
+            audioConverter = AVAudioConverter(from: audioBuffer.format, to: targetAudioFormat)
+            currentInputFormatDescription = inputFormatDescription
+        }
+
+        guard let audioConverter else { return nil }
+
+        let sampleRateRatio = targetAudioFormat.sampleRate / audioBuffer.format.sampleRate
+        let outputFrameCapacity = AVAudioFrameCount(
+            (Double(audioBuffer.frameLength) * sampleRateRatio).rounded(.up) + 32
+        )
+
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: targetAudioFormat,
+            frameCapacity: outputFrameCapacity
+        ) else {
+            return nil
+        }
+
+        var hasProvidedSourceBuffer = false
+        var conversionError: NSError?
+
+        let conversionStatus = audioConverter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
+            if hasProvidedSourceBuffer {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+
+            hasProvidedSourceBuffer = true
+            outStatus.pointee = .haveData
+            return audioBuffer
+        }
+
+        guard conversionStatus != .error else { return nil }
+        return outputBuffer
+    }
+}
+
 final class BuddyPCM16AudioConverter {
     private let targetAudioFormat: AVAudioFormat
     private var audioConverter: AVAudioConverter?
