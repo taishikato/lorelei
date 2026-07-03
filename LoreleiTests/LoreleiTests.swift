@@ -7,6 +7,7 @@
 
 import Testing
 import AppKit
+import Combine
 import Foundation
 import CoreGraphics
 @testable import Lorelei
@@ -1913,6 +1914,144 @@ struct LoreleiTests {
         #expect(eventLines.contains("outbound response#47"))
     }
 
+    @Test func executorReportsProgressForDeltasAndToolCalls() async throws {
+        let dynamicTool = CodexAppServerDynamicToolSpec(
+            name: "desktop_snapshot",
+            namespace: "lorelei",
+            description: "Read the desktop.",
+            inputSchema: .object(["type": .string("object")])
+        )
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"id":47,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"lorelei","tool":"desktop_snapshot","arguments":{}}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let recorder = AppServerProgressRecorder()
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            dynamicToolSpecsResolver: { [dynamicTool] },
+            dynamicToolHandler: { _ in
+                CodexAppServerDynamicToolCallResult(success: true, contentText: "snapshot")
+            },
+            progressHandler: { progress in
+                recorder.record(progress)
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        _ = await executor.runDesktopAction(prompt: "inspect desktop", cwd: "/Users/example")
+
+        #expect(recorder.progress == [
+            .agentMessageDelta("Hel"),
+            .agentMessageDelta("lo"),
+            .toolCallStarted(name: "lorelei.desktop_snapshot"),
+            .toolCallCompleted(name: "lorelei.desktop_snapshot", success: true)
+        ])
+    }
+
+    @Test func companionManagerTracksRunStatusThroughVoiceTurn() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerRunStatusVoiceTurnTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerRunStatusVoiceTurnTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        // Record every transition instead of polling: the scripted turn can
+        // finish faster than any polling interval, so transient states like
+        // .working would otherwise be missed nondeterministically.
+        let recorder = RunStatusRecorder()
+        let statusCancellable = manager.$runStatus.sink { recorder.record($0) }
+        defer { statusCancellable.cancel() }
+
+        manager.simulateShortcutTransitionForTesting(.pressed)
+        #expect(manager.runStatus == .listening)
+
+        manager.simulateShortcutTransitionForTesting(.released)
+        #expect(manager.runStatus == .transcribing)
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<200 {
+            if recorder.statuses.contains(.finished(success: true)) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let statuses = recorder.statuses
+        #expect(statuses.contains(.finished(success: true)))
+        #expect(isOrderedSubsequence(
+            [.listening, .transcribing, .working("Thinking…"), .finished(success: true)],
+            of: statuses
+        ))
+        #expect(manager.streamText == "Hello")
+    }
+
+    private func isOrderedSubsequence(
+        _ expected: [LoreleiRunStatus],
+        of recorded: [LoreleiRunStatus]
+    ) -> Bool {
+        var remaining = expected[...]
+        for status in recorded {
+            if status == remaining.first {
+                remaining = remaining.dropFirst()
+            }
+        }
+        return remaining.isEmpty
+    }
+
+    @Test func companionManagerShowsNeedsApprovalStatusDuringApprovalBridge() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerApprovalRunStatusTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerApprovalRunStatusTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":44,"method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","questions":[{"id":"approval","header":"Computer Use","question":"Allow control?","isOther":false,"isSecret":false,"options":[{"label":"Accept","description":"Allow."},{"label":"Decline","description":"Stop."}]}]}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(5)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+
+        manager.acceptPendingApproval()
+        for _ in 0..<20 {
+            if case .working = manager.runStatus {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.runStatus == .working("Thinking…"))
+        await transport.enqueue(#"{"method":"item/agentMessage/delta","params":{"delta":"Approved"}}"#)
+        await transport.enqueue(#"{"method":"turn/completed","params":{"status":"completed"}}"#)
+    }
+
     private func makeTemporaryGitRepository() throws -> URL {
         let repositoryURL = try makeTemporaryDirectory()
         try runGitTestCommand(["init"], in: repositoryURL)
@@ -2235,6 +2374,74 @@ private final class AppServerTraceRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         recordedEvents.append(event)
+    }
+}
+
+private final class AppServerProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedProgress: [CodexAppServerTurnProgress] = []
+
+    var progress: [CodexAppServerTurnProgress] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedProgress
+    }
+
+    func record(_ progress: CodexAppServerTurnProgress) {
+        lock.lock()
+        defer { lock.unlock() }
+        recordedProgress.append(progress)
+    }
+}
+
+private final class RunStatusRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [LoreleiRunStatus] = []
+
+    var statuses: [LoreleiRunStatus] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func record(_ status: LoreleiRunStatus) {
+        lock.lock()
+        defer { lock.unlock() }
+        recorded.append(status)
+    }
+}
+
+private actor BlockingCodexAppServerTransport: CodexAppServerTransporting {
+    private var lines: [String]
+    private var recordedSentLines: [String] = []
+    private var terminated = false
+
+    init(lines: [String]) {
+        self.lines = lines
+    }
+
+    var sentLines: [String] {
+        recordedSentLines
+    }
+
+    func enqueue(_ line: String) {
+        lines.append(line)
+    }
+
+    func send(line: String) async throws {
+        recordedSentLines.append(line.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func nextLine() async throws -> String? {
+        while lines.isEmpty && !terminated {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        guard !terminated else { return nil }
+        return lines.removeFirst()
+    }
+
+    func terminate() async {
+        terminated = true
     }
 }
 

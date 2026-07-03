@@ -95,6 +95,7 @@ struct CodexAppServerExecutor {
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
     private let dynamicToolHandler: CodexAppServerDynamicToolHandler
     private let traceHandler: CodexAppServerTraceHandler
+    private let progressHandler: CodexAppServerTurnProgressHandler
     private let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
 
     init(
@@ -110,6 +111,7 @@ struct CodexAppServerExecutor {
             )
         },
         traceHandler: @escaping CodexAppServerTraceHandler = { _ in },
+        progressHandler: @escaping CodexAppServerTurnProgressHandler = { _ in },
         approvalHandler: @escaping (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
@@ -117,6 +119,7 @@ struct CodexAppServerExecutor {
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
         self.dynamicToolHandler = dynamicToolHandler
         self.traceHandler = traceHandler
+        self.progressHandler = progressHandler
         self.approvalHandler = approvalHandler
     }
 
@@ -188,8 +191,10 @@ struct CodexAppServerExecutor {
                         traceBuffer: traceBuffer
                     )
                 case .agentMessageDelta(let delta):
+                    progressHandler(.agentMessageDelta(delta))
                     finalText += delta
-                case .toolCallCompleted(let status, let failureMessage):
+                case .toolCallCompleted(let status, let failureMessage, let name):
+                    progressHandler(.toolCallCompleted(name: name ?? "tool", success: status != "failed"))
                     if status == "failed" {
                         pendingToolFailure = failureMessage ?? "Codex App Server tool call failed."
                     } else {
@@ -205,11 +210,13 @@ struct CodexAppServerExecutor {
                     )
                 case .dynamicToolCall(let request):
                     recordTrace(.dynamicToolStarted(request.traceIdentifier), to: traceBuffer)
+                    progressHandler(.toolCallStarted(name: request.displayName))
                     let result = await dynamicToolHandler(request)
                     recordTrace(
                         .dynamicToolCompleted("\(request.traceIdentifier):success=\(result.success)"),
                         to: traceBuffer
                     )
+                    progressHandler(.toolCallCompleted(name: request.displayName, success: result.success))
                     try await send(
                         CodexAppServerProtocol.dynamicToolCallResponse(
                             id: request.requestID,
@@ -322,7 +329,7 @@ struct CodexAppServerExecutor {
             return "threadStarted#\(requestID):\(threadID)"
         case .agentMessageDelta:
             return "agentMessageDelta"
-        case .toolCallCompleted(let status, _):
+        case .toolCallCompleted(let status, _, _):
             return "toolCallCompleted:\(status)"
         case .turnCompleted(let status):
             return "turnCompleted:\(status)"
@@ -356,6 +363,12 @@ struct CodexAppServerExecutor {
         return "message"
     }
 
+}
+
+private extension CodexAppServerDynamicToolCallRequest {
+    var displayName: String {
+        "\(namespace.map { "\($0)." } ?? "")\(tool)"
+    }
 }
 
 private actor CodexAppServerTimeoutState {
