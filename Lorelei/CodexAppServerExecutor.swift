@@ -12,14 +12,6 @@ enum CodexAppServerApprovalDecision: Equatable, Sendable {
     case cancel
 }
 
-enum CodexAppServerPreflightResult: Equatable, Sendable {
-    case completed(String)
-    case warning(String)
-    case failed(String)
-}
-
-typealias CodexAppServerPreflight = @Sendable (_ prompt: String) async -> CodexAppServerPreflightResult
-
 typealias CodexAppServerDynamicToolHandler = @MainActor (
     _ request: CodexAppServerDynamicToolCallRequest
 ) async -> CodexAppServerDynamicToolCallResult
@@ -37,10 +29,6 @@ struct CodexAppServerTraceEvent: Equatable, Sendable {
 
     static func outbound(_ detail: String) -> Self {
         Self("outbound \(detail)")
-    }
-
-    static func preflight(_ detail: String) -> Self {
-        Self("preflight \(detail)")
     }
 
     static func dynamicToolStarted(_ detail: String) -> Self {
@@ -82,14 +70,6 @@ private final class CodexAppServerTraceBuffer: @unchecked Sendable {
     }
 }
 
-private final class CodexAppServerPreflightPromptBox: @unchecked Sendable {
-    let value: String
-
-    init(_ prompt: String) {
-        value = String(decoding: Array(prompt.utf8), as: UTF8.self)
-    }
-}
-
 protocol CodexAppServerTransporting: Sendable {
     func send(line: String) async throws
     func nextLine() async throws -> String?
@@ -111,7 +91,6 @@ enum CodexAppServerLaunch {
 
 struct CodexAppServerExecutor {
     private let turnTimeoutSeconds: TimeInterval
-    private let preflight: CodexAppServerPreflight
     private let makeTransport: () async throws -> CodexAppServerTransporting
     private let skillInputResolver: () -> [CodexAppServerSkillInput]
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
@@ -121,7 +100,6 @@ struct CodexAppServerExecutor {
 
     init(
         turnTimeoutSeconds: TimeInterval = 120,
-        preflight: @escaping CodexAppServerPreflight = { _ in .completed("No preflight configured.") },
         makeTransport: @escaping () async throws -> CodexAppServerTransporting = {
             try await CodexAppServerStdioTransport.make()
         },
@@ -139,7 +117,6 @@ struct CodexAppServerExecutor {
         approvalHandler: @escaping (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
-        self.preflight = preflight
         self.makeTransport = makeTransport
         self.skillInputResolver = skillInputResolver
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
@@ -154,26 +131,6 @@ struct CodexAppServerExecutor {
         }
 
         let traceBuffer = CodexAppServerTraceBuffer()
-        guard let preflightResult = await runPreflight(prompt: prompt, timeoutSeconds: turnTimeoutSeconds) else {
-            recordTrace(.preflight("timed out after \(formattedSeconds(turnTimeoutSeconds))s"), to: traceBuffer)
-            return WorkspaceCommandResult(
-                summary: "Codex App Server preflight timed out." + traceBuffer.diagnosticSuffix(),
-                status: .failed
-            )
-        }
-        switch preflightResult {
-        case .completed(let detail):
-            recordTrace(.preflight(detail), to: traceBuffer)
-        case .warning(let detail):
-            recordTrace(.preflight("warning: \(detail)"), to: traceBuffer)
-        case .failed(let detail):
-            recordTrace(.preflight("failed: \(detail)"), to: traceBuffer)
-            return WorkspaceCommandResult(
-                summary: detail + traceBuffer.diagnosticSuffix(),
-                status: .failed
-            )
-        }
-
         let transport: CodexAppServerTransporting
         do {
             transport = try await makeTransport()
@@ -328,31 +285,6 @@ struct CodexAppServerExecutor {
         await runDesktopAction(prompt: prompt, cwd: cwd)
     }
 
-    private func runPreflight(
-        prompt: String,
-        timeoutSeconds: TimeInterval
-    ) async -> CodexAppServerPreflightResult? {
-        let state = CodexAppServerPreflightRaceState()
-        let preflightPrompt = CodexAppServerPreflightPromptBox(prompt)
-        var preflightTask: Task<Void, Never>?
-        var timeoutTask: Task<Void, Never>?
-
-        let result = await withCheckedContinuation { continuation in
-            preflightTask = Task { [preflight, preflightPrompt] in
-                let result = await preflight(preflightPrompt.value)
-                state.resume(with: result, continuation: continuation)
-            }
-            timeoutTask = Task {
-                try? await Task.sleep(for: .seconds(timeoutSeconds))
-                state.resume(with: nil, continuation: continuation)
-            }
-        }
-
-        preflightTask?.cancel()
-        timeoutTask?.cancel()
-        return result
-    }
-
     private func send(
         _ message: [String: Any],
         to transport: CodexAppServerTransporting,
@@ -430,12 +362,6 @@ struct CodexAppServerExecutor {
         return "message"
     }
 
-    private func formattedSeconds(_ seconds: TimeInterval) -> String {
-        if seconds.rounded() == seconds {
-            return String(Int(seconds))
-        }
-        return String(format: "%.3f", seconds)
-    }
 }
 
 private actor CodexAppServerTimeoutState {
@@ -447,23 +373,6 @@ private actor CodexAppServerTimeoutState {
 
     func markTimedOut() {
         timedOut = true
-    }
-}
-
-private final class CodexAppServerPreflightRaceState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didResume = false
-
-    func resume(
-        with result: CodexAppServerPreflightResult?,
-        continuation: CheckedContinuation<CodexAppServerPreflightResult?, Never>
-    ) {
-        lock.lock()
-        defer { lock.unlock() }
-
-        guard !didResume else { return }
-        didResume = true
-        continuation.resume(returning: result)
     }
 }
 

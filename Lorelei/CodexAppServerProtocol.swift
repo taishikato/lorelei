@@ -748,9 +748,6 @@ enum CodexAppServerProtocol {
     private static func desktopActionConfigOverrides() -> [String: Any] {
         [
             "plugins": [
-                "chrome@openai-bundled": [
-                    "enabled": true
-                ],
                 "computer-use@openai-bundled": [
                     "enabled": true
                 ]

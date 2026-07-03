@@ -96,7 +96,6 @@ final class CompanionManager: ObservableObject {
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexExecutor: CodexExecutor
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
-    private let chromeMemorySaverScriptRunner: ChromeMemorySaverScriptRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
@@ -131,7 +130,6 @@ final class CompanionManager: ObservableObject {
         speechOutput: SpeechOutputing? = nil,
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
-        chromeMemorySaverScriptRunner: ChromeMemorySaverScriptRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
         codexExecutor: CodexExecutor? = nil,
         overlayWindowManager: (any OverlayWindowManaging)? = nil
@@ -139,7 +137,6 @@ final class CompanionManager: ObservableObject {
         self.speechOutput = speechOutput ?? SpeechOutputClient()
         self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
-        self.chromeMemorySaverScriptRunner = chromeMemorySaverScriptRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
         self.codexExecutor = codexExecutor ?? CodexExecutor()
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
@@ -490,13 +487,6 @@ final class CompanionManager: ObservableObject {
                 updateLatestResultSummary(result.summary)
                 speechOutput.speak(result.spokenStatus)
                 return
-            case .codexChromeBrowserOpen(let prompt):
-                let result = await runCodexAppServerDesktopAction(prompt: prompt, wrapGenericPrompt: false)
-                guard !Task.isCancelled else { return }
-
-                updateLatestResultSummary(result.summary)
-                speechOutput.speak(result.spokenStatus)
-                return
             case .codexScreen(let prompt):
                 let result = await runCodexScreenRequest(prompt)
                 guard !Task.isCancelled else { return }
@@ -546,14 +536,8 @@ final class CompanionManager: ObservableObject {
         return true
     }
 
-    private func runCodexAppServerDesktopAction(
-        prompt: String,
-        wrapGenericPrompt: Bool = true
-    ) async -> WorkspaceCommandResult {
-        let appServerPrompt = CodexPromptBuilder.appServerDesktopActionPrompt(
-            for: prompt,
-            wrapGenericGuidance: wrapGenericPrompt
-        )
+    private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
+        let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(for: prompt)
         let cwd = codexAppServerWorkingDirectory()
         recordDebugEvent("Codex App Server desktop action started")
         recordDebugEvent("Codex App Server cwd: \(cwd)")
@@ -564,10 +548,6 @@ final class CompanionManager: ObservableObject {
             }
 
             let foregroundTool = CodexAppServerDesktopForegroundTool()
-            let chromePreflight = CodexChromeMemorySaverPreflight(scriptRunner: self.chromeMemorySaverScriptRunner)
-            let preflight: CodexAppServerPreflight = { _ in
-                await chromePreflight.run(prompt: prompt)
-            }
             let dynamicToolSpecsResolver = {
                 [CodexAppServerDesktopForegroundTool.spec]
             }
@@ -586,7 +566,6 @@ final class CompanionManager: ObservableObject {
             let executor: CodexAppServerExecutor
             if let codexAppServerTransportFactory = self.codexAppServerTransportFactory {
                 executor = CodexAppServerExecutor(
-                    preflight: preflight,
                     makeTransport: codexAppServerTransportFactory,
                     dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                     dynamicToolHandler: dynamicToolHandler,
@@ -595,7 +574,6 @@ final class CompanionManager: ObservableObject {
                 )
             } else {
                 executor = CodexAppServerExecutor(
-                    preflight: preflight,
                     dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                     dynamicToolHandler: dynamicToolHandler,
                     traceHandler: traceHandler,
