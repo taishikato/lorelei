@@ -109,7 +109,6 @@ final class CompanionManager: ObservableObject {
     let workspaceSettingsStore: WorkspaceSettingsStore
     private let commandRouter = LoreleiCommandRouter()
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
-    private let codexExecutor: CodexExecutor
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let speechOutput: SpeechOutputing
@@ -156,7 +155,6 @@ final class CompanionManager: ObservableObject {
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
-        codexExecutor: CodexExecutor? = nil,
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
         audioFeedback: BuddyAudioFeedbacking? = nil
     ) {
@@ -167,7 +165,6 @@ final class CompanionManager: ObservableObject {
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
-        self.codexExecutor = codexExecutor ?? CodexExecutor()
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
     }
 
@@ -582,20 +579,18 @@ final class CompanionManager: ObservableObject {
 
             switch action {
             case .codexReadOnly(let prompt):
-                let result = await codexExecutor.run(
-                    .readOnly,
+                let result = await runCodexAppServerTurn(
                     prompt: prompt,
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                    sandboxPolicy: "read-only"
                 )
                 guard !Task.isCancelled else { return }
 
                 finishRun(with: result)
                 return
             case .codexWorkspaceWrite(let prompt):
-                let result = await codexExecutor.run(
-                    .workspaceWrite,
+                let result = await runCodexAppServerTurn(
                     prompt: CodexPromptBuilder.workspaceWritePrompt(for: prompt),
-                    workspacePath: workspaceSettingsStore.selectedWorkspacePath
+                    sandboxPolicy: "workspace-write"
                 )
                 guard !Task.isCancelled else { return }
 
@@ -700,6 +695,28 @@ final class CompanionManager: ObservableObject {
 
             let executor = self.sharedCodexAppServerExecutor()
             return await executor.runDesktopAction(prompt: appServerPrompt, cwd: cwd)
+        }
+    }
+
+    private func runCodexAppServerTurn(
+        prompt: String,
+        sandboxPolicy: String,
+        extraInput: [CodexAppServerTurnInputItem] = [],
+        removeLocalImageInputsAfterRun: Bool = false
+    ) async -> WorkspaceCommandResult {
+        let cwd = codexAppServerWorkingDirectory()
+        recordDebugEvent("Codex App Server turn started")
+        recordDebugEvent("Codex App Server cwd: \(cwd)")
+
+        return await withDesktopActionOverlayHidden {
+            let executor = self.sharedCodexAppServerExecutor()
+            return await executor.runTurn(
+                prompt: prompt,
+                cwd: cwd,
+                sandboxPolicy: sandboxPolicy,
+                extraInput: extraInput,
+                removeLocalImageInputsAfterRun: removeLocalImageInputsAfterRun
+            )
         }
     }
 
@@ -969,10 +986,21 @@ final class CompanionManager: ObservableObject {
     }
 
     private func runCodexScreenRequest(_ prompt: String) async -> WorkspaceCommandResult {
-        let runner = CodexScreenContextRequestRunner(codexExecutor: codexExecutor)
+        let runner = CodexScreenContextRequestRunner()
         return await runner.run(
             prompt: prompt,
-            workspacePath: workspaceSettingsStore.selectedWorkspacePath
+            workspacePath: workspaceSettingsStore.selectedWorkspacePath,
+            runTurn: { [weak self] prompt, imagePath in
+                guard let self else {
+                    return WorkspaceCommandResult(summary: "CompanionManager is no longer available.", status: .failed)
+                }
+                return await self.runCodexAppServerTurn(
+                    prompt: prompt,
+                    sandboxPolicy: "read-only",
+                    extraInput: [.localImage(path: imagePath)],
+                    removeLocalImageInputsAfterRun: true
+                )
+            }
         )
     }
 
@@ -1005,14 +1033,12 @@ final class CompanionManager: ObservableObject {
 @MainActor
 struct CodexScreenContextRequestRunner {
     private let fileManager: FileManager
-    private let codexExecutor: CodexExecutor
     private let captureCursorScreen: @MainActor () async throws -> CompanionScreenCapture?
     private let isCancelled: () -> Bool
     private let makeTemporaryImageURL: () -> URL
 
     init(
         fileManager: FileManager = .default,
-        codexExecutor: CodexExecutor? = nil,
         captureCursorScreen: @escaping @MainActor () async throws -> CompanionScreenCapture? = {
             try await CompanionScreenCaptureUtility.captureCursorScreenAsJPEG()
         },
@@ -1020,7 +1046,6 @@ struct CodexScreenContextRequestRunner {
         makeTemporaryImageURL: (() -> URL)? = nil
     ) {
         self.fileManager = fileManager
-        self.codexExecutor = codexExecutor ?? CodexExecutor()
         self.captureCursorScreen = captureCursorScreen
         self.isCancelled = isCancelled
         self.makeTemporaryImageURL = makeTemporaryImageURL ?? {
@@ -1029,7 +1054,11 @@ struct CodexScreenContextRequestRunner {
         }
     }
 
-    func run(prompt: String, workspacePath: String?) async -> WorkspaceCommandResult {
+    func run(
+        prompt: String,
+        workspacePath: String?,
+        runTurn: @escaping @MainActor (String, String) async -> WorkspaceCommandResult
+    ) async -> WorkspaceCommandResult {
         guard let workspacePath = workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !workspacePath.isEmpty else {
             return WorkspaceCommandResult(summary: "No workspace selected.", status: .missingWorkspace)
@@ -1068,14 +1097,7 @@ struct CodexScreenContextRequestRunner {
                 return WorkspaceCommandResult(summary: "Screen capture cancelled.", status: .cancelled)
             }
 
-            return await codexExecutor.run(
-                .readOnly,
-                prompt: prompt,
-                workspacePath: workspacePath,
-                imagePaths: [imageURL.path],
-                removeImageInputsAfterRun: true,
-                ephemeral: true
-            )
+            return await runTurn(prompt, imageURL.path)
         } catch {
             return WorkspaceCommandResult(
                 summary: "Screen capture failed: \(error.localizedDescription)",

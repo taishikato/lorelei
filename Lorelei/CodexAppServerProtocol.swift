@@ -59,6 +59,10 @@ enum CodexAppServerDynamicToolContentItem: Equatable, Sendable {
     case image(dataURL: String)
 }
 
+enum CodexAppServerTurnInputItem: Equatable, Sendable {
+    case localImage(path: String)
+}
+
 struct CodexAppServerDynamicToolCallResult: Equatable, Sendable {
     let success: Bool
     let contentItems: [CodexAppServerDynamicToolContentItem]
@@ -202,21 +206,27 @@ enum CodexAppServerProtocol {
         id: Int,
         threadID: String,
         prompt: String,
-        cwd: String
+        cwd: String,
+        sandboxPolicy: String? = nil,
+        extraInput: [CodexAppServerTurnInputItem] = []
     ) -> [String: Any] {
-        let input = textUserInput(prompt: prompt)
+        let input = textUserInput(prompt: prompt) + extraInput.map(turnInputObject)
+        var params: [String: Any] = [
+            "threadId": threadID,
+            "cwd": cwd,
+            "model": CodexAppServerModel.turnModel,
+            "input": input,
+            "approvalPolicy": granularApprovalPolicy(),
+            "approvalsReviewer": "user"
+        ]
+        if let sandboxPolicy {
+            params["sandboxPolicy"] = sandboxPolicy
+        }
 
         return [
             "id": id,
             "method": "turn/start",
-            "params": [
-                "threadId": threadID,
-                "cwd": cwd,
-                "model": CodexAppServerModel.turnModel,
-                "input": input,
-                "approvalPolicy": granularApprovalPolicy(),
-                "approvalsReviewer": "user"
-            ]
+            "params": params
         ]
     }
 
@@ -711,6 +721,16 @@ enum CodexAppServerProtocol {
                 "text_elements": []
             ]
         ]
+    }
+
+    nonisolated private static func turnInputObject(_ item: CodexAppServerTurnInputItem) -> [String: Any] {
+        switch item {
+        case .localImage(let path):
+            return [
+                "type": "localImage",
+                "path": path
+            ]
+        }
     }
 
     private static func granularApprovalPolicy() -> [String: Any] {

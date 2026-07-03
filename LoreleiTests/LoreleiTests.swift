@@ -426,30 +426,36 @@ struct LoreleiTests {
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let store = WorkspaceSettingsStore(defaults: defaults)
         store.selectedWorkspacePath = directoryURL.path
-        let recorder = CodexCommandRecorder(finalMessage: "Updated README.")
-        let codexExecutor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
-        )
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Updated README."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
         let manager = CompanionManager(
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
-            codexExecutor: codexExecutor
+            codexAppServerTransportFactory: { transport }
         )
 
         manager.handleFinalTranscriptForTesting("update the readme")
         for _ in 0..<20 {
-            if recorder.arguments != nil,
-               manager.latestResultSummary == "Updated README." {
+            if manager.latestResultSummary == "Updated README." {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let params = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(params["input"] as? [[String: Any]])
+
         #expect(manager.pendingApprovalTitle == nil)
         #expect(manager.latestResultSummary == "Updated README.")
-        #expect(recorder.arguments?.contains("workspace-write") == true)
-        #expect(recorder.arguments?.contains(CodexPromptBuilder.workspaceWritePrompt(for: "update the readme")) == true)
+        #expect(params["sandboxPolicy"] as? String == "workspace-write")
+        #expect(input.first?["text"] as? String == CodexPromptBuilder.workspaceWritePrompt(for: "update the readme"))
     }
 
     @Test func companionManagerRecordsDebugLogForImmediateDesktopAction() async throws {
@@ -886,111 +892,30 @@ struct LoreleiTests {
 
         let result = await executor.run(.codexDesktopAction("open https://chatgpt.com in Chrome"), workspacePath: nil)
 
-        #expect(result.summary == "Codex commands are handled by CodexExecutor.")
+        #expect(result.summary == "Codex commands are handled by Codex App Server.")
         #expect(result.status == .succeeded)
-    }
-
-    @Test func codexExecutorBuildsReadOnlyCommand() async throws {
-        let directoryURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let recorder = CodexCommandRecorder(finalMessage: "Read-only answer")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
-        )
-
-        let result = await executor.run(.readOnly, prompt: "explain the diff", workspacePath: directoryURL.path)
-
-        #expect(result.summary == "Read-only answer")
-        #expect(recorder.executableURL?.path == "/usr/local/bin/codex")
-        #expect(recorder.currentDirectoryURL == directoryURL)
-        #expect(recorder.arguments?.starts(with: ["exec", "--sandbox", "read-only", "--cd", directoryURL.path]) == true)
-        #expect(recorder.arguments?.contains("--output-last-message") == true)
-        #expect(recorder.outputLastMessagePath != nil)
-    }
-
-    @Test func codexExecutorBuildsReadOnlyCommandWithImageInput() async throws {
-        let directoryURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let imagePath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lorelei-test-\(UUID().uuidString).jpg")
-            .path
-        let recorder = CodexCommandRecorder(finalMessage: "Screen answer")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
-        )
-
-        let result = await executor.run(
-            .readOnly,
-            prompt: "look at my screen",
-            workspacePath: directoryURL.path,
-            imagePaths: [imagePath],
-            ephemeral: true
-        )
-
-        #expect(result.summary == "Screen answer")
-        #expect(recorder.arguments?.starts(with: [
-            "exec",
-            "--ephemeral",
-            "-i",
-            imagePath,
-            "--sandbox",
-            "read-only",
-            "--cd",
-            directoryURL.path
-        ]) == true)
-        #expect(recorder.arguments?.contains("--output-last-message") == true)
-        #expect(recorder.outputLastMessagePath != nil)
-        #expect(recorder.arguments?.last == "look at my screen")
-    }
-
-    @Test func codexExecutorCleansUpImageInputsWhenRequested() async throws {
-        let directoryURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let imageURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lorelei-test-\(UUID().uuidString).jpg")
-        try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: imageURL)
-        let recorder = CodexCommandRecorder(finalMessage: "Screen answer")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
-        )
-
-        let result = await executor.run(
-            .readOnly,
-            prompt: "look at my screen",
-            workspacePath: directoryURL.path,
-            imagePaths: [imageURL.path],
-            removeImageInputsAfterRun: true
-        )
-
-        #expect(result.summary == "Screen answer")
-        #expect(!FileManager.default.fileExists(atPath: imageURL.path))
     }
 
     @Test func screenContextRunnerDoesNotCaptureForInvalidWorkspace() async throws {
         let captureCounter = LaunchCounter()
         let missingWorkspace = FileManager.default.temporaryDirectory
             .appendingPathComponent("missing-\(UUID().uuidString)", isDirectory: true)
-        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
-        )
+        let runCounter = LaunchCounter()
         let runner = CodexScreenContextRequestRunner(
-            codexExecutor: executor,
             captureCursorScreen: {
                 captureCounter.increment()
                 return nil
             }
         )
 
-        let result = await runner.run(prompt: "look at my screen", workspacePath: missingWorkspace.path)
+        let result = await runner.run(prompt: "look at my screen", workspacePath: missingWorkspace.path) { _, _ in
+            runCounter.increment()
+            return WorkspaceCommandResult(summary: "Should not run")
+        }
 
         #expect(result.summary == "Workspace path is not a valid directory: \(missingWorkspace.path)")
         #expect(captureCounter.value == 0)
-        #expect(recorder.arguments == nil)
+        #expect(runCounter.value == 0)
     }
 
     @Test func screenContextRunnerCancelsBeforeWritingTempImage() async throws {
@@ -998,13 +923,8 @@ struct LoreleiTests {
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let captureCounter = LaunchCounter()
         let tempURLCounter = LaunchCounter()
-        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
-        )
+        let runCounter = LaunchCounter()
         let runner = CodexScreenContextRequestRunner(
-            codexExecutor: executor,
             captureCursorScreen: {
                 captureCounter.increment()
                 return CompanionScreenCapture(
@@ -1026,37 +946,49 @@ struct LoreleiTests {
             }
         )
 
-        let result = await runner.run(prompt: "look at my screen", workspacePath: directoryURL.path)
+        let result = await runner.run(prompt: "look at my screen", workspacePath: directoryURL.path) { _, _ in
+            runCounter.increment()
+            return WorkspaceCommandResult(summary: "Should not run")
+        }
 
         #expect(result.summary == "Screen capture cancelled.")
         #expect(captureCounter.value == 1)
         #expect(tempURLCounter.value == 0)
-        #expect(recorder.arguments == nil)
+        #expect(runCounter.value == 0)
     }
 
-    @Test func codexExecutorBuildsWorkspaceWriteCommand() async throws {
+    @Test func screenContextRunnerFeedsCapturedImageToSharedTurn() async throws {
         let directoryURL = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let recorder = CodexCommandRecorder(finalMessage: "Write-mode answer")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
+        let imageURL = directoryURL.appendingPathComponent("screen.jpg")
+        var receivedPrompt: String?
+        var receivedImagePath: String?
+        let runner = CodexScreenContextRequestRunner(
+            captureCursorScreen: {
+                CompanionScreenCapture(
+                    imageData: Data([0xFF, 0xD8, 0xFF, 0xD9]),
+                    label: "user's screen (cursor is here)",
+                    isCursorScreen: true,
+                    displayWidthInPoints: 100,
+                    displayHeightInPoints: 100,
+                    displayFrame: .zero,
+                    screenshotWidthInPixels: 100,
+                    screenshotHeightInPixels: 100
+                )
+            },
+            makeTemporaryImageURL: { imageURL }
         )
 
-        let result = await executor.run(.workspaceWrite, prompt: "fix the test", workspacePath: directoryURL.path)
+        let result = await runner.run(prompt: "look at my screen", workspacePath: directoryURL.path) { prompt, imagePath in
+            receivedPrompt = prompt
+            receivedImagePath = imagePath
+            return WorkspaceCommandResult(summary: "Screen answer")
+        }
 
-        #expect(result.summary == "Write-mode answer")
-        #expect(recorder.arguments?.starts(with: [
-            "--ask-for-approval",
-            "never",
-            "exec",
-            "--sandbox",
-            "workspace-write",
-            "--cd",
-            directoryURL.path
-        ]) == true)
-        #expect(recorder.arguments?.contains("--output-last-message") == true)
-        #expect(recorder.outputLastMessagePath != nil)
+        #expect(result.summary == "Screen answer")
+        #expect(receivedPrompt == "look at my screen")
+        #expect(receivedImagePath == imageURL.path)
+        #expect(FileManager.default.fileExists(atPath: imageURL.path))
     }
 
     @Test func launchEnvironmentPrependsNodeInstallPaths() async throws {
@@ -1189,6 +1121,26 @@ struct LoreleiTests {
         let params = try #require(request["params"] as? [String: Any])
 
         #expect(params["model"] as? String == "gpt-5.5")
+    }
+
+    @Test func appServerTurnStartRequestEncodesSandboxPolicyAndLocalImage() throws {
+        let request = CodexAppServerProtocol.turnStartRequest(
+            id: 3,
+            threadID: "thread-1",
+            prompt: "look at my screen",
+            cwd: "/Users/example",
+            sandboxPolicy: "read-only",
+            extraInput: [.localImage(path: "/tmp/lorelei-screen.jpg")]
+        )
+        let params = try #require(request["params"] as? [String: Any])
+        let input = try #require(params["input"] as? [[String: Any]])
+
+        #expect(params["sandboxPolicy"] as? String == "read-only")
+        #expect(input.count == 2)
+        #expect(input[0]["type"] as? String == "text")
+        #expect(input[0]["text"] as? String == "look at my screen")
+        #expect(input[1]["type"] as? String == "localImage")
+        #expect(input[1]["path"] as? String == "/tmp/lorelei-screen.jpg")
     }
 
     @Test func appServerTurnSteerRequestEncodesActiveTurnPrecondition() throws {
@@ -1325,34 +1277,6 @@ struct LoreleiTests {
         #expect(!result.success)
         #expect(textContent(result)?.contains("appName or bundleIdentifier") == true)
         #expect(recorder.events.isEmpty)
-    }
-
-    @Test func codexExecutorReportsMissingWorkspace() async throws {
-        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { URL(fileURLWithPath: "/usr/local/bin/codex") },
-            commandRunner: recorder.run
-        )
-
-        let result = await executor.run(.readOnly, prompt: "explain this", workspacePath: nil)
-
-        #expect(result.summary == "No workspace selected.")
-        #expect(recorder.arguments == nil)
-    }
-
-    @Test func codexExecutorReportsMissingExecutable() async throws {
-        let directoryURL = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let recorder = CodexCommandRecorder(finalMessage: "Should not run")
-        let executor = CodexExecutor(
-            codexExecutableResolver: { nil },
-            commandRunner: recorder.run
-        )
-
-        let result = await executor.run(.readOnly, prompt: "explain this", workspacePath: directoryURL.path)
-
-        #expect(result.summary.contains("Codex executable was not found."))
-        #expect(recorder.arguments == nil)
     }
 
     @Test func appServerProtocolParsesThreadStartResponse() throws {
@@ -2650,6 +2574,118 @@ struct LoreleiTests {
         #expect(!sentMessages.contains { $0["method"] as? String == "turn/steer" })
     }
 
+    @Test func companionManagerRunsReadOnlyUtteranceOnSharedThread() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerReadOnlySharedThreadTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerReadOnlySharedThreadTests")
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = directoryURL.path
+        let factoryCallCount = AsyncCounter()
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Opened TextEdit."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-10","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"I opened TextEdit."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: {
+                await factoryCallCount.increment()
+                return transport
+            },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to open TextEdit")
+        for _ in 0..<40 {
+            if manager.runStatus == .finished(success: true) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        manager.handleFinalTranscriptForTesting("what did you just do")
+        for _ in 0..<40 {
+            let sentMessages = try await transport.sentJSONMessages()
+            if sentMessages.filter({ $0["method"] as? String == "turn/start" }).count == 2 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStarts = sentMessages.filter { $0["method"] as? String == "turn/start" }
+        let secondParams = try #require(turnStarts.last?["params"] as? [String: Any])
+        let secondInput = try #require(secondParams["input"] as? [[String: Any]])
+
+        #expect(await factoryCallCount.value == 1)
+        #expect(turnStarts.count == 2)
+        #expect(secondParams["threadId"] as? String == "thread-1")
+        #expect(secondParams["sandboxPolicy"] as? String == "read-only")
+        #expect(secondInput.first?["text"] as? String == "what did you just do")
+    }
+
+    @Test func companionManagerRunsWorkspaceWriteOnSharedThread() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerWorkspaceWriteSharedThreadTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerWorkspaceWriteSharedThreadTests")
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = directoryURL.path
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Opened TextEdit."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-10","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Fixed the test."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factoryCallCount = AsyncCounter()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: {
+                await factoryCallCount.increment()
+                return transport
+            },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to open TextEdit")
+        for _ in 0..<40 {
+            if manager.runStatus == .finished(success: true) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        manager.handleFinalTranscriptForTesting("fix the failing test")
+        for _ in 0..<40 {
+            let sentMessages = try await transport.sentJSONMessages()
+            if sentMessages.filter({ $0["method"] as? String == "turn/start" }).count == 2 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStarts = sentMessages.filter { $0["method"] as? String == "turn/start" }
+        let secondParams = try #require(turnStarts.last?["params"] as? [String: Any])
+        let secondInput = try #require(secondParams["input"] as? [[String: Any]])
+
+        #expect(await factoryCallCount.value == 1)
+        #expect(turnStarts.count == 2)
+        #expect(secondParams["threadId"] as? String == "thread-1")
+        #expect(secondParams["sandboxPolicy"] as? String == "workspace-write")
+        #expect(secondInput.first?["text"] as? String == CodexPromptBuilder.workspaceWritePrompt(for: "fix the failing test"))
+    }
+
     @Test func companionManagerStopKeepsSessionForNextTurn() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerStopKeepsSessionTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerStopKeepsSessionTests")
@@ -3013,46 +3049,6 @@ private final class FakeDesktopActionExecutor: DesktopActionExecuting {
 
     func screenshot() async -> Result<Data, DesktopActionError> {
         screenshotResult
-    }
-}
-
-@MainActor
-private final class CodexCommandRecorder {
-    private let finalMessage: String
-    private(set) var executableURL: URL?
-    private(set) var arguments: [String]?
-    private(set) var currentDirectoryURL: URL?
-
-    init(finalMessage: String) {
-        self.finalMessage = finalMessage
-    }
-
-    var outputLastMessagePath: String? {
-        guard let arguments,
-              let optionIndex = arguments.firstIndex(of: "--output-last-message"),
-              arguments.indices.contains(optionIndex + 1) else {
-            return nil
-        }
-        return arguments[optionIndex + 1]
-    }
-
-    func run(
-        executableURL: URL,
-        arguments: [String],
-        currentDirectoryURL: URL,
-        timeoutSeconds: TimeInterval,
-        prelaunchDelay: TimeInterval,
-        onLaunch: (@Sendable () -> Void)?
-    ) async -> WorkspaceProcessExecution {
-        self.executableURL = executableURL
-        self.arguments = arguments
-        self.currentDirectoryURL = currentDirectoryURL
-
-        if let outputPath = outputLastMessagePath {
-            try? finalMessage.write(toFile: outputPath, atomically: true, encoding: .utf8)
-        }
-
-        return WorkspaceProcessExecution(reason: .exited(0), stdout: "", stderr: "")
     }
 }
 

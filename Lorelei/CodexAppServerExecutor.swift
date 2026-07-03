@@ -388,7 +388,22 @@ final class CodexAppServerExecutor {
         self.approvalHandler = approvalHandler
     }
 
-    func runDesktopAction(prompt: String, cwd: String) async -> WorkspaceCommandResult {
+    func runTurn(
+        prompt: String,
+        cwd: String,
+        sandboxPolicy: String? = nil,
+        extraInput: [CodexAppServerTurnInputItem] = [],
+        removeLocalImageInputsAfterRun: Bool = false
+    ) async -> WorkspaceCommandResult {
+        defer {
+            if removeLocalImageInputsAfterRun {
+                for item in extraInput {
+                    if case .localImage(let path) = item {
+                        try? FileManager.default.removeItem(atPath: path)
+                    }
+                }
+            }
+        }
         defer {
             progressHandler(.turnEnded)
         }
@@ -401,9 +416,11 @@ final class CodexAppServerExecutor {
         var lastFailure: WorkspaceCommandResult?
 
         for attempt in 0..<2 {
-            let result = await runDesktopActionAttempt(
+            let result = await runTurnAttempt(
                 prompt: prompt,
                 cwd: cwd,
+                sandboxPolicy: sandboxPolicy,
+                extraInput: extraInput,
                 traceBuffer: traceBuffer,
                 allowDeadSessionRetry: attempt == 0
             )
@@ -416,6 +433,10 @@ final class CodexAppServerExecutor {
         }
 
         return lastFailure ?? WorkspaceCommandResult(summary: "Codex App Server failed.", status: .failed)
+    }
+
+    func runDesktopAction(prompt: String, cwd: String) async -> WorkspaceCommandResult {
+        await runTurn(prompt: prompt, cwd: cwd)
     }
 
     func runComputerUse(prompt: String, cwd: String) async -> WorkspaceCommandResult {
@@ -477,9 +498,11 @@ final class CodexAppServerExecutor {
         )
     }
 
-    private func runDesktopActionAttempt(
+    private func runTurnAttempt(
         prompt: String,
         cwd: String,
+        sandboxPolicy: String?,
+        extraInput: [CodexAppServerTurnInputItem],
         traceBuffer: CodexAppServerTraceBuffer,
         allowDeadSessionRetry: Bool
     ) async -> CodexAppServerTurnAttemptResult {
@@ -556,7 +579,9 @@ final class CodexAppServerExecutor {
                         id: await sessionStore.nextRequestID(),
                         threadID: session.threadID,
                         prompt: prompt,
-                        cwd: cwd
+                        cwd: cwd,
+                        sandboxPolicy: sandboxPolicy,
+                        extraInput: extraInput
                     ),
                     to: session.transport,
                     traceBuffer: traceBuffer
