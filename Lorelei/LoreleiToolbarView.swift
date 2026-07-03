@@ -10,7 +10,7 @@ import SwiftUI
 struct LoreleiToolbarView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var expansionState: LoreleiToolbarExpansionState
-    let toggleExpansion: () -> Void
+    let toggleExpansion: @MainActor @Sendable () -> Void
 
     var body: some View {
         GlassEffectContainer {
@@ -48,7 +48,7 @@ struct LoreleiToolbarView: View {
     }
 
     private var collapsedCapsule: some View {
-        Button(action: { deferredAction(toggleExpansion) }) {
+        Button(action: { deferredAction { toggleExpansion() } }) {
             HStack(spacing: 9) {
                 statusDot
                 Text(Self.statusLabel(for: companionManager.runStatus))
@@ -74,7 +74,7 @@ struct LoreleiToolbarView: View {
     private var expandedPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             expandedHeader
-            streamArea
+            conversationArea
             activityLine
 
             if case .needsApproval = companionManager.runStatus {
@@ -99,7 +99,7 @@ struct LoreleiToolbarView: View {
 
             Spacer()
 
-            Button(action: { deferredAction(toggleExpansion) }) {
+            Button(action: { deferredAction { toggleExpansion() } }) {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -111,16 +111,16 @@ struct LoreleiToolbarView: View {
         }
     }
 
-    private var streamArea: some View {
+    private var conversationArea: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                Text(streamDisplayText)
-                    .font(.system(size: 12, weight: .light, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .lineLimit(nil)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .id("stream-bottom")
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(companionManager.conversationLog) { entry in
+                        conversationRow(entry)
+                            .id(entry.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 320)
             .padding(10)
@@ -132,16 +132,35 @@ struct LoreleiToolbarView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(.white.opacity(0.12), lineWidth: 0.7)
             )
-            .onChange(of: companionManager.streamText) { _, _ in
+            .onChange(of: companionManager.conversationLog) { _, log in
+                guard let lastID = log.last?.id else { return }
                 withAnimation(.easeOut(duration: 0.18)) {
-                    proxy.scrollTo("stream-bottom", anchor: .bottom)
+                    proxy.scrollTo(lastID, anchor: .bottom)
                 }
             }
-            .onChange(of: companionManager.latestResultSummary) { _, _ in
-                withAnimation(.easeOut(duration: 0.18)) {
-                    proxy.scrollTo("stream-bottom", anchor: .bottom)
-                }
+        }
+    }
+
+    @ViewBuilder
+    private func conversationRow(_ entry: ConversationEntry) -> some View {
+        switch entry.role {
+        case .user:
+            HStack {
+                Spacer(minLength: 34)
+                Text("You: \(entry.text)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(nil)
+                    .textSelection(.enabled)
             }
+        case .assistant:
+            Text(entry.text)
+                .font(.system(size: 12, weight: .light, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(nil)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -284,7 +303,7 @@ struct LoreleiToolbarView: View {
 /// updates are re-rendering the panel at the same time - deferring one tick
 /// lets the gesture finish before the hierarchy changes.
 @MainActor
-func deferredAction(_ action: @escaping @MainActor () -> Void) {
+func deferredAction(_ action: @escaping @MainActor @Sendable () -> Void) {
     Task { @MainActor in
         action()
     }

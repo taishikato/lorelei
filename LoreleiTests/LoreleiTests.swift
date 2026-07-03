@@ -271,6 +271,56 @@ struct LoreleiTests {
         #expect(turnStartIDs == [3, 4])
     }
 
+    @Test func companionManagerLogsUserAndAssistantEntriesAcrossTurns() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerConversationLogAcrossTurnsTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerConversationLogAcrossTurnsTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [transport])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { try await factory.next() }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "First turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect Safari")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Second turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let log = manager.conversationLog
+        #expect(log.map(\.role) == [
+            ConversationEntry.Role.user,
+            ConversationEntry.Role.assistant,
+            ConversationEntry.Role.user,
+            ConversationEntry.Role.assistant
+        ])
+        #expect(log.map(\.text) == [
+            "use computer use to inspect TextEdit",
+            "First turn.",
+            "use computer use to inspect Safari",
+            "Second turn."
+        ])
+    }
+
     @Test func companionManagerWrapsGeneralDesktopActionsWithForegroundAppGuidance() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerGeneralDesktopActionRunnerTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerGeneralDesktopActionRunnerTests")
@@ -2168,7 +2218,9 @@ struct LoreleiTests {
             ]
         )
         let completingExecutor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 0.05,
+            // 0.3s, not a knife-edge 0.05s: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite load.
+            turnTimeoutSeconds: 0.3,
             timeoutInterruptGraceSeconds: 0.5,
             makeTransport: { completingTransport },
             approvalHandler: { _ in .cancel }
@@ -2191,7 +2243,9 @@ struct LoreleiTests {
             #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
         ])
         let silentExecutor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 0.05,
+            // 0.3s, not a knife-edge 0.05s: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite load.
+            turnTimeoutSeconds: 0.3,
             timeoutInterruptGraceSeconds: 0.05,
             makeTransport: { silentTransport },
             approvalHandler: { _ in .cancel }
@@ -2494,6 +2548,62 @@ struct LoreleiTests {
         #expect(manager.runStatus == .working("Thinking…"))
         #expect(manager.streamText == "Working")
         #expect(audioFeedback.events.isEmpty)
+    }
+
+    @Test func companionManagerLogsSteeredUtteranceIntoConversation() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerConversationLogSteerTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerConversationLogSteerTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Working"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<40 {
+            if manager.streamText == "Working" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.conversationLog.map(\.role) == [
+            ConversationEntry.Role.user,
+            ConversationEntry.Role.assistant
+        ])
+        #expect(manager.conversationLog.map(\.text) == [
+            "use computer use to inspect TextEdit",
+            "Working"
+        ])
+
+        manager.handleFinalTranscriptForTesting("actually the other window")
+        for _ in 0..<40 {
+            let sentMessages = try await transport.sentJSONMessages()
+            if sentMessages.contains(where: { $0["method"] as? String == "turn/steer" }) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.conversationLog.map(\.role) == [
+            ConversationEntry.Role.user,
+            ConversationEntry.Role.assistant,
+            ConversationEntry.Role.user
+        ])
+        #expect(manager.conversationLog.map(\.text) == [
+            "use computer use to inspect TextEdit",
+            "Working",
+            "↪ actually the other window"
+        ])
+        #expect(manager.conversationLog.filter { $0.role == .assistant }.count == 1)
     }
 
     @Test func companionManagerStartsNewTurnWhenIdle() async throws {
