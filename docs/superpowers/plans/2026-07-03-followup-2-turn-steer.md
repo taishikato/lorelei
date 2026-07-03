@@ -74,3 +74,18 @@ case turnEnded
 - [ ] Reviewer: full suite incl. UI tests.
 - [ ] Live smoke: start a slow task by voice (e.g. "open TextEdit and write a two-sentence story"), speak a correction mid-run ("make it about cats"); confirm the running turn absorbs it (stream reflects the correction, no restart), and an idle utterance still starts a fresh turn.
 - [ ] Push `followup-turn-steer`, open PR, merge per delegation.
+
+---
+
+### Task 3 (added 2026-07-03 after user feedback): Interrupt keeps the session - context continuity
+
+**Problem:** Stop and turn-timeout currently terminate the transport and invalidate the session, so the NEXT utterance starts a fresh thread with no memory ("it forgets which app we were talking about"). `thread/resume` cannot fix this (ThreadResumeParams has no dynamicTools, so resumed threads would lose the lorelei.* tools).
+
+**Behavior:**
+- `stopCurrentRun()`: when an active turn + live transport exist, send `turn/interrupt` (threadId, turnId) with a fresh request id and let the read loop finish naturally (the server ends the turn; treat a non-completed turn end as the existing "Stopped." result). The session survives - the next utterance reuses the thread with full context. Fallback to the old terminate+invalidate when there is no active turn/transport or the interrupt send throws.
+- Turn timeout: send `turn/interrupt` first and give the server a 5-second grace window to end the turn; only if the read loop is still stuck after the grace window, terminate + invalidate as today. Timeout result message unchanged.
+- Check docs/appserver-schema/ServerNotification.json for how interrupted turns end (turn/completed status value or a turn/aborted notification) and handle that shape in the read loop.
+
+**Tests (locked names):**
+- `companionManagerStopKeepsSessionForNextTurn` - stop mid-turn via interrupt; next utterance reuses the same transport (factory count 1) and sends turn/start on the SAME threadId.
+- `appServerExecutorTimeoutInterruptsBeforeTerminating` - hanging turn; timeout path sends turn/interrupt; transport that then delivers the turn-end frame -> session survives; a transport that stays silent past the grace window -> terminated + invalidated as today.
