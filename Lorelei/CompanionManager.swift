@@ -401,10 +401,14 @@ final class CompanionManager: ObservableObject {
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .loreleiDismissPanel, object: nil)
 
-            // Cancel any in-progress placeholder response from a previous utterance
-            currentResponseTask?.cancel()
+            // Do NOT cancel currentResponseTask here: pressing the shortcut
+            // mid-turn is exactly how steering starts. Cancelling used to
+            // kill the running turn, which invalidated the app-server
+            // session, so every steer silently landed on a brand-new thread
+            // with no memory of the conversation. Any needed cancellation
+            // happens in routeFinalTranscriptAsNewTurn once we know the
+            // transcript is NOT a steer.
             clearDetectedElementLocation()
-            _ = resolvePendingCodexAppServerApproval(.cancel)
 
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
