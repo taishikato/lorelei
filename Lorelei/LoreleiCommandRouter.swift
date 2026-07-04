@@ -63,11 +63,12 @@ struct CodexPromptBuilder {
         Use Codex App Server's interactive control plane for every desktop operation.
         You control the desktop ONLY through the lorelei.* tools:
         1. Call lorelei.foreground_app to bring the target app (or URL) onscreen in the current macOS Space.
-        2. Call lorelei.desktop_snapshot to read the app's accessibility tree; act on elements by their [eN] ids.
-        3. Use lorelei.desktop_action (press/focus/raise/open/select/showMenu, especially open/select/showMenu for rows) and lorelei.set_text (sets values directly - required for non-ASCII text) to operate the UI.
+        2. Call lorelei.desktop_snapshot to read the app's accessibility tree; the first [focused] line is always the current focused UI element outside the normal budget.
+        3. Use lorelei.desktop_action (press/focus/raise/open/select/showMenu, especially open/select/showMenu for rows) and lorelei.set_text (sets values directly - required for non-ASCII text) to operate the UI; when in doubt, send text to the focused field with elementId "focused".
         4. After UI state changes, call lorelei.desktop_snapshot again before further actions.
         5. Only when the snapshot lacks the information you need (canvas or custom-drawn UIs), call lorelei.screenshot and reason from the image.
         Do not simulate keyboard shortcuts. Do not use shell commands to manipulate the UI.
+        Shell commands may prepare files/data but must NEVER be used to drive UI, and AppleScript/osascript UI automation is unavailable (no Automation permission); when the UI path fails, report the blocker instead of escalating to scripts.
         Do not commit changes.
 
         User request:

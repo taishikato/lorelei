@@ -678,8 +678,11 @@ struct LoreleiTests {
         #expect(prompt.contains("lorelei.desktop_action"))
         #expect(prompt.contains("open/select/showMenu"))
         #expect(prompt.contains("lorelei.set_text"))
+        #expect(prompt.contains("elementId \"focused\""))
         #expect(prompt.contains("lorelei.screenshot"))
         #expect(prompt.contains("Do not simulate keyboard shortcuts."))
+        #expect(prompt.contains("Shell commands may prepare files/data but must NEVER be used to drive UI"))
+        #expect(prompt.contains("AppleScript/osascript UI automation is unavailable"))
         #expect(prompt.contains("Do not commit changes."))
         #expect(!prompt.contains("non-interactive codex exec"))
         #expect(prompt.contains("open TextEdit and type hello"))
@@ -1526,6 +1529,9 @@ struct LoreleiTests {
         #expect(snapshotProperties["app"] != nil)
         #expect(actionSchema["required"] == .array([.string("elementId"), .string("action")]))
         #expect(setTextSchema["required"] == .array([.string("elementId"), .string("text")]))
+        #expect(snapshotSpec.description.contains("[focused]"))
+        #expect(actionSpec.description.contains("\"focused\""))
+        #expect(setTextSpec.description.contains("\"focused\""))
         #expect(screenshotSpec.description.contains("Fallback"))
         #expect(screenshotSpec.description.contains("lorelei.desktop_snapshot"))
 
@@ -1537,7 +1543,16 @@ struct LoreleiTests {
             return
         }
 
-        #expect(actionProperties["elementId"] != nil)
+        guard case .object(let actionElementIDProperty) = actionProperties["elementId"],
+              case .object(let setTextElementIDProperty) = setTextProperties["elementId"],
+              case .string(let actionElementIDDescription) = actionElementIDProperty["description"],
+              case .string(let setTextElementIDDescription) = setTextElementIDProperty["description"] else {
+            Issue.record("Expected elementId schemas.")
+            return
+        }
+
+        #expect(actionElementIDDescription.contains("\"focused\""))
+        #expect(setTextElementIDDescription.contains("\"focused\""))
         #expect(actionEnum == [
             .string("press"),
             .string("focus"),
@@ -1546,7 +1561,6 @@ struct LoreleiTests {
             .string("select"),
             .string("showMenu")
         ])
-        #expect(setTextProperties["elementId"] != nil)
         #expect(setTextProperties["text"] != nil)
         #expect(modeEnum == [.string("replace"), .string("insert")])
     }
@@ -1589,6 +1603,22 @@ struct LoreleiTests {
         #expect(executor.performCalls.count == 1)
         #expect(executor.performCalls.first?.0 == .showMenu)
         #expect(executor.performCalls.first?.1 == "e2")
+
+        let focusedResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "desktop_action",
+                arguments: .object([
+                    "elementId": .string("focused"),
+                    "action": .string("focus")
+                ])
+            ),
+            executor: executor
+        )
+
+        #expect(focusedResult.success)
+        #expect(executor.performCalls.count == 2)
+        #expect(executor.performCalls[1].0 == .focus)
+        #expect(executor.performCalls[1].1 == "focused")
     }
 
     @Test func desktopToolSuiteSetTextDefaultsToReplaceMode() async throws {
@@ -1625,6 +1655,23 @@ struct LoreleiTests {
         #expect(executor.setTextCalls[1].0 == " there")
         #expect(executor.setTextCalls[1].1 == "e2")
         #expect(executor.setTextCalls[1].2 == .insert)
+
+        let focusedResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "set_text",
+                arguments: .object([
+                    "elementId": .string("focused"),
+                    "text": .string("Focused body")
+                ])
+            ),
+            executor: executor
+        )
+
+        #expect(focusedResult.success)
+        #expect(executor.setTextCalls.count == 3)
+        #expect(executor.setTextCalls[2].0 == "Focused body")
+        #expect(executor.setTextCalls[2].1 == "focused")
+        #expect(executor.setTextCalls[2].2 == .replace)
     }
 
     @Test func desktopToolSuiteReportsStaleElementAsToolFailure() async throws {
@@ -1977,6 +2024,170 @@ struct LoreleiTests {
         #expect(registry["e1"] == 0)
         #expect(registry["e400"] == 399)
         #expect(registry["e401"] == nil)
+    }
+
+    @Test func axSerializerPrefixesFocusedElementOutsideNormalBudget() throws {
+        let children = (0..<400).map { index in
+            DesktopUINode(
+                role: "AXButton",
+                title: "Button \(index)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                children: []
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: children
+        )
+        let focusedNode = DesktopUINode(
+            role: "AXTextArea",
+            title: nil,
+            value: "Draft body",
+            frame: nil,
+            isEnabled: true,
+            isFocused: true,
+            children: []
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(
+            root,
+            assigningIDsInto: &registry,
+            focusedLine: (node: focusedNode, elementID: "e401", registryIndex: 400)
+        )
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines.first == "[focused] [e401] AXTextArea value=\"Draft body\" focused")
+        #expect(lines[1] == "[e1] AXWindow \"Demo\"")
+        #expect(result.elementCount == 401)
+        #expect(registry["e401"] == 400)
+    }
+
+    @Test func axSerializerKeepsFocusedLineAndTreeLineOnSameElementID() throws {
+        let focusedNode = DesktopUINode(
+            role: "AXTextArea",
+            title: nil,
+            value: "Draft body",
+            frame: nil,
+            isEnabled: true,
+            isFocused: true,
+            children: []
+        )
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [focusedNode]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(
+            root,
+            assigningIDsInto: &registry,
+            focusedLine: (node: focusedNode, elementID: "e2", registryIndex: 1)
+        )
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines == [
+            "[focused] [e2] AXTextArea value=\"Draft body\" focused",
+            "[e1] AXWindow \"Demo\"",
+            "  [e2] AXTextArea value=\"Draft body\" focused"
+        ])
+        #expect(result.elementCount == 2)
+        #expect(registry == ["e1": 0, "e2": 1])
+    }
+
+    @Test func axSerializerBudgetsMenuChildrenAndPreservesWindowContent() throws {
+        let menus = (0..<6).map { menuIndex in
+            DesktopUINode(
+                role: "AXMenuBarItem",
+                title: "Menu \(menuIndex)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                children: [
+                    DesktopUINode(
+                        role: "AXMenu",
+                        title: nil,
+                        value: nil,
+                        frame: nil,
+                        isEnabled: true,
+                        isFocused: false,
+                        children: (0..<30).map { itemIndex in
+                            DesktopUINode(
+                                role: "AXMenuItem",
+                                title: "Item \(menuIndex)-\(itemIndex)",
+                                value: nil,
+                                frame: nil,
+                                isEnabled: true,
+                                isFocused: false,
+                                children: []
+                            )
+                        }
+                    )
+                ]
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXApplication",
+            title: "Notes",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXMenuBar",
+                    title: nil,
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: menus
+                ),
+                DesktopUINode(
+                    role: "AXWindow",
+                    title: "Notes",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: true,
+                    children: [
+                        DesktopUINode(
+                            role: "AXTextArea",
+                            title: nil,
+                            value: "Window text survives",
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: true,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines.contains { $0.contains("… (+6 more rows)") })
+        #expect(result.text.contains("AXWindow \"Notes\" focused"))
+        #expect(result.text.contains("AXTextArea value=\"Window text survives\" focused"))
+        #expect(!result.text.contains("Item 0-24"))
+        #expect(result.elementCount < 170)
     }
 
     @Test func axExecutorRejectsActionsWithUnknownElementID() async throws {

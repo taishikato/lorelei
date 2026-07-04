@@ -55,6 +55,7 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
     private static let maxAcceptedElements = 400
     private static let maxDepth = 12
     private static let maxLargeContainerChildren = 24
+    private static let maxMenuSubtreeElements = 120
     private static let axOpenAction = "AXOpen"
     private static let structuralRoles: Set<String> = [
         "AXGroup",
@@ -64,6 +65,7 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
     ]
     private static let largeCollectionRoles: Set<String> = [
         "AXList",
+        "AXMenu",
         "AXTable",
         "AXOutline",
         "AXScrollArea"
@@ -79,21 +81,36 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
 
     static func serialize(
         _ root: DesktopUINode,
-        assigningIDsInto registry: inout [String: Int]
+        assigningIDsInto registry: inout [String: Int],
+        focusedLine: (node: DesktopUINode, elementID: String, registryIndex: Int)? = nil
     ) -> DesktopSnapshotResult {
         var lines: [String] = []
         var acceptedCount = 0
+        var menuAcceptedCount = 0
         var omittedCount = 0
         registry.removeAll()
 
         serializeNode(
             root,
             depth: 0,
+            isInMenuSubtree: false,
             registry: &registry,
             lines: &lines,
             acceptedCount: &acceptedCount,
+            menuAcceptedCount: &menuAcceptedCount,
             omittedCount: &omittedCount
         )
+
+        if let focusedLine {
+            registry[focusedLine.elementID] = focusedLine.registryIndex
+            lines.insert(
+                "[focused] \(line(for: focusedLine.node, elementID: focusedLine.elementID, depth: 0))",
+                at: 0
+            )
+            if Int(focusedLine.elementID.dropFirst()) ?? 0 > acceptedCount {
+                acceptedCount += 1
+            }
+        }
 
         if omittedCount > 0 {
             lines.append("… truncated (\(omittedCount) elements omitted)")
@@ -117,12 +134,43 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
         }
 
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        let traversal = buildNodeAndAcceptedElements(from: appElement, depth: 0)
+        let focusedElement: AXUIElement? = attribute(kAXFocusedUIElementAttribute as CFString, of: appElement)
+        var menuAcceptedCount = 0
+        guard let traversal = buildNodeAndAcceptedElements(
+            from: appElement,
+            depth: 0,
+            isInMenuSubtree: false,
+            menuAcceptedCount: &menuAcceptedCount
+        ) else {
+            return .failure(.captureFailed("Accessibility snapshot could not read the application root."))
+        }
         var newRegistry: [String: Int] = [:]
-        let result = Self.serialize(traversal.node, assigningIDsInto: &newRegistry)
+        var acceptedElements = Array(traversal.acceptedElements.prefix(Self.maxAcceptedElements))
+        let focusedIndex = focusedElement.flatMap { index(of: $0, in: acceptedElements) }
+        let focusedLine: (node: DesktopUINode, elementID: String, registryIndex: Int)?
+        if let focusedElement, let focusedNode = buildSingleNode(from: focusedElement) {
+            if let focusedIndex {
+                focusedLine = (node: focusedNode, elementID: "e\(focusedIndex + 1)", registryIndex: focusedIndex)
+            } else {
+                let focusedRegistryIndex = acceptedElements.count
+                acceptedElements.append(focusedElement)
+                focusedLine = (
+                    node: focusedNode,
+                    elementID: "e\(acceptedElements.count)",
+                    registryIndex: focusedRegistryIndex
+                )
+            }
+        } else {
+            focusedLine = nil
+        }
+        let result = Self.serialize(
+            traversal.node,
+            assigningIDsInto: &newRegistry,
+            focusedLine: focusedLine
+        )
 
         elementRegistry = newRegistry
-        elements = Array(traversal.acceptedElements.prefix(Self.maxAcceptedElements))
+        elements = acceptedElements
 
         return .success(result)
     }
@@ -204,9 +252,11 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
     private static func serializeNode(
         _ node: DesktopUINode,
         depth: Int,
+        isInMenuSubtree: Bool,
         registry: inout [String: Int],
         lines: inout [String],
         acceptedCount: inout Int,
+        menuAcceptedCount: inout Int,
         omittedCount: inout Int
     ) {
         guard depth <= maxDepth else {
@@ -214,10 +264,18 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
             return
         }
 
+        let nodeIsInMenuSubtree = isInMenuSubtree || node.role == "AXMenu"
         if shouldList(node) {
             if acceptedCount >= maxAcceptedElements {
                 omittedCount += countAcceptedNodes(node)
                 return
+            }
+            if nodeIsInMenuSubtree {
+                guard menuAcceptedCount < maxMenuSubtreeElements else {
+                    omittedCount += countAcceptedNodes(node)
+                    return
+                }
+                menuAcceptedCount += 1
             }
 
             acceptedCount += 1
@@ -230,9 +288,11 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
                 serializeNode(
                     child,
                     depth: depth + 1,
+                    isInMenuSubtree: nodeIsInMenuSubtree,
                     registry: &registry,
                     lines: &lines,
                     acceptedCount: &acceptedCount,
+                    menuAcceptedCount: &menuAcceptedCount,
                     omittedCount: &omittedCount
                 )
             }
@@ -246,9 +306,11 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
                 serializeNode(
                     child,
                     depth: depth,
+                    isInMenuSubtree: nodeIsInMenuSubtree,
                     registry: &registry,
                     lines: &lines,
                     acceptedCount: &acceptedCount,
+                    menuAcceptedCount: &menuAcceptedCount,
                     omittedCount: &omittedCount
                 )
             }
@@ -422,6 +484,9 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
     }
 
     private func element(for elementID: String) -> AXUIElement? {
+        if elementID == "focused" {
+            return currentFocusedElement()
+        }
         guard let index = elementRegistry[elementID],
               elements.indices.contains(index) else {
             return nil
@@ -431,16 +496,74 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
 
     private func buildNodeAndAcceptedElements(
         from element: AXUIElement,
-        depth: Int
-    ) -> (node: DesktopUINode, acceptedElements: [AXUIElement]) {
+        depth: Int,
+        isInMenuSubtree: Bool,
+        menuAcceptedCount: inout Int
+    ) -> (node: DesktopUINode, acceptedElements: [AXUIElement])? {
         let role = stringAttribute(kAXRoleAttribute as CFString, of: element) ?? "AXUnknown"
-        let childElements = depth >= Self.maxDepth ? [] : budgetedAXChildren(of: element, role: role)
-        let traversedChildren = childElements.map {
-            buildNodeAndAcceptedElements(from: $0, depth: depth + 1)
+        let nodeIsInMenuSubtree = isInMenuSubtree || role == "AXMenu"
+        let currentNode = buildSingleNode(from: element, role: role) ?? DesktopUINode(
+            role: role,
+            title: nil,
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: []
+        )
+        let currentNodeIsListed = Self.shouldList(currentNode)
+        if nodeIsInMenuSubtree, currentNodeIsListed {
+            if menuAcceptedCount >= Self.maxMenuSubtreeElements {
+                return nil
+            }
+            menuAcceptedCount += 1
         }
-        let omittedChildCount = omittedAXChildCount(of: element, role: role, includedCount: childElements.count)
+
+        let childElements = depth >= Self.maxDepth ? [] : budgetedAXChildren(of: element, role: role)
+        var skippedChildCount = 0
+        let traversedChildren = childElements.compactMap { childElement in
+            let childTraversal = buildNodeAndAcceptedElements(
+                from: childElement,
+                depth: depth + 1,
+                isInMenuSubtree: nodeIsInMenuSubtree,
+                menuAcceptedCount: &menuAcceptedCount
+            )
+            if childTraversal == nil {
+                skippedChildCount += 1
+            }
+            return childTraversal
+        }
+        let omittedChildCount = omittedAXChildCount(
+            of: element,
+            role: role,
+            includedCount: childElements.count
+        ) + skippedChildCount
 
         let node = DesktopUINode(
+            role: role,
+            title: currentNode.title,
+            roleDescription: currentNode.roleDescription,
+            value: currentNode.value,
+            hint: currentNode.hint,
+            frame: currentNode.frame,
+            isEnabled: currentNode.isEnabled,
+            isFocused: currentNode.isFocused,
+            supportedActions: currentNode.supportedActions,
+            omittedChildCount: omittedChildCount,
+            children: traversedChildren.map(\.node)
+        )
+
+        var acceptedElements: [AXUIElement] = []
+        if currentNodeIsListed {
+            acceptedElements.append(element)
+        }
+        acceptedElements.append(contentsOf: traversedChildren.flatMap(\.acceptedElements))
+        return (node, acceptedElements)
+    }
+
+    private func buildSingleNode(from element: AXUIElement, role providedRole: String? = nil) -> DesktopUINode? {
+        let role = providedRole ?? stringAttribute(kAXRoleAttribute as CFString, of: element) ?? "AXUnknown"
+        return DesktopUINode(
             role: role,
             title: firstTextAttribute([kAXTitleAttribute as CFString, "AXLabel" as CFString], of: element),
             roleDescription: stringAttribute(kAXRoleDescriptionAttribute as CFString, of: element),
@@ -450,16 +573,8 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
             isEnabled: boolAttribute(kAXEnabledAttribute as CFString, of: element) ?? true,
             isFocused: boolAttribute(kAXFocusedAttribute as CFString, of: element) ?? false,
             supportedActions: supportedActions(of: element),
-            omittedChildCount: omittedChildCount,
-            children: traversedChildren.map(\.node)
+            children: []
         )
-
-        var acceptedElements: [AXUIElement] = []
-        if Self.shouldList(node) {
-            acceptedElements.append(element)
-        }
-        acceptedElements.append(contentsOf: traversedChildren.flatMap(\.acceptedElements))
-        return (node, acceptedElements)
     }
 
     private func budgetedAXChildren(of element: AXUIElement, role: String) -> [AXUIElement] {
@@ -532,6 +647,17 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
             return []
         }
         return children
+    }
+
+    private func currentFocusedElement() -> AXUIElement? {
+        let systemWideElement = AXUIElementCreateSystemWide()
+        return attribute(kAXFocusedUIElementAttribute as CFString, of: systemWideElement)
+    }
+
+    private func index(of target: AXUIElement, in candidates: [AXUIElement]) -> Int? {
+        candidates.firstIndex { candidate in
+            CFEqual(candidate, target)
+        }
     }
 
     private func firstTextAttribute(_ names: [CFString], of element: AXUIElement) -> String? {
