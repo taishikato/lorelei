@@ -26,6 +26,9 @@ private class KeyablePanel: NSPanel {
 
 @MainActor
 final class MenuBarPanelManager: NSObject {
+    /// Notified when the settings dropdown appears/disappears (used to
+    /// conceal the floating toolbar so the glass surfaces do not overlap).
+    var onPanelVisibilityChanged: ((Bool) -> Void)?
     private var statusItem: NSStatusItem?
     private var panel: NSPanel?
     private var clickOutsideMonitor: Any?
@@ -137,11 +140,13 @@ final class MenuBarPanelManager: NSObject {
         panel?.makeKeyAndOrderFront(nil)
         panel?.orderFrontRegardless()
         installClickOutsideMonitor()
+        onPanelVisibilityChanged?(true)
     }
 
     private func hidePanel() {
         panel?.orderOut(nil)
         removeClickOutsideMonitor()
+        onPanelVisibilityChanged?(false)
     }
 
     private func createPanel() {

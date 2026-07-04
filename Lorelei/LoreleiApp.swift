@@ -54,6 +54,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         toolbarController = LoreleiToolbarController(companionManager: companionManager)
+        menuBarPanelManager?.onPanelVisibilityChanged = { [weak self] visible in
+            self?.toolbarController?.setConcealed(visible)
+        }
         companionManager.start()
 #if DEBUG
         NSAppleEventManager.shared().setEventHandler(
