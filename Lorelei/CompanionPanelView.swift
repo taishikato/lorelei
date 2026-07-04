@@ -202,14 +202,14 @@ struct CompanionPanelView: View {
             NSApp.terminate(nil)
         } label: {
             HStack(spacing: 10) {
+                Spacer()
+
                 Image(systemName: "power")
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 18)
 
                 Text("Quit")
                     .font(.system(size: 12, weight: .medium))
-
-                Spacer()
             }
             .foregroundStyle(.secondary)
             .contentShape(Rectangle())
