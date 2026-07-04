@@ -445,6 +445,31 @@ struct LoreleiTests {
         #expect(!manager.isOverlayVisible)
     }
 
+    @Test func companionManagerStartNewChatSessionClearsConversationAndReturnsToIdle() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerNewChatSessionTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerNewChatSessionTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store
+        )
+
+        manager.seedConversationEntryForTesting(role: .user, text: "Hello")
+        manager.seedConversationEntryForTesting(role: .assistant, text: "Hi")
+        manager.simulateShortcutTransitionForTesting(.pressed)
+
+        #expect(!manager.conversationLog.isEmpty)
+        #expect(manager.runStatus == .listening)
+
+        manager.startNewChatSession()
+
+        #expect(manager.conversationLog.isEmpty)
+        #expect(manager.runStatus == .idle)
+        #expect(manager.streamText.isEmpty)
+        #expect(manager.currentActivity == nil)
+        #expect(manager.latestResultSummary == nil)
+    }
+
     @Test func companionManagerHidesCursorOverlayWhileDesktopActionRunsThroughAppServer() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionVisualClearanceTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionVisualClearanceTests")

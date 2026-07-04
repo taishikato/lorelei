@@ -32,6 +32,7 @@ enum LoreleiAnalyticsEvent {
     case approvalResolved(accepted: Bool)
     case settingsPanelOpened
     case toolbarExpanded
+    case newChatStarted
 
     var name: String {
         switch self {
@@ -46,13 +47,15 @@ enum LoreleiAnalyticsEvent {
         case .approvalResolved: "approval_resolved"
         case .settingsPanelOpened: "settings_panel_opened"
         case .toolbarExpanded: "toolbar_expanded"
+        case .newChatStarted: "new_chat_started"
         }
     }
 
     var properties: [String: Any] {
         switch self {
         case .appLaunched, .steerSent, .steerFailed, .runStopped,
-             .approvalRequested, .settingsPanelOpened, .toolbarExpanded:
+             .approvalRequested, .settingsPanelOpened, .toolbarExpanded,
+             .newChatStarted:
             return [:]
         case .dictationCompleted(let transcriptCharacters, let viaSteer):
             return [
