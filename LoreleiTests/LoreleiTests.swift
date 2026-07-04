@@ -10,6 +10,7 @@ import AppKit
 import Combine
 import Foundation
 import CoreGraphics
+import ServiceManagement
 @testable import Lorelei
 
 @MainActor
@@ -558,14 +559,23 @@ struct LoreleiTests {
         #expect(log.text == "two\nthree\nfour")
     }
 
-    @Test func loginItemRegistrationIsOptInByDefault() async throws {
-        let defaults = UserDefaults(suiteName: "LoginItemRegistrationPolicyTests")!
-        defaults.removePersistentDomain(forName: "LoginItemRegistrationPolicyTests")
-
-        #expect(!LoginItemRegistrationPolicy.shouldRegisterOnLaunch(defaults: defaults))
-
-        defaults.set(true, forKey: LoginItemRegistrationPolicy.enabledDefaultsKey)
-        #expect(LoginItemRegistrationPolicy.shouldRegisterOnLaunch(defaults: defaults))
+    @Test func loginItemRowPresentationReflectsServiceStatus() async throws {
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .enabled)
+                == LoginItemRowPresentation(isOn: true, statusText: "Enabled")
+        )
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .notRegistered)
+                == LoginItemRowPresentation(isOn: false, statusText: "Off")
+        )
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .requiresApproval)
+                == LoginItemRowPresentation(isOn: false, statusText: "Needs approval in System Settings")
+        )
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .notFound)
+                == LoginItemRowPresentation(isOn: false, statusText: "Unavailable")
+        )
     }
 
     @Test func routerMapsShowGitStatusToStatus() async throws {
@@ -831,6 +841,39 @@ struct LoreleiTests {
 
         #expect(nilAnchorFrame == CGRect(x: 840, y: 410, width: 320, height: 380))
         #expect(offscreenAnchorFrame == nilAnchorFrame)
+    }
+
+    @Test func settingsPanelFrameAlignsRightEdgeBelowMenuBarAnchor() async throws {
+        let screenFrame = CGRect(x: 0, y: 0, width: 2000, height: 1200)
+        let panelSize = CGSize(width: 340, height: 520)
+
+        let frame = MenuBarPanelManager.settingsPanelFrame(
+            anchorFrame: CGRect(x: 1800, y: 1176, width: 24, height: 24),
+            screenFrame: screenFrame,
+            panelSize: panelSize,
+            gapBelowMenuBar: 4
+        )
+
+        #expect(frame == CGRect(x: 1484, y: 652, width: 340, height: 520))
+    }
+
+    @Test func settingsPanelFrameClampsToScreenEdges() async throws {
+        let screenFrame = CGRect(x: 100, y: 0, width: 1000, height: 800)
+        let panelSize = CGSize(width: 340, height: 520)
+
+        let rightClampedFrame = MenuBarPanelManager.settingsPanelFrame(
+            anchorFrame: CGRect(x: 1088, y: 776, width: 24, height: 24),
+            screenFrame: screenFrame,
+            panelSize: panelSize
+        )
+        let leftClampedFrame = MenuBarPanelManager.settingsPanelFrame(
+            anchorFrame: CGRect(x: 104, y: 776, width: 24, height: 24),
+            screenFrame: screenFrame,
+            panelSize: panelSize
+        )
+
+        #expect(rightClampedFrame == CGRect(x: 760, y: 252, width: 340, height: 520))
+        #expect(leftClampedFrame == CGRect(x: 100, y: 252, width: 340, height: 520))
     }
 
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {

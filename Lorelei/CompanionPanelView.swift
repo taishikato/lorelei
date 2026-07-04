@@ -7,72 +7,147 @@
 
 import AppKit
 import AVFoundation
+import Combine
+import ServiceManagement
 import SwiftUI
 
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject private var workspaceStore: WorkspaceSettingsStore
+    @StateObject private var loginItemController: LoginItemSettingsController
 
     @MainActor
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
         _workspaceStore = ObservedObject(wrappedValue: companionManager.workspaceSettingsStore)
+        _loginItemController = StateObject(wrappedValue: LoginItemSettingsController())
     }
 
     @MainActor
     init(companionManager: CompanionManager, workspaceStore: WorkspaceSettingsStore) {
         self.companionManager = companionManager
         _workspaceStore = ObservedObject(wrappedValue: workspaceStore)
+        _loginItemController = StateObject(wrappedValue: LoginItemSettingsController())
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 16) {
-                workspaceSection
-                permissionsSection
-                debugDisclosure
+        GlassEffectContainer {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
+                    generalSection
+                    workspaceSection
+                    voiceSection
+                    debugDisclosure
+                }
+                .padding(16)
+
+                Divider()
+                    .background(.white.opacity(0.12))
+
+                footer
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
             }
-            .padding(16)
-
-            Divider()
-                .background(DS.Colors.borderSubtle)
-
-            footer
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+            .frame(width: 340)
+            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
+            .shadow(color: Color.black.opacity(0.28), radius: 18, x: 0, y: 10)
         }
-        .frame(width: 320)
-        .background(panelBackground)
+        .onAppear {
+            loginItemController.refresh()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            LoreleiFaceView(expression: .neutral, audioLevel: 0)
+                .scaleEffect(0.56)
+                .frame(width: 34, height: 20)
+
+            Text("Lorelei")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Text(appVersion)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(.white.opacity(0.10))
+                )
+
+            Spacer()
+        }
+    }
+
+    private var generalSection: some View {
+        section("General") {
+            HStack(spacing: 10) {
+                Image(systemName: "powerplug")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Launch at Login")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Text(loginItemController.presentation.statusText)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { loginItemController.presentation.isOn },
+                        set: { loginItemController.setEnabled($0) }
+                    )
+                )
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+            .padding(10)
+            .background(rowBackground)
+        }
     }
 
     private var workspaceSection: some View {
         section("Workspace") {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(workspaceStatusText)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(workspaceStatusColor)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                            .fill(DS.Colors.surface1)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                            .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
-                    )
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+
+                    Text(workspaceStatusText)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(workspaceStatusColor)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(10)
+                .background(rowBackground)
 
                 HStack(spacing: 8) {
-                    Button("Choose") {
+                    Button {
                         chooseWorkspace()
+                    } label: {
+                        Label("Choose", systemImage: "folder.badge.plus")
                     }
                     .buttonStyle(PanelButtonStyle(kind: .primary))
                     .pointerCursor()
 
-                    Button("Open") {
+                    Button {
                         openWorkspaceInFinder()
+                    } label: {
+                        Label("Open", systemImage: "arrow.up.forward.app")
                     }
                     .buttonStyle(PanelButtonStyle(kind: .secondary))
                     .disabled(!workspaceStore.canOpenSelectedWorkspace)
@@ -82,9 +157,9 @@ struct CompanionPanelView: View {
         }
     }
 
-    private var permissionsSection: some View {
-        section("Permissions") {
-            VStack(spacing: 2) {
+    private var voiceSection: some View {
+        section("Voice") {
+            VStack(spacing: 6) {
                 microphonePermissionRow
                 accessibilityPermissionRow
                 screenRecordingPermissionRow
@@ -99,10 +174,12 @@ struct CompanionPanelView: View {
     private var debugDisclosure: some View {
         DisclosureGroup {
             debugBlock
+                .padding(.top, 8)
         } label: {
-            Text("Debug Log")
+            Text("Debug")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(DS.Colors.textTertiary)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
         }
     }
 
@@ -110,41 +187,39 @@ struct CompanionPanelView: View {
         ScrollView {
             Text(companionManager.debugLogText)
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(DS.Colors.textSecondary)
+                .foregroundStyle(.secondary)
                 .lineLimit(nil)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(minHeight: 74, maxHeight: 112)
         .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                .fill(DS.Colors.surface1)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                .stroke(DS.Colors.borderSubtle, lineWidth: 0.6)
-        )
+        .background(rowBackground)
     }
 
     private var footer: some View {
-        HStack {
-            Spacer()
+        Button {
+            NSApp.terminate(nil)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "power")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 18)
 
-            Button {
-                NSApp.terminate(nil)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "power")
-                        .font(.system(size: 11, weight: .medium))
-                    Text("Quit")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundColor(DS.Colors.textTertiary)
+                Text("Quit")
+                    .font(.system(size: 12, weight: .medium))
+
+                Spacer()
+
+                Text("⌘Q")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-            .pointerCursor()
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .pointerCursor()
     }
 
     private var microphonePermissionRow: some View {
@@ -199,7 +274,7 @@ struct CompanionPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased())
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(DS.Colors.textTertiary)
+                .foregroundStyle(.secondary)
 
             content()
         }
@@ -211,22 +286,23 @@ struct CompanionPanelView: View {
         isGranted: Bool,
         grantAction: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: iconName)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(isGranted ? DS.Colors.textTertiary : DS.Colors.warning)
-                .frame(width: 16)
+                .foregroundStyle(isGranted ? .secondary : DS.Colors.warning)
+                .frame(width: 18)
 
             Text(title)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(DS.Colors.textSecondary)
+                .foregroundStyle(.primary)
 
             Spacer()
 
             if isGranted {
                 Text("Granted")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(DS.Colors.success)
+                    .foregroundStyle(DS.Colors.success)
+                    .lineLimit(2)
             } else {
                 Button("Grant") {
                     grantAction()
@@ -235,7 +311,8 @@ struct CompanionPanelView: View {
                 .pointerCursor()
             }
         }
-        .padding(.vertical, 5)
+        .padding(10)
+        .background(rowBackground)
     }
 
     private func chooseWorkspace() {
@@ -279,13 +356,69 @@ struct CompanionPanelView: View {
         }
     }
 
-    private var panelBackground: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(DS.Colors.background)
-            .shadow(color: Color.black.opacity(0.5), radius: 20, x: 0, y: 10)
-            .shadow(color: Color.black.opacity(0.3), radius: 4, x: 0, y: 2)
+    private var appVersion: String {
+        "v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0")"
     }
 
+    private var rowBackground: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(.black.opacity(0.12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(.white.opacity(0.10), lineWidth: 0.7)
+            )
+    }
+
+}
+
+struct LoginItemRowPresentation: Equatable {
+    let isOn: Bool
+    let statusText: String
+}
+
+@MainActor
+final class LoginItemSettingsController: ObservableObject {
+    @Published private(set) var presentation: LoginItemRowPresentation
+
+    private let service: SMAppService
+
+    init(service: SMAppService = .mainApp) {
+        self.service = service
+        presentation = Self.rowPresentation(for: service.status)
+    }
+
+    func refresh() {
+        presentation = Self.rowPresentation(for: service.status)
+    }
+
+    func setEnabled(_ isEnabled: Bool) {
+        do {
+            if isEnabled {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+        } catch {
+            print("⚠️ Lorelei: Failed to update login item: \(error)")
+        }
+
+        refresh()
+    }
+
+    static func rowPresentation(for status: SMAppService.Status) -> LoginItemRowPresentation {
+        switch status {
+        case .enabled:
+            return LoginItemRowPresentation(isOn: true, statusText: "Enabled")
+        case .requiresApproval:
+            return LoginItemRowPresentation(isOn: false, statusText: "Needs approval in System Settings")
+        case .notRegistered:
+            return LoginItemRowPresentation(isOn: false, statusText: "Off")
+        case .notFound:
+            return LoginItemRowPresentation(isOn: false, statusText: "Unavailable")
+        @unknown default:
+            return LoginItemRowPresentation(isOn: false, statusText: "Unavailable")
+        }
+    }
 }
 
 private struct PanelButtonStyle: ButtonStyle {

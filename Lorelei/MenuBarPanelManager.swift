@@ -32,8 +32,8 @@ final class MenuBarPanelManager: NSObject {
     private var dismissPanelObserver: NSObjectProtocol?
 
     private let companionManager: CompanionManager
-    private let panelWidth: CGFloat = 320
-    private let panelHeight: CGFloat = 380
+    private let panelWidth: CGFloat = 340
+    private let panelHeight: CGFloat = 560
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
@@ -73,39 +73,38 @@ final class MenuBarPanelManager: NSObject {
         button.target = self
     }
 
-    /// Draws the Lorelei cursor triangle as a menu bar icon. Uses the same shape
-    /// and rotation as the in-app cursor so the menu bar icon matches.
+    /// Draws the Lorelei face as a template menu bar icon so it adapts to the
+    /// current menu bar appearance.
     private func makeLoreleiMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
         let image = NSImage(size: NSSize(width: iconSize, height: iconSize))
         image.lockFocus()
 
-        let triangleSize = iconSize * 0.7
-        let cx = iconSize * 0.50
-        let cy = iconSize * 0.50
-        let height = triangleSize * sqrt(3.0) / 2.0
-
-        let top = CGPoint(x: cx, y: cy + height / 1.5)
-        let bottomLeft = CGPoint(x: cx - triangleSize / 2, y: cy - height / 3)
-        let bottomRight = CGPoint(x: cx + triangleSize / 2, y: cy - height / 3)
-
-        let angle = 35.0 * .pi / 180.0
-        func rotate(_ point: CGPoint) -> CGPoint {
-            let dx = point.x - cx, dy = point.y - cy
-            let cosA = CGFloat(cos(angle)), sinA = CGFloat(sin(angle))
-            return CGPoint(x: cx + cosA * dx - sinA * dy, y: cy + sinA * dx + cosA * dy)
-        }
-
-        let path = NSBezierPath()
-        path.move(to: rotate(top))
-        path.line(to: rotate(bottomLeft))
-        path.line(to: rotate(bottomRight))
-        path.close()
-
         NSColor.black.setFill()
-        path.fill()
+        NSColor.black.setStroke()
+
+        let faceRect = NSRect(x: 2.25, y: 3.4, width: 13.5, height: 11.2)
+        let outline = NSBezierPath(roundedRect: faceRect, xRadius: 5.2, yRadius: 5.2)
+        outline.lineWidth = 1.6
+        outline.stroke()
+
+        let eyeSize: CGFloat = 2.2
+        NSBezierPath(ovalIn: NSRect(x: 5.0, y: 8.3, width: eyeSize, height: eyeSize)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 10.8, y: 8.3, width: eyeSize, height: eyeSize)).fill()
+
+        let mouth = NSBezierPath()
+        mouth.move(to: CGPoint(x: 6.4, y: 6.5))
+        mouth.curve(
+            to: CGPoint(x: 11.6, y: 6.5),
+            controlPoint1: CGPoint(x: 7.6, y: 5.7),
+            controlPoint2: CGPoint(x: 10.4, y: 5.7)
+        )
+        mouth.lineWidth = 1.25
+        mouth.lineCapStyle = .round
+        mouth.stroke()
 
         image.unlockFocus()
+        image.isTemplate = true
         return image
     }
 
@@ -165,7 +164,7 @@ final class MenuBarPanelManager: NSObject {
         menuBarPanel.level = .floating
         menuBarPanel.isOpaque = false
         menuBarPanel.backgroundColor = .clear
-        menuBarPanel.hasShadow = false
+        menuBarPanel.hasShadow = true
         menuBarPanel.hidesOnDeactivate = false
         menuBarPanel.isExcludedFromWindowsMenu = true
         menuBarPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -214,8 +213,13 @@ final class MenuBarPanelManager: NSObject {
             )
         }
 
+        let proposedX = anchorFrame.maxX - panelSize.width
+        let minX = screenFrame.minX
+        let maxX = max(screenFrame.maxX - panelSize.width, minX)
+        let clampedX = min(max(proposedX, minX), maxX)
+
         return CGRect(
-            x: anchorFrame.midX - (panelSize.width / 2),
+            x: clampedX,
             y: anchorFrame.minY - panelSize.height - gapBelowMenuBar,
             width: panelSize.width,
             height: panelSize.height

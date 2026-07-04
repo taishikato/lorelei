@@ -8,7 +8,6 @@
 //
 
 import AppKit
-import ServiceManagement
 import SwiftUI
 
 enum LoreleiDebugURLHandler {
@@ -36,14 +35,6 @@ struct LoreleiApp: App {
         Settings {
             EmptyView()
         }
-    }
-}
-
-enum LoginItemRegistrationPolicy {
-    static let enabledDefaultsKey = "registerAsLoginItemOnLaunch"
-
-    static func shouldRegisterOnLaunch(defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: enabledDefaultsKey)
     }
 }
 
@@ -77,9 +68,6 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         if !companionManager.allPermissionsGranted {
             menuBarPanelManager?.showPanelOnLaunch()
         }
-        if LoginItemRegistrationPolicy.shouldRegisterOnLaunch() {
-            registerAsLoginItemIfNeeded()
-        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -112,20 +100,5 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         companionManager.handleDebugPrompt(prompt)
     }
 #endif
-
-    /// Registers the app as a login item so it launches automatically on
-    /// startup. Uses SMAppService which shows the app in System Settings >
-    /// General > Login Items, letting the user toggle it off if they want.
-    private func registerAsLoginItemIfNeeded() {
-        let loginItemService = SMAppService.mainApp
-        if loginItemService.status != .enabled {
-            do {
-                try loginItemService.register()
-                print("🎯 Lorelei: Registered as login item")
-            } catch {
-                print("⚠️ Lorelei: Failed to register as login item: \(error)")
-            }
-        }
-    }
 
 }
