@@ -164,16 +164,22 @@ struct LoreleiToolbarView: View {
 
     private var conversationArea: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(companionManager.conversationLog) { entry in
-                        conversationRow(entry)
-                            .id(entry.id)
+            Group {
+                if companionManager.conversationLog.isEmpty {
+                    conversationEmptyState
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(companionManager.conversationLog) { entry in
+                                conversationRow(entry)
+                                    .id(entry.id)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -190,6 +196,46 @@ struct LoreleiToolbarView: View {
                 }
             }
         }
+    }
+
+    private var conversationEmptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "waveform")
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 6) {
+                HStack(spacing: 5) {
+                    Text("Hold")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+
+                    ForEach(BuddyPushToTalkShortcut.currentShortcutOption.keyCapsuleLabels, id: \.self) { keyLabel in
+                        Text(keyLabel)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(.white.opacity(0.14))
+                            )
+                    }
+
+                    Text("and speak")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+                }
+
+                Text("Release to send. Hold again while Lorelei is working to steer the task.")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
     }
 
     @ViewBuilder
