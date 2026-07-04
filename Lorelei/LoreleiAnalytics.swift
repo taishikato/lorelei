@@ -16,7 +16,7 @@ import PostHog
 enum LoreleiAnalyticsConfiguration {
     /// PostHog project API key (phc_...). Client-side keys are public by
     /// design. Empty disables analytics entirely.
-    static let apiKey = ""
+    static let apiKey = "phc_f2SrTDcAw7HO7Nk1rVSct7Zk0ox7cQttfONrhsfAzHU"
     static let host = "https://us.i.posthog.com"
 }
 
@@ -93,6 +93,9 @@ enum LoreleiAnalytics {
             host: LoreleiAnalyticsConfiguration.host
         )
         config.captureApplicationLifecycleEvents = false
+        // Lorelei emits a handful of events per session, so flush each one
+        // immediately instead of waiting for the SDK's default batch of 20.
+        config.flushAt = 1
         PostHogSDK.shared.setup(config)
     }
 
