@@ -529,6 +529,11 @@ final class CompanionManager: ObservableObject {
                         transport: liveCodexAppServerTransport
                     )
                     appendConversationEntry(role: .user, text: "↪ \(transcript)")
+                    // Close the streaming assistant entry so the reply to
+                    // the steer opens a NEW entry below it - otherwise all
+                    // deltas keep appending to the pre-steer bubble and the
+                    // steered line visually sinks to the bottom of the log.
+                    currentAssistantConversationEntryID = nil
                     recordDebugEvent("Steered: \(Self.conciseDebugLine(transcript))")
                 } catch {
                     outstandingSteerTranscripts.removeValue(forKey: requestID)
@@ -869,7 +874,16 @@ final class CompanionManager: ObservableObject {
 
     private func finishRun(with result: WorkspaceCommandResult) {
         updateLatestResultSummary(result.summary)
-        updateAssistantConversationEntry(text: result.summary)
+        // The final summary is the whole turn's streamed text. When the log
+        // was split by a steer, rewriting the (post-steer) entry with the
+        // full turn text would duplicate everything above the split - if
+        // the streamed deltas already cover the summary, leave the log as
+        // rendered and only write summaries that add information (failures,
+        // tool-only turns without deltas).
+        if streamText.trimmingCharacters(in: .whitespacesAndNewlines)
+            != result.summary.trimmingCharacters(in: .whitespacesAndNewlines) {
+            updateAssistantConversationEntry(text: result.summary)
+        }
         let succeeded = result.status == .succeeded
         finishRunStatus(success: succeeded)
         audioFeedback.play(succeeded ? .runSucceeded : .runFailed, spokenSummary: result.summary)
