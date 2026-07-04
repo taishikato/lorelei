@@ -17,6 +17,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
 
     private var globalEventTap: CFMachPort?
     private var globalEventTapRunLoopSource: CFRunLoopSource?
+    private var releaseWatchdogTimer: Timer?
     /// Mutated exclusively from the CGEvent tap callback, which runs on
     /// `CFRunLoopGetMain()` and therefore always executes on the main thread.
     /// Published so the overlay can hide immediately on key release without
@@ -85,6 +86,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
 
     func stop() {
         isShortcutCurrentlyPressed = false
+        stopReleaseWatchdog()
 
         if let globalEventTapRunLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), globalEventTapRunLoopSource, .commonModes)
@@ -102,9 +104,13 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         event: CGEvent
     ) -> Unmanaged<CGEvent>? {
         if eventType == .tapDisabledByTimeout || eventType == .tapDisabledByUserInput {
+            LoreleiDiagLog.log("shortcut: event tap disabled (\(eventType.rawValue)), re-enabling")
             if let globalEventTap {
                 CGEvent.tapEnable(tap: globalEventTap, enable: true)
             }
+            // Any key-up that happened while the tap was disabled is gone;
+            // resync immediately so a released shortcut doesn't stay stuck.
+            synthesizeReleaseIfShortcutNoLongerHeld()
             return Unmanaged.passUnretained(event)
         }
 
@@ -120,13 +126,53 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         case .none:
             break
         case .pressed:
+            LoreleiDiagLog.log("shortcut: pressed")
             isShortcutCurrentlyPressed = true
             shortcutTransitionPublisher.send(.pressed)
+            startReleaseWatchdog()
         case .released:
+            LoreleiDiagLog.log("shortcut: released")
             isShortcutCurrentlyPressed = false
             shortcutTransitionPublisher.send(.released)
+            stopReleaseWatchdog()
         }
 
         return Unmanaged.passUnretained(event)
+    }
+
+    /// macOS disables the event tap when the main thread stalls past the
+    /// tap timeout (model load, audio engine startup). A key-up delivered
+    /// in that window is lost forever, which used to leave dictation
+    /// listening indefinitely. While the shortcut is held, poll the live
+    /// modifier state and synthesize the release once the keys are up.
+    private func startReleaseWatchdog() {
+        releaseWatchdogTimer?.invalidate()
+
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.synthesizeReleaseIfShortcutNoLongerHeld()
+        }
+        releaseWatchdogTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopReleaseWatchdog() {
+        releaseWatchdogTimer?.invalidate()
+        releaseWatchdogTimer = nil
+    }
+
+    private func synthesizeReleaseIfShortcutNoLongerHeld() {
+        guard isShortcutCurrentlyPressed else {
+            stopReleaseWatchdog()
+            return
+        }
+        guard !BuddyPushToTalkShortcut.isShortcutStillHeld(modifierFlags: NSEvent.modifierFlags) else {
+            return
+        }
+
+        print("⚠️ Global push-to-talk: synthesizing missed release (event tap dropped the key-up)")
+        LoreleiDiagLog.log("shortcut: synthesizing missed release")
+        isShortcutCurrentlyPressed = false
+        shortcutTransitionPublisher.send(.released)
+        stopReleaseWatchdog()
     }
 }

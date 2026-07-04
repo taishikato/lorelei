@@ -12,6 +12,7 @@ import SwiftUI
 @MainActor
 final class LoreleiToolbarExpansionState: ObservableObject {
     @Published var isExpanded = false
+    @Published var showsNotchPeek = false
 }
 
 @MainActor
@@ -20,6 +21,8 @@ final class LoreleiToolbarController {
         static let collapsedSize = CGSize(width: 140, height: 40)
         static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
+        static let peekWidth: CGFloat = 104
+        static let peekChinHeight: CGFloat = 22
     }
 
     private let companionManager: CompanionManager
@@ -76,6 +79,27 @@ final class LoreleiToolbarController {
         )
     }
 
+    /// Frame for the collapsed "peeking from behind the notch" window.
+    ///
+    /// The window spans from the very top of the screen (`screenFrame`, not
+    /// `visibleFrame`) so the head shape runs seamlessly into the camera
+    /// housing: everything inside the notch is physically invisible, and only
+    /// the chin below it shows, which sells the peeking illusion. The notch
+    /// is always centered on the screen, so centering on midX is enough.
+    static func collapsedPeekFrame(
+        screenFrame: CGRect,
+        safeAreaTop: CGFloat,
+        width: CGFloat,
+        chinHeight: CGFloat
+    ) -> CGRect {
+        CGRect(
+            x: screenFrame.midX - (width / 2),
+            y: screenFrame.maxY - safeAreaTop - chinHeight,
+            width: width,
+            height: safeAreaTop + chinHeight
+        )
+    }
+
     private func makePanel() -> NSPanel {
         let screen = screenContainingMouse()
         let size = currentSize
@@ -123,15 +147,35 @@ final class LoreleiToolbarController {
     }
 
     private func positionPanel(_ panel: NSPanel, animated: Bool = false) {
-        let size = currentSize
-        let frame = Self.panelFrame(
-            screenFrame: screenContainingMouse().visibleFrame,
-            size: size,
-            topInset: Metrics.topInset
-        )
+        let screen = screenContainingMouse()
+        let usesPeek = !expansionState.isExpanded && screen.safeAreaInsets.top > 0
+        if expansionState.showsNotchPeek != usesPeek {
+            expansionState.showsNotchPeek = usesPeek
+        }
+
+        let frame: CGRect
+        if usesPeek {
+            frame = Self.collapsedPeekFrame(
+                screenFrame: screen.frame,
+                safeAreaTop: screen.safeAreaInsets.top,
+                width: Metrics.peekWidth,
+                chinHeight: Metrics.peekChinHeight
+            )
+        } else {
+            frame = Self.panelFrame(
+                screenFrame: screen.visibleFrame,
+                size: currentSize,
+                topInset: Metrics.topInset
+            )
+        }
+
+        // The peek window extends into the menu bar region; a window shadow
+        // there would outline the part of the head that is supposed to be
+        // hidden behind the notch and break the illusion.
+        panel.hasShadow = !usesPeek
 
         panel.setFrame(frame, display: true, animate: animated)
-        panel.contentView?.frame = NSRect(origin: .zero, size: size)
+        panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
     }
 
     private func screenContainingMouse() -> NSScreen {

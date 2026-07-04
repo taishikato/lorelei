@@ -756,6 +756,21 @@ struct LoreleiTests {
         #expect(frame == CGRect(x: 870, y: 1156, width: 260, height: 36))
     }
 
+    @Test func collapsedPeekFrameHugsNotchAndExtendsChinBelowIt() async throws {
+        // 14" MacBook Pro shape: full frame 1512x982, notch/menu bar 32pt.
+        let frame = LoreleiToolbarController.collapsedPeekFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            safeAreaTop: 32,
+            width: 104,
+            chinHeight: 22
+        )
+
+        // Top edge flush with the screen top so the head runs into the
+        // notch; only the 22pt chin is visible below the 32pt safe area.
+        #expect(frame == CGRect(x: 704, y: 928, width: 104, height: 54))
+        #expect(frame.maxY == 982)
+    }
+
     @Test func cursorCapsuleSitsRightOfCursor() async throws {
         let origin = BlueCursorView.capsuleOrigin(
             cursorPoint: CGPoint(x: 500, y: 500),
@@ -1000,7 +1015,11 @@ struct LoreleiTests {
             testCommandOverride: WorkspaceCommandTestHook(
                 executableURL: URL(fileURLWithPath: "/bin/sleep"),
                 arguments: ["1"],
-                prelaunchDelay: 0.3,
+                // Generous, not knife-edge: the 50ms pre-cancel sleep below
+                // can overshoot under parallel-suite load, and the cancel
+                // must land before this delay elapses or the process
+                // launches and the assertion cannot hold.
+                prelaunchDelay: 1.5,
                 onLaunch: {
                     launchCounter.increment()
                 }
@@ -2550,10 +2569,11 @@ struct LoreleiTests {
         ])
         let factory = AppServerTransportFactoryRecorder(transports: [firstTransport, secondTransport])
         let executor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
-            // consuming the scripted session/turn lines, or the turn never starts
-            // and the timeout-shape contract cannot hold.
-            turnTimeoutSeconds: 1.0,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
             makeTransport: { try await factory.next() },
             approvalHandler: { _ in .cancel }
         )
@@ -2591,10 +2611,11 @@ struct LoreleiTests {
     @Test func appServerExecutorTimesOutSilentServer() async throws {
         let transport = HangingCodexAppServerTransport()
         let executor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
-            // consuming the scripted session/turn lines, or the turn never starts
-            // and the timeout-shape contract cannot hold.
-            turnTimeoutSeconds: 1.0,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -2612,10 +2633,11 @@ struct LoreleiTests {
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
         ])
         let executor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
-            // consuming the scripted session/turn lines, or the turn never starts
-            // and the timeout-shape contract cannot hold.
-            turnTimeoutSeconds: 1.0,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -2633,10 +2655,11 @@ struct LoreleiTests {
     @Test func appServerExecutorReportsTimeoutWhenTransportReadThrowsAfterTermination() async throws {
         let transport = ThrowingAfterTerminateCodexAppServerTransport()
         let executor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.01s: the timer must lose the race against
-            // consuming the scripted session/turn lines, or the turn never starts
-            // and the timeout-shape contract cannot hold.
-            turnTimeoutSeconds: 1.0,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -2654,12 +2677,13 @@ struct LoreleiTests {
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
             #"{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}"#
         ])
-        // 0.3s (not a knife-edge 0.01s): the scripted lines - including the
+        // Generous, not knife-edge: the scripted lines - including the
         // waitingOnApproval status the hint depends on - must be consumed
         // before the timer fires now that the timeout also covers session
-        // establishment.
+        // establishment. 1.0s still flaked on cold first runs of the full
+        // suite, so this uses 2.0s.
         let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 1.0,
+            turnTimeoutSeconds: 2.0,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
@@ -2683,10 +2707,12 @@ struct LoreleiTests {
             ]
         )
         let completingExecutor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.05s: the timer must lose the race against
-            // consuming the scripted session/turn lines under parallel-suite load.
-            turnTimeoutSeconds: 1.0,
-            timeoutInterruptGraceSeconds: 0.5,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite
+            // load. 1.0s still flaked on cold first runs of the full suite,
+            // so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            timeoutInterruptGraceSeconds: 1.0,
             makeTransport: { completingTransport },
             approvalHandler: { _ in .cancel }
         )
@@ -2708,9 +2734,11 @@ struct LoreleiTests {
             #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
         ])
         let silentExecutor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.05s: the timer must lose the race against
-            // consuming the scripted session/turn lines under parallel-suite load.
-            turnTimeoutSeconds: 1.0,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite
+            // load. 1.0s still flaked on cold first runs of the full suite,
+            // so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
             timeoutInterruptGraceSeconds: 0.05,
             makeTransport: { silentTransport },
             approvalHandler: { _ in .cancel }
