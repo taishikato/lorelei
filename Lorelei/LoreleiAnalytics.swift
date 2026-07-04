@@ -73,18 +73,14 @@ enum LoreleiAnalyticsEvent {
 }
 
 enum LoreleiAnalytics {
-    static let optOutDefaultsKey = "LoreleiAnalyticsOptOut"
-
     private static var isConfigured = false
 
-    /// Analytics run only in Release builds with an API key present, and
-    /// respect the user's opt-out toggle in the settings panel.
+    /// Analytics run only in Release builds with an API key present.
     static var isEnabled: Bool {
         #if DEBUG
         return false
         #else
         return !LoreleiAnalyticsConfiguration.apiKey.isEmpty
-            && !UserDefaults.standard.bool(forKey: optOutDefaultsKey)
         #endif
     }
 
@@ -104,12 +100,5 @@ enum LoreleiAnalytics {
         guard isEnabled else { return }
         setUpIfNeeded()
         PostHogSDK.shared.capture(event.name, properties: event.properties)
-    }
-
-    static func setOptOut(_ optedOut: Bool) {
-        UserDefaults.standard.set(optedOut, forKey: optOutDefaultsKey)
-        if optedOut, isConfigured {
-            PostHogSDK.shared.flush()
-        }
     }
 }

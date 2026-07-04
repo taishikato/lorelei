@@ -15,7 +15,6 @@ struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject private var workspaceStore: WorkspaceSettingsStore
     @StateObject private var loginItemController: LoginItemSettingsController
-    @AppStorage(LoreleiAnalytics.optOutDefaultsKey) private var analyticsOptOut = false
 
     @MainActor
     init(companionManager: CompanionManager) {
@@ -107,39 +106,6 @@ struct CompanionPanelView: View {
                     isOn: Binding(
                         get: { loginItemController.presentation.isOn },
                         set: { loginItemController.setEnabled($0) }
-                    )
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
-            }
-            .padding(8)
-            .background(rowBackground)
-
-            HStack(spacing: 10) {
-                Image(systemName: "chart.bar")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Share Usage Analytics")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.primary)
-                    Text("Anonymous events only - never what you say")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Toggle(
-                    "",
-                    isOn: Binding(
-                        get: { !analyticsOptOut },
-                        set: { enabled in
-                            analyticsOptOut = !enabled
-                            LoreleiAnalytics.setOptOut(!enabled)
-                        }
                     )
                 )
                 .labelsHidden()
