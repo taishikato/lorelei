@@ -131,6 +131,7 @@ final class MenuBarPanelManager: NSObject {
     // MARK: - Panel Lifecycle
 
     private func showPanel() {
+        LoreleiAnalytics.capture(.settingsPanelOpened)
         if panel == nil {
             createPanel()
         }
