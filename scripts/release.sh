@@ -72,28 +72,35 @@ ditto -c -k --keepParent "${APP_PATH}" "${ZIP_PATH}"
 notary_output="$(mktemp)"
 trap 'rm -f "${notary_output}"' EXIT
 
-log "Submitting archive to Apple notary service"
-set +e
-xcrun notarytool submit "${ZIP_PATH}" \
-  --keychain-profile "${NOTARY_PROFILE}" \
-  --wait \
-  --output-format plist >"${notary_output}"
-submit_status=$?
-set -e
+notarize_and_wait() {
+  local artifact_path="$1"
 
-submission_id="$(plist_value id "${notary_output}")"
-notary_status="$(plist_value status "${notary_output}")"
+  log "Submitting $(basename "${artifact_path}") to Apple notary service"
+  set +e
+  xcrun notarytool submit "${artifact_path}" \
+    --keychain-profile "${NOTARY_PROFILE}" \
+    --wait \
+    --output-format plist >"${notary_output}"
+  local submit_status=$?
+  set -e
 
-if [[ ${submit_status} -ne 0 || "${notary_status}" == 'Invalid' ]]; then
-  cat "${notary_output}" >&2
-  if [[ -n "${submission_id}" ]]; then
-    printf '\nNotary log for submission %s:\n' "${submission_id}" >&2
-    xcrun notarytool log "${submission_id}" --keychain-profile "${NOTARY_PROFILE}" >&2 || true
+  local submission_id notary_status
+  submission_id="$(plist_value id "${notary_output}")"
+  notary_status="$(plist_value status "${notary_output}")"
+
+  if [[ ${submit_status} -ne 0 || "${notary_status}" == 'Invalid' ]]; then
+    cat "${notary_output}" >&2
+    if [[ -n "${submission_id}" ]]; then
+      printf '\nNotary log for submission %s:\n' "${submission_id}" >&2
+      xcrun notarytool log "${submission_id}" --keychain-profile "${NOTARY_PROFILE}" >&2 || true
+    fi
+    fail "Notarization failed. Resolve the notary issues above, then re-run this script."
   fi
-  fail "Notarization failed. Resolve the notary issues above, then re-run this script."
-fi
 
-[[ "${notary_status}" == 'Accepted' ]] || fail "Unexpected notarization status '${notary_status:-unknown}'. See the notary output above."
+  [[ "${notary_status}" == 'Accepted' ]] || fail "Unexpected notarization status '${notary_status:-unknown}'. See the notary output above."
+}
+
+notarize_and_wait "${ZIP_PATH}"
 
 log "Stapling notarization ticket"
 xcrun stapler staple "${APP_PATH}"
@@ -109,4 +116,34 @@ if ! grep -F 'accepted' <<<"${spctl_output}" >/dev/null || ! grep -F 'Notarized 
   fail "Gatekeeper verification did not report 'accepted' from 'Notarized Developer ID'."
 fi
 
-printf '\nRelease artifact: %s\n' "${ZIP_PATH}"
+DMG_PATH="${DIST_DIR}/Lorelei-${version}.dmg"
+rm -f "${DMG_PATH}"
+
+log "Creating disk image ${DMG_PATH}"
+dmg_staging="$(mktemp -d)"
+trap 'rm -f "${notary_output}"; rm -rf "${dmg_staging}"' EXIT
+ditto "${APP_PATH}" "${dmg_staging}/Lorelei.app"
+ln -s /Applications "${dmg_staging}/Applications"
+hdiutil create \
+  -volname 'Lorelei' \
+  -srcfolder "${dmg_staging}" \
+  -ov \
+  -format UDZO \
+  "${DMG_PATH}"
+
+log "Signing disk image"
+codesign --force --sign "${IDENTITY_NAME}: Taishi Kato (${TEAM_ID})" --timestamp "${DMG_PATH}"
+
+notarize_and_wait "${DMG_PATH}"
+
+log "Stapling notarization ticket to disk image"
+xcrun stapler staple "${DMG_PATH}"
+
+log "Verifying Gatekeeper acceptance of the disk image"
+dmg_spctl_output="$(spctl -a -t open --context context:primary-signature -vv "${DMG_PATH}" 2>&1)"
+printf '%s\n' "${dmg_spctl_output}"
+if ! grep -F 'accepted' <<<"${dmg_spctl_output}" >/dev/null || ! grep -F 'Notarized Developer ID' <<<"${dmg_spctl_output}" >/dev/null; then
+  fail "Gatekeeper verification did not report the disk image as 'accepted' from 'Notarized Developer ID'."
+fi
+
+printf '\nRelease artifacts:\n  %s\n  %s\n' "${DMG_PATH}" "${ZIP_PATH}"
