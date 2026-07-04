@@ -761,13 +761,13 @@ struct LoreleiTests {
         let frame = LoreleiToolbarController.collapsedPeekFrame(
             screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
             safeAreaTop: 32,
-            width: 120,
-            chinHeight: 30
+            width: 104,
+            chinHeight: 22
         )
 
         // Top edge flush with the screen top so the head runs into the
-        // notch; only the 30pt chin is visible below the 32pt safe area.
-        #expect(frame == CGRect(x: 696, y: 920, width: 120, height: 62))
+        // notch; only the 22pt chin is visible below the 32pt safe area.
+        #expect(frame == CGRect(x: 704, y: 928, width: 104, height: 54))
         #expect(frame.maxY == 982)
     }
 

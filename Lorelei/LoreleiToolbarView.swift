@@ -69,7 +69,8 @@ struct LoreleiToolbarView: View {
 
                 faceView
                     .environment(\.colorScheme, .dark)
-                    .padding(.bottom, 3)
+                    .scaleEffect(0.78, anchor: .bottom)
+                    .padding(.bottom, 2)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())

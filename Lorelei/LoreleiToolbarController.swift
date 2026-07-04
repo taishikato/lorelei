@@ -21,8 +21,8 @@ final class LoreleiToolbarController {
         static let collapsedSize = CGSize(width: 140, height: 40)
         static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
-        static let peekWidth: CGFloat = 120
-        static let peekChinHeight: CGFloat = 30
+        static let peekWidth: CGFloat = 104
+        static let peekChinHeight: CGFloat = 22
     }
 
     private let companionManager: CompanionManager
