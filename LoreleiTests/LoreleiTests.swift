@@ -676,6 +676,7 @@ struct LoreleiTests {
         #expect(prompt.contains("Codex App Server"))
         #expect(prompt.contains("lorelei.desktop_snapshot"))
         #expect(prompt.contains("lorelei.desktop_action"))
+        #expect(prompt.contains("open/select/showMenu"))
         #expect(prompt.contains("lorelei.set_text"))
         #expect(prompt.contains("lorelei.screenshot"))
         #expect(prompt.contains("Do not simulate keyboard shortcuts."))
@@ -1312,13 +1313,17 @@ struct LoreleiTests {
         #expect(LiveDesktopForegrounding.activationPlan(isAppAlreadyRunning: true) == [
             .yieldActivationToRunningApplication,
             .activateRunningApplication,
-            .openApplicationActivatingBundleURL
+            .openApplicationActivatingBundleURL,
+            .setAccessibilityFrontmost,
+            .verifyFrontmostApplication
         ])
     }
 
     @Test func foregroundActivationPlanOpensApplicationForNotRunningApps() throws {
         #expect(LiveDesktopForegrounding.activationPlan(isAppAlreadyRunning: false) == [
-            .openApplicationActivatingBundleURL
+            .openApplicationActivatingBundleURL,
+            .setAccessibilityFrontmost,
+            .verifyFrontmostApplication
         ])
     }
 
@@ -1533,7 +1538,14 @@ struct LoreleiTests {
         }
 
         #expect(actionProperties["elementId"] != nil)
-        #expect(actionEnum == [.string("press"), .string("focus"), .string("raise")])
+        #expect(actionEnum == [
+            .string("press"),
+            .string("focus"),
+            .string("raise"),
+            .string("open"),
+            .string("select"),
+            .string("showMenu")
+        ])
         #expect(setTextProperties["elementId"] != nil)
         #expect(setTextProperties["text"] != nil)
         #expect(modeEnum == [.string("replace"), .string("insert")])
@@ -1566,7 +1578,7 @@ struct LoreleiTests {
                 tool: "desktop_action",
                 arguments: .object([
                     "elementId": .string("e2"),
-                    "action": .string("press")
+                    "action": .string("showMenu")
                 ])
             ),
             executor: executor
@@ -1575,7 +1587,7 @@ struct LoreleiTests {
         #expect(result.success)
         #expect(result.contentItems == [.text("ok")])
         #expect(executor.performCalls.count == 1)
-        #expect(executor.performCalls.first?.0 == .press)
+        #expect(executor.performCalls.first?.0 == .showMenu)
         #expect(executor.performCalls.first?.1 == "e2")
     }
 
@@ -1826,6 +1838,108 @@ struct LoreleiTests {
           [e2] AXButton "New Folder" roleDescription="toolbar button" hint="Create a new folder"
           [e3] AXButton "New Note"
         """)
+    }
+
+    @Test func axSerializerPrioritizesMenuBarAndFocusedWindowChromeBeforeLargeLists() throws {
+        let rows = (0..<26).map { index in
+            DesktopUINode(
+                role: "AXRow",
+                title: "Note \(index)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                supportedActions: [.press, .open, .showMenu],
+                children: []
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXApplication",
+            title: "Notes",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXWindow",
+                    title: "Notes",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: true,
+                    children: [
+                        DesktopUINode(
+                            role: "AXList",
+                            title: "Notes list",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: rows
+                        ),
+                        DesktopUINode(
+                            role: "AXToolbar",
+                            title: nil,
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: [
+                                DesktopUINode(
+                                    role: "AXButton",
+                                    title: "New Note",
+                                    value: nil,
+                                    frame: nil,
+                                    isEnabled: true,
+                                    isFocused: false,
+                                    children: []
+                                )
+                            ]
+                        )
+                    ]
+                ),
+                DesktopUINode(
+                    role: "AXMenuBar",
+                    title: nil,
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: [
+                        DesktopUINode(
+                            role: "AXMenuBarItem",
+                            title: "File",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines.prefix(9) == [
+            "[e1] AXApplication \"Notes\"",
+            "  [e2] AXMenuBar",
+            "    [e3] AXMenuBarItem \"File\"",
+            "  [e4] AXWindow \"Notes\" focused",
+            "    [e5] AXToolbar",
+            "      [e6] AXButton \"New Note\"",
+            "    [e7] AXList \"Notes list\"",
+            "      [e8] AXRow \"Note 0\" actions=\"open,showMenu\"",
+            "      [e9] AXRow \"Note 1\" actions=\"open,showMenu\""
+        ])
+        #expect(lines.contains("      … (+2 more rows)"))
+        #expect(result.elementCount == 31)
+        #expect(registry["e31"] == 30)
+        #expect(registry["e32"] == nil)
     }
 
     @Test func axSerializerTruncatesLongValuesAndElementCount() throws {

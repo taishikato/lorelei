@@ -7,6 +7,7 @@
 //
 
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -122,20 +123,20 @@ struct CodexAppServerDesktopForegroundTool {
         }
 
         guard await environment.activateApp(arguments.appName, arguments.bundleIdentifier) else {
-            return .failure("Could not activate \(arguments.targetDescription).")
+            return .failure("Could not make \(arguments.targetDescription) the frontmost active app.")
         }
 
         if environment.appHasOnscreenWindow(arguments.appName, arguments.bundleIdentifier) {
-            return .success("\(arguments.targetDescription) is onscreen in the current macOS Space.")
+            return .success("\(arguments.targetDescription) is frontmost and onscreen in the current macOS Space.")
         }
 
         for _ in 0..<arguments.maxSpaceSwitches {
             await environment.switchSpace(.right)
             await environment.sleep(250_000_000)
-            _ = await environment.activateApp(arguments.appName, arguments.bundleIdentifier)
+            let didActivate = await environment.activateApp(arguments.appName, arguments.bundleIdentifier)
 
-            if environment.appHasOnscreenWindow(arguments.appName, arguments.bundleIdentifier) {
-                return .success("\(arguments.targetDescription) is onscreen after switching macOS Spaces.")
+            if didActivate, environment.appHasOnscreenWindow(arguments.appName, arguments.bundleIdentifier) {
+                return .success("\(arguments.targetDescription) is frontmost and onscreen after switching macOS Spaces.")
             }
         }
 
@@ -210,6 +211,8 @@ enum LiveDesktopForegrounding {
         case yieldActivationToRunningApplication
         case activateRunningApplication
         case openApplicationActivatingBundleURL
+        case setAccessibilityFrontmost
+        case verifyFrontmostApplication
     }
 
     static func activationPlan(isAppAlreadyRunning: Bool) -> [ActivationStep] {
@@ -217,10 +220,16 @@ enum LiveDesktopForegrounding {
             return [
                 .yieldActivationToRunningApplication,
                 .activateRunningApplication,
-                .openApplicationActivatingBundleURL
+                .openApplicationActivatingBundleURL,
+                .setAccessibilityFrontmost,
+                .verifyFrontmostApplication
             ]
         }
-        return [.openApplicationActivatingBundleURL]
+        return [
+            .openApplicationActivatingBundleURL,
+            .setAccessibilityFrontmost,
+            .verifyFrontmostApplication
+        ]
     }
 
     @MainActor
@@ -250,40 +259,71 @@ enum LiveDesktopForegrounding {
 
     @MainActor
     static func activateApp(appName: String?, bundleIdentifier: String?) async -> Bool {
+        let runningApplication: NSRunningApplication
         if let runningApplication = matchingRunningApplications(
             appName: appName,
             bundleIdentifier: bundleIdentifier
         ).first {
             NSApp.yieldActivation(to: runningApplication)
-            if runningApplication.activate(options: [.activateAllWindows]) {
-                return true
+            if !runningApplication.activate(options: [.activateAllWindows]) {
+                guard let appURL = runningApplication.bundleURL
+                    ?? applicationURL(appName: appName, bundleIdentifier: bundleIdentifier),
+                      let openedApplication = await openApplication(at: appURL) else {
+                    return false
+                }
+                self.setAccessibilityFrontmost(openedApplication)
+                return await verifyFrontmost(openedApplication)
             }
-
-            guard let appURL = runningApplication.bundleURL
-                ?? applicationURL(appName: appName, bundleIdentifier: bundleIdentifier) else {
-                return false
-            }
-            return await openApplication(at: appURL)
+            self.setAccessibilityFrontmost(runningApplication)
+            return await verifyFrontmost(runningApplication)
         }
 
         guard let appURL = applicationURL(appName: appName, bundleIdentifier: bundleIdentifier) else {
             return false
         }
 
-        return await openApplication(at: appURL)
+        guard let openedApplication = await openApplication(at: appURL) else {
+            return false
+        }
+        runningApplication = openedApplication
+        setAccessibilityFrontmost(runningApplication)
+        return await verifyFrontmost(runningApplication)
     }
 
     @MainActor
-    private static func openApplication(at appURL: URL) async -> Bool {
+    private static func openApplication(at appURL: URL) async -> NSRunningApplication? {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         configuration.createsNewApplicationInstance = false
 
         return await withCheckedContinuation { continuation in
             NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { runningApplication, error in
-                continuation.resume(returning: error == nil && runningApplication != nil)
+                continuation.resume(returning: error == nil ? runningApplication : nil)
             }
         }
+    }
+
+    @MainActor
+    private static func setAccessibilityFrontmost(_ runningApplication: NSRunningApplication) {
+        let appElement = AXUIElementCreateApplication(runningApplication.processIdentifier)
+        AXUIElementSetAttributeValue(
+            appElement,
+            kAXFrontmostAttribute as CFString,
+            kCFBooleanTrue
+        )
+    }
+
+    @MainActor
+    private static func verifyFrontmost(_ runningApplication: NSRunningApplication) async -> Bool {
+        for attempt in 0..<3 {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == runningApplication.processIdentifier {
+                return true
+            }
+            if attempt < 2 {
+                try? await Task.sleep(nanoseconds: 75_000_000)
+            }
+        }
+        return false
     }
 
     @MainActor

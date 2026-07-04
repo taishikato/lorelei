@@ -42,7 +42,14 @@ enum CodexAppServerDesktopToolSuite {
                         ]),
                         "action": .object([
                             "type": .string("string"),
-                            "enum": .array([.string("press"), .string("focus"), .string("raise")]),
+                            "enum": .array([
+                                .string("press"),
+                                .string("focus"),
+                                .string("raise"),
+                                .string("open"),
+                                .string("select"),
+                                .string("showMenu")
+                            ]),
                             "description": .string("Accessibility action to perform.")
                         ])
                     ])
@@ -145,10 +152,10 @@ enum CodexAppServerDesktopToolSuite {
             return .failure("desktop_action requires elementId from the latest lorelei.desktop_snapshot.")
         }
         guard let actionText = arguments["action"]?.trimmedStringValue else {
-            return .failure("desktop_action requires action: press, focus, or raise.")
+            return .failure("desktop_action requires action: press, focus, raise, open, select, or showMenu.")
         }
         guard let action = DesktopElementAction(rawValue: actionText) else {
-            return .failure("desktop_action action must be one of: press, focus, raise.")
+            return .failure("desktop_action action must be one of: press, focus, raise, open, select, showMenu.")
         }
 
         let outcome = await executor.perform(action, elementID: elementID)
