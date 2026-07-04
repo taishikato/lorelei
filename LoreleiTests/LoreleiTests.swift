@@ -851,10 +851,10 @@ struct LoreleiTests {
             anchorFrame: CGRect(x: 1800, y: 1176, width: 24, height: 24),
             screenFrame: screenFrame,
             panelSize: panelSize,
-            gapBelowMenuBar: 4
+            gapBelowMenuBar: 6
         )
 
-        #expect(frame == CGRect(x: 1484, y: 652, width: 340, height: 520))
+        #expect(frame == CGRect(x: 1484, y: 650, width: 340, height: 520))
     }
 
     @Test func settingsPanelFrameClampsToScreenEdges() async throws {
@@ -872,8 +872,21 @@ struct LoreleiTests {
             panelSize: panelSize
         )
 
-        #expect(rightClampedFrame == CGRect(x: 760, y: 252, width: 340, height: 520))
-        #expect(leftClampedFrame == CGRect(x: 100, y: 252, width: 340, height: 520))
+        #expect(rightClampedFrame == CGRect(x: 760, y: 250, width: 340, height: 520))
+        #expect(leftClampedFrame == CGRect(x: 100, y: 250, width: 340, height: 520))
+    }
+
+    @Test func settingsPanelFrameClampsBottomEdgeToScreen() async throws {
+        let screenFrame = CGRect(x: 0, y: 100, width: 1000, height: 700)
+        let panelSize = CGSize(width: 340, height: 760)
+
+        let frame = MenuBarPanelManager.settingsPanelFrame(
+            anchorFrame: CGRect(x: 900, y: 776, width: 24, height: 24),
+            screenFrame: screenFrame,
+            panelSize: panelSize
+        )
+
+        #expect(frame == CGRect(x: 584, y: 100, width: 340, height: 760))
     }
 
     @Test func workspaceExecutorReportsMissingWorkspaceWithoutRunningProcess() async throws {

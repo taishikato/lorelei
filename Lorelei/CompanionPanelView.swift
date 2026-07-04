@@ -33,21 +33,21 @@ struct CompanionPanelView: View {
     var body: some View {
         GlassEffectContainer {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     header
                     generalSection
                     workspaceSection
                     voiceSection
                     debugDisclosure
                 }
-                .padding(16)
+                .padding(12)
 
                 Divider()
                     .background(.white.opacity(0.12))
 
                 footer
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
             }
             .frame(width: 340)
             .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
@@ -111,14 +111,14 @@ struct CompanionPanelView: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
             }
-            .padding(10)
+            .padding(8)
             .background(rowBackground)
         }
     }
 
     private var workspaceSection: some View {
         section("Workspace") {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Image(systemName: "folder")
                         .font(.system(size: 12, weight: .medium))
@@ -132,7 +132,7 @@ struct CompanionPanelView: View {
                         .truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(10)
+                .padding(8)
                 .background(rowBackground)
 
                 HStack(spacing: 8) {
@@ -159,7 +159,7 @@ struct CompanionPanelView: View {
 
     private var voiceSection: some View {
         section("Voice") {
-            VStack(spacing: 6) {
+            VStack(spacing: 5) {
                 microphonePermissionRow
                 accessibilityPermissionRow
                 screenRecordingPermissionRow
@@ -174,7 +174,7 @@ struct CompanionPanelView: View {
     private var debugDisclosure: some View {
         DisclosureGroup {
             debugBlock
-                .padding(.top, 8)
+                .padding(.top, 6)
         } label: {
             Text("Debug")
                 .font(.system(size: 10, weight: .semibold))
@@ -192,8 +192,8 @@ struct CompanionPanelView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(minHeight: 74, maxHeight: 112)
-        .padding(10)
+        .frame(minHeight: 64, maxHeight: 96)
+        .padding(8)
         .background(rowBackground)
     }
 
@@ -271,7 +271,7 @@ struct CompanionPanelView: View {
         _ title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title.uppercased())
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -311,7 +311,7 @@ struct CompanionPanelView: View {
                 .pointerCursor()
             }
         }
-        .padding(10)
+        .padding(8)
         .background(rowBackground)
     }
 

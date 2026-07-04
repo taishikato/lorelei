@@ -33,7 +33,7 @@ final class MenuBarPanelManager: NSObject {
 
     private let companionManager: CompanionManager
     private let panelWidth: CGFloat = 340
-    private let panelHeight: CGFloat = 560
+    private let minimumPanelHeight: CGFloat = 1
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
@@ -145,16 +145,20 @@ final class MenuBarPanelManager: NSObject {
     }
 
     private func createPanel() {
-        let companionPanelView = CompanionPanelView(companionManager: companionManager)
-            .frame(width: panelWidth)
+        let companionPanelView = AnyView(
+            CompanionPanelView(companionManager: companionManager)
+                .frame(width: panelWidth)
+        )
 
         let hostingView = NSHostingView(rootView: companionPanelView)
-        hostingView.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
+        hostingView.frame = NSRect(x: 0, y: 0, width: panelWidth, height: minimumPanelHeight)
         hostingView.wantsLayer = true
+        hostingView.layer?.isOpaque = false
         hostingView.layer?.backgroundColor = .clear
 
+        let panelSize = Self.fittingPanelSize(for: hostingView, width: panelWidth, minimumHeight: minimumPanelHeight)
         let menuBarPanel = KeyablePanel(
-            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
+            contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -178,31 +182,49 @@ final class MenuBarPanelManager: NSObject {
 
     private func positionPanelBelowStatusItem() {
         guard let panel else { return }
-        let gapBelowMenuBar: CGFloat = 4
+        let gapBelowMenuBar: CGFloat = 6
 
-        // Calculate the panel's content height from the hosting view's fitting size
-        // so the panel snugly wraps the SwiftUI content instead of using a fixed height.
-        let fittingSize = panel.contentView?.fittingSize ?? CGSize(width: panelWidth, height: panelHeight)
-        let actualPanelHeight = fittingSize.height
+        let panelSize: CGSize
+        if let hostingView = panel.contentView as? NSHostingView<AnyView> {
+            panelSize = Self.fittingPanelSize(for: hostingView, width: panelWidth, minimumHeight: minimumPanelHeight)
+            hostingView.setFrameSize(panelSize)
+        } else {
+            panelSize = panel.frame.size
+        }
         let buttonWindow = statusItem?.button?.window
         let screenFrame = (buttonWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
-            ?? CGRect(x: 0, y: 0, width: panelWidth, height: actualPanelHeight)
+            ?? CGRect(origin: .zero, size: panelSize)
 
         let frame = Self.settingsPanelFrame(
             anchorFrame: buttonWindow?.frame,
             screenFrame: screenFrame,
-            panelSize: CGSize(width: panelWidth, height: actualPanelHeight),
+            panelSize: panelSize,
             gapBelowMenuBar: gapBelowMenuBar
         )
 
         panel.setFrame(frame, display: true)
     }
 
+    private static func fittingPanelSize(
+        for hostingView: NSHostingView<AnyView>,
+        width: CGFloat,
+        minimumHeight: CGFloat
+    ) -> CGSize {
+        hostingView.setFrameSize(CGSize(width: width, height: minimumHeight))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let fittingSize = hostingView.fittingSize
+        return CGSize(
+            width: width,
+            height: max(minimumHeight, ceil(fittingSize.height))
+        )
+    }
+
     static func settingsPanelFrame(
         anchorFrame: CGRect?,
         screenFrame: CGRect,
         panelSize: CGSize,
-        gapBelowMenuBar: CGFloat = 4
+        gapBelowMenuBar: CGFloat = 6
     ) -> CGRect {
         guard let anchorFrame, screenFrame.intersects(anchorFrame) else {
             return CGRect(
@@ -217,10 +239,12 @@ final class MenuBarPanelManager: NSObject {
         let minX = screenFrame.minX
         let maxX = max(screenFrame.maxX - panelSize.width, minX)
         let clampedX = min(max(proposedX, minX), maxX)
+        let proposedY = anchorFrame.minY - panelSize.height - gapBelowMenuBar
+        let clampedY = max(proposedY, screenFrame.minY)
 
         return CGRect(
             x: clampedX,
-            y: anchorFrame.minY - panelSize.height - gapBelowMenuBar,
+            y: clampedY,
             width: panelSize.width,
             height: panelSize.height
         )
