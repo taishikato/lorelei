@@ -96,6 +96,25 @@ enum BuddyPushToTalkShortcut {
     static let pushToTalkDisplayText = currentShortcutOption.displayText
     static let pushToTalkTooltipText = "push to talk (\(pushToTalkDisplayText))"
 
+    /// Whether the shortcut's required modifiers are still held according
+    /// to the given live modifier state.
+    ///
+    /// Used by the release watchdog: macOS disables the CGEvent tap when
+    /// the main thread stalls past its timeout, and a key-up delivered in
+    /// that window is lost forever, leaving push-to-talk stuck listening.
+    /// For space-based shortcuts this only reports the modifier half, so a
+    /// held modifier keeps this true - the watchdog then simply defers to
+    /// the regular key-up event.
+    static func isShortcutStillHeld(modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        let requiredModifierFlags = currentShortcutOption.modifierOnlyFlags
+            ?? currentShortcutOption.spaceShortcutModifierFlags
+            ?? []
+
+        return modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .isSuperset(of: requiredModifierFlags)
+    }
+
     static func shortcutTransition(
         for event: NSEvent,
         wasShortcutPreviouslyPressed: Bool
