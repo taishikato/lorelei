@@ -53,31 +53,35 @@ struct LoreleiToolbarView: View {
         }
     }
 
-    /// Lorelei peeking out from behind the notch: a black head shape whose
+    /// Lorelei peeking out from behind the notch: a glass head shape whose
     /// top runs under the physical camera housing (invisible), leaving only
-    /// the chin with the face visible below the notch edge. Solid black so
-    /// it blends seamlessly with the notch itself.
+    /// the chin with the face visible below the notch edge.
     private var notchPeek: some View {
-        Button(action: { deferredAction { toggleExpansion() } }) {
-            ZStack(alignment: .bottom) {
-                UnevenRoundedRectangle(
-                    bottomLeadingRadius: 14,
-                    bottomTrailingRadius: 14,
-                    style: .continuous
-                )
-                .fill(.black)
+        GlassEffectContainer {
+            Button(action: { deferredAction { toggleExpansion() } }) {
+                ZStack(alignment: .bottom) {
+                    Color.clear
 
-                faceView
-                    .environment(\.colorScheme, .dark)
-                    .scaleEffect(0.78, anchor: .bottom)
-                    .padding(.bottom, 2)
+                    faceView
+                        .scaleEffect(0.78, anchor: .bottom)
+                        .padding(.bottom, 2)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(peekHeadShape)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: peekHeadShape)
+            .help(Self.statusLabel(for: companionManager.runStatus))
+            .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
         }
-        .buttonStyle(.plain)
-        .help(Self.statusLabel(for: companionManager.runStatus))
-        .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
+    }
+
+    private var peekHeadShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            bottomLeadingRadius: 14,
+            bottomTrailingRadius: 14,
+            style: .continuous
+        )
     }
 
     private var collapsedCapsule: some View {
