@@ -1317,17 +1317,26 @@ struct LoreleiTests {
             .yieldActivationToRunningApplication,
             .activateRunningApplication,
             .openApplicationActivatingBundleURL,
+            .reResolveRunningApplicationAfterLaunch,
+            .waitUntilFinishedLaunching,
             .setAccessibilityFrontmost,
-            .verifyFrontmostApplication
+            .retryActivationUntilFrontmostApplication
         ])
     }
 
     @Test func foregroundActivationPlanOpensApplicationForNotRunningApps() throws {
         #expect(LiveDesktopForegrounding.activationPlan(isAppAlreadyRunning: false) == [
             .openApplicationActivatingBundleURL,
+            .reResolveRunningApplicationAfterLaunch,
+            .waitUntilFinishedLaunching,
             .setAccessibilityFrontmost,
-            .verifyFrontmostApplication
+            .retryActivationUntilFrontmostApplication
         ])
+    }
+
+    @Test func foregroundActivationPlanWaitsForFinishedLaunchingOnColdLaunch() throws {
+        #expect(LiveDesktopForegrounding.shouldWaitForFinishedLaunching(isAppAlreadyRunning: false))
+        #expect(!LiveDesktopForegrounding.shouldWaitForFinishedLaunching(isAppAlreadyRunning: true))
     }
 
     @Test func foregroundDynamicToolReportsMissingTarget() async throws {
@@ -3932,7 +3941,7 @@ private final class ForegroundEnvironmentRecorder {
             },
             activateApp: { [weak self] appName, bundleIdentifier in
                 self?.events.append("activate:\(appName ?? "nil"):\(bundleIdentifier ?? "nil")")
-                return true
+                return .success()
             },
             appHasOnscreenWindow: { [weak self] appName, bundleIdentifier in
                 self?.events.append("check:\(appName ?? "nil"):\(bundleIdentifier ?? "nil")")

@@ -25,7 +25,7 @@ struct CodexAppServerDesktopForegroundEnvironment {
     var activateApp: @MainActor (
         _ appName: String?,
         _ bundleIdentifier: String?
-    ) async -> Bool
+    ) async -> CodexAppServerDesktopForegroundActivationResult
     var appHasOnscreenWindow: @MainActor (
         _ appName: String?,
         _ bundleIdentifier: String?
@@ -53,6 +53,19 @@ struct CodexAppServerDesktopForegroundEnvironment {
             try? await Task.sleep(nanoseconds: nanoseconds)
         }
     )
+}
+
+struct CodexAppServerDesktopForegroundActivationResult: Equatable, Sendable {
+    let success: Bool
+    let waitedNanoseconds: UInt64
+
+    static func success(waitedNanoseconds: UInt64 = 0) -> Self {
+        Self(success: true, waitedNanoseconds: waitedNanoseconds)
+    }
+
+    static func failure(waitedNanoseconds: UInt64 = 0) -> Self {
+        Self(success: false, waitedNanoseconds: waitedNanoseconds)
+    }
 }
 
 struct CodexAppServerDesktopForegroundTool {
@@ -122,8 +135,11 @@ struct CodexAppServerDesktopForegroundTool {
             }
         }
 
-        guard await environment.activateApp(arguments.appName, arguments.bundleIdentifier) else {
-            return .failure("Could not make \(arguments.targetDescription) the frontmost active app.")
+        let activationResult = await environment.activateApp(arguments.appName, arguments.bundleIdentifier)
+        guard activationResult.success else {
+            return .failure(
+                "Could not make \(arguments.targetDescription) the frontmost active app after waiting \(Self.formatWaitSeconds(activationResult.waitedNanoseconds))."
+            )
         }
 
         if environment.appHasOnscreenWindow(arguments.appName, arguments.bundleIdentifier) {
@@ -133,9 +149,9 @@ struct CodexAppServerDesktopForegroundTool {
         for _ in 0..<arguments.maxSpaceSwitches {
             await environment.switchSpace(.right)
             await environment.sleep(250_000_000)
-            let didActivate = await environment.activateApp(arguments.appName, arguments.bundleIdentifier)
+            let activationResult = await environment.activateApp(arguments.appName, arguments.bundleIdentifier)
 
-            if didActivate, environment.appHasOnscreenWindow(arguments.appName, arguments.bundleIdentifier) {
+            if activationResult.success, environment.appHasOnscreenWindow(arguments.appName, arguments.bundleIdentifier) {
                 return .success("\(arguments.targetDescription) is frontmost and onscreen after switching macOS Spaces.")
             }
         }
@@ -143,6 +159,11 @@ struct CodexAppServerDesktopForegroundTool {
         return .failure(
             "\(arguments.targetDescription) did not expose an onscreen normal window after \(arguments.maxSpaceSwitches) Space switch attempts."
         )
+    }
+
+    private static func formatWaitSeconds(_ nanoseconds: UInt64) -> String {
+        let seconds = Double(nanoseconds) / 1_000_000_000
+        return String(format: "%.1f seconds", seconds)
     }
 }
 
@@ -211,9 +232,22 @@ enum LiveDesktopForegrounding {
         case yieldActivationToRunningApplication
         case activateRunningApplication
         case openApplicationActivatingBundleURL
+        case reResolveRunningApplicationAfterLaunch
+        case waitUntilFinishedLaunching
         case setAccessibilityFrontmost
-        case verifyFrontmostApplication
+        case retryActivationUntilFrontmostApplication
     }
+
+    private static let launchPollIntervalNanoseconds: UInt64 = 100_000_000
+    private static let launchPollTimeoutNanoseconds: UInt64 = 8_000_000_000
+    private static let verificationRetryBackoffNanoseconds: [UInt64] = [
+        200_000_000,
+        400_000_000,
+        800_000_000,
+        1_600_000_000,
+        2_400_000_000,
+        2_600_000_000
+    ]
 
     static func activationPlan(isAppAlreadyRunning: Bool) -> [ActivationStep] {
         if isAppAlreadyRunning {
@@ -221,15 +255,23 @@ enum LiveDesktopForegrounding {
                 .yieldActivationToRunningApplication,
                 .activateRunningApplication,
                 .openApplicationActivatingBundleURL,
+                .reResolveRunningApplicationAfterLaunch,
+                .waitUntilFinishedLaunching,
                 .setAccessibilityFrontmost,
-                .verifyFrontmostApplication
+                .retryActivationUntilFrontmostApplication
             ]
         }
         return [
             .openApplicationActivatingBundleURL,
+            .reResolveRunningApplicationAfterLaunch,
+            .waitUntilFinishedLaunching,
             .setAccessibilityFrontmost,
-            .verifyFrontmostApplication
+            .retryActivationUntilFrontmostApplication
         ]
+    }
+
+    static func shouldWaitForFinishedLaunching(isAppAlreadyRunning: Bool) -> Bool {
+        !isAppAlreadyRunning
     }
 
     @MainActor
@@ -258,36 +300,77 @@ enum LiveDesktopForegrounding {
     }
 
     @MainActor
-    static func activateApp(appName: String?, bundleIdentifier: String?) async -> Bool {
-        let runningApplication: NSRunningApplication
+    static func activateApp(
+        appName: String?,
+        bundleIdentifier: String?
+    ) async -> CodexAppServerDesktopForegroundActivationResult {
         if let runningApplication = matchingRunningApplications(
             appName: appName,
             bundleIdentifier: bundleIdentifier
         ).first {
-            NSApp.yieldActivation(to: runningApplication)
-            if !runningApplication.activate(options: [.activateAllWindows]) {
+            var currentApplication = reResolveRunningApplication(
+                runningApplication,
+                appName: appName,
+                bundleIdentifier: bundleIdentifier
+            )
+            NSApp.yieldActivation(to: currentApplication)
+            if !currentApplication.activate(options: [.activateAllWindows]) {
                 guard let appURL = runningApplication.bundleURL
                     ?? applicationURL(appName: appName, bundleIdentifier: bundleIdentifier),
                       let openedApplication = await openApplication(at: appURL) else {
-                    return false
+                    return .failure()
                 }
-                self.setAccessibilityFrontmost(openedApplication)
-                return await verifyFrontmost(openedApplication)
+                currentApplication = reResolveRunningApplication(
+                    openedApplication,
+                    appName: appName,
+                    bundleIdentifier: bundleIdentifier
+                )
             }
-            self.setAccessibilityFrontmost(runningApplication)
-            return await verifyFrontmost(runningApplication)
+
+            let launchWait = await waitUntilFinishedLaunching(
+                currentApplication,
+                appName: appName,
+                bundleIdentifier: bundleIdentifier
+            )
+            currentApplication = launchWait.runningApplication
+            let verification = await retryActivationUntilFrontmost(
+                currentApplication,
+                appName: appName,
+                bundleIdentifier: bundleIdentifier
+            )
+            return CodexAppServerDesktopForegroundActivationResult(
+                success: verification.success,
+                waitedNanoseconds: launchWait.waitedNanoseconds + verification.waitedNanoseconds
+            )
         }
 
         guard let appURL = applicationURL(appName: appName, bundleIdentifier: bundleIdentifier) else {
-            return false
+            return .failure()
         }
 
         guard let openedApplication = await openApplication(at: appURL) else {
-            return false
+            return .failure()
         }
-        runningApplication = openedApplication
-        setAccessibilityFrontmost(runningApplication)
-        return await verifyFrontmost(runningApplication)
+        var runningApplication = reResolveRunningApplication(
+            openedApplication,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+        let launchWait = await waitUntilFinishedLaunching(
+            runningApplication,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+        runningApplication = launchWait.runningApplication
+        let verification = await retryActivationUntilFrontmost(
+            runningApplication,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+        return CodexAppServerDesktopForegroundActivationResult(
+            success: verification.success,
+            waitedNanoseconds: launchWait.waitedNanoseconds + verification.waitedNanoseconds
+        )
     }
 
     @MainActor
@@ -314,16 +397,80 @@ enum LiveDesktopForegrounding {
     }
 
     @MainActor
-    private static func verifyFrontmost(_ runningApplication: NSRunningApplication) async -> Bool {
-        for attempt in 0..<3 {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == runningApplication.processIdentifier {
-                return true
-            }
-            if attempt < 2 {
-                try? await Task.sleep(nanoseconds: 75_000_000)
-            }
+    private static func waitUntilFinishedLaunching(
+        _ runningApplication: NSRunningApplication,
+        appName: String?,
+        bundleIdentifier: String?
+    ) async -> (runningApplication: NSRunningApplication, waitedNanoseconds: UInt64) {
+        var currentApplication = reResolveRunningApplication(
+            runningApplication,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+        var waitedNanoseconds: UInt64 = 0
+
+        while !currentApplication.isFinishedLaunching,
+              waitedNanoseconds < launchPollTimeoutNanoseconds {
+            try? await Task.sleep(nanoseconds: launchPollIntervalNanoseconds)
+            waitedNanoseconds += launchPollIntervalNanoseconds
+            currentApplication = reResolveRunningApplication(
+                currentApplication,
+                appName: appName,
+                bundleIdentifier: bundleIdentifier
+            )
         }
-        return false
+
+        return (currentApplication, waitedNanoseconds)
+    }
+
+    @MainActor
+    private static func retryActivationUntilFrontmost(
+        _ runningApplication: NSRunningApplication,
+        appName: String?,
+        bundleIdentifier: String?
+    ) async -> (success: Bool, waitedNanoseconds: UInt64) {
+        var currentApplication = reResolveRunningApplication(
+            runningApplication,
+            appName: appName,
+            bundleIdentifier: bundleIdentifier
+        )
+        var waitedNanoseconds: UInt64 = 0
+        var retryDelays = verificationRetryBackoffNanoseconds.makeIterator()
+
+        while true {
+            NSApp.yieldActivation(to: currentApplication)
+            _ = currentApplication.activate(options: [.activateAllWindows])
+            setAccessibilityFrontmost(currentApplication)
+
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == currentApplication.processIdentifier {
+                return (true, waitedNanoseconds)
+            }
+
+            guard let delay = retryDelays.next() else {
+                return (false, waitedNanoseconds)
+            }
+
+            try? await Task.sleep(nanoseconds: delay)
+            waitedNanoseconds += delay
+            currentApplication = reResolveRunningApplication(
+                currentApplication,
+                appName: appName,
+                bundleIdentifier: bundleIdentifier
+            )
+        }
+    }
+
+    @MainActor
+    private static func reResolveRunningApplication(
+        _ runningApplication: NSRunningApplication,
+        appName: String?,
+        bundleIdentifier: String?
+    ) -> NSRunningApplication {
+        let matches = matchingRunningApplications(appName: appName, bundleIdentifier: bundleIdentifier)
+        if let processMatch = matches.first(where: { $0.processIdentifier == runningApplication.processIdentifier }) {
+            return processMatch
+        }
+        return matches.first ?? runningApplication
     }
 
     @MainActor
