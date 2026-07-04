@@ -775,6 +775,16 @@ struct LoreleiTests {
         #expect(LoreleiToolbarView.statusLabel(for: .finished(success: false)) == "Failed")
     }
 
+    @Test func loreleiFaceExpressionMapsRunStatus() async throws {
+        #expect(LoreleiFaceExpression.expression(for: .idle) == .neutral)
+        #expect(LoreleiFaceExpression.expression(for: .listening) == .listening)
+        #expect(LoreleiFaceExpression.expression(for: .transcribing) == .thinking)
+        #expect(LoreleiFaceExpression.expression(for: .working("lorelei.set_text")) == .working)
+        #expect(LoreleiFaceExpression.expression(for: .needsApproval("Run command")) == .questioning)
+        #expect(LoreleiFaceExpression.expression(for: .finished(success: true)) == .happy)
+        #expect(LoreleiFaceExpression.expression(for: .finished(success: false)) == .sad)
+    }
+
     @Test func toolbarAutoExpandsOnApprovalRequest() async throws {
         let defaults = UserDefaults(suiteName: "ToolbarAutoExpansionApprovalTests")!
         defaults.removePersistentDomain(forName: "ToolbarAutoExpansionApprovalTests")

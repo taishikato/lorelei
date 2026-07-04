@@ -17,7 +17,7 @@ final class LoreleiToolbarExpansionState: ObservableObject {
 @MainActor
 final class LoreleiToolbarController {
     private enum Metrics {
-        static let collapsedSize = CGSize(width: 260, height: 36)
+        static let collapsedSize = CGSize(width: 140, height: 40)
         static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
     }
