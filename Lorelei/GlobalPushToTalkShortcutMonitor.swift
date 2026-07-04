@@ -104,6 +104,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         event: CGEvent
     ) -> Unmanaged<CGEvent>? {
         if eventType == .tapDisabledByTimeout || eventType == .tapDisabledByUserInput {
+            LoreleiDiagLog.log("shortcut: event tap disabled (\(eventType.rawValue)), re-enabling")
             if let globalEventTap {
                 CGEvent.tapEnable(tap: globalEventTap, enable: true)
             }
@@ -125,10 +126,12 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         case .none:
             break
         case .pressed:
+            LoreleiDiagLog.log("shortcut: pressed")
             isShortcutCurrentlyPressed = true
             shortcutTransitionPublisher.send(.pressed)
             startReleaseWatchdog()
         case .released:
+            LoreleiDiagLog.log("shortcut: released")
             isShortcutCurrentlyPressed = false
             shortcutTransitionPublisher.send(.released)
             stopReleaseWatchdog()
@@ -167,6 +170,7 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
 
         print("⚠️ Global push-to-talk: synthesizing missed release (event tap dropped the key-up)")
+        LoreleiDiagLog.log("shortcut: synthesizing missed release")
         isShortcutCurrentlyPressed = false
         shortcutTransitionPublisher.send(.released)
         stopReleaseWatchdog()

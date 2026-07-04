@@ -405,6 +405,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         guard !isDictationInProgress else { return }
 
         print("🎙️ BuddyDictationManager: start requested (\(startSource))")
+        LoreleiDiagLog.log("dictation: start requested (\(startSource))")
 
         if needsInitialPermissionPrompt {
             print("🎙️ BuddyDictationManager: requesting initial permissions")
@@ -483,6 +484,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
                     // finalize it instead of dropping the audio - quick
                     // press-speak-release commands used to be lost here.
                     print("🎙️ BuddyDictationManager: finalizing utterance captured during session start")
+                    LoreleiDiagLog.log("dictation: finalizing utterance captured during session start")
                     activeTranscriptionSession?.requestFinalTranscript()
                 } else {
                     print("🎙️ BuddyDictationManager: start cancelled (shortcut released during session start)")
@@ -519,6 +521,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         guard !isFinalizingTranscript else { return }
 
         print("🎙️ BuddyDictationManager: stop requested (\(expectedStartSource))")
+        LoreleiDiagLog.log("dictation: stop requested, sessionReady=\(activeTranscriptionSession != nil)")
 
         isRecordingFromMicrophoneButton = false
         isRecordingFromKeyboardShortcut = false
@@ -573,6 +576,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         try audioEngine.start()
 
         print("🎙️ BuddyDictationManager: audio capture started, opening transcription provider \(transcriptionProvider.displayName)")
+        LoreleiDiagLog.log("dictation: audio engine running, opening provider")
 
         let activeTranscriptionSession: any BuddyStreamingTranscriptionSession
         do {
@@ -612,6 +616,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         self.activeTranscriptionSession = activeTranscriptionSession
         prerollForwarder.attach(activeTranscriptionSession)
         print("🎙️ BuddyDictationManager: provider ready, preroll flushed")
+        LoreleiDiagLog.log("dictation: provider ready, preroll flushed")
     }
 
     private func handleRecognitionError(_ error: Error) {
@@ -625,6 +630,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             )
         } else {
             print("❌ Buddy dictation error (\(transcriptionProvider.displayName)): \(error)")
+            LoreleiDiagLog.log("dictation: error \(error)")
             lastErrorMessage = userFacingErrorMessage(
                 from: error,
                 fallback: "couldn't transcribe that. try again."
@@ -636,6 +642,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private func finishCurrentDictationSessionIfNeeded(shouldSubmitFinalDraft: Bool) {
         guard !hasFinishedCurrentDictationSession else { return }
         hasFinishedCurrentDictationSession = true
+        LoreleiDiagLog.log("dictation: finishing session, transcriptChars=\(latestRecognizedText.count), submit=\(shouldSubmitFinalDraft)")
 
         finalizeFallbackWorkItem?.cancel()
         finalizeFallbackWorkItem = nil
