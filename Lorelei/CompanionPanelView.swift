@@ -210,10 +210,6 @@ struct CompanionPanelView: View {
                     .font(.system(size: 12, weight: .medium))
 
                 Spacer()
-
-                Text("⌘Q")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.tertiary)
             }
             .foregroundStyle(.secondary)
             .contentShape(Rectangle())
