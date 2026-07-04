@@ -13,19 +13,25 @@ struct LoreleiToolbarView: View {
     let toggleExpansion: @MainActor @Sendable () -> Void
 
     var body: some View {
-        GlassEffectContainer {
-            Group {
-                if expansionState.isExpanded {
-                    expandedPanel
-                } else {
-                    collapsedCapsule
+        Group {
+            if !expansionState.isExpanded && expansionState.showsNotchPeek {
+                notchPeek
+            } else {
+                GlassEffectContainer {
+                    Group {
+                        if expansionState.isExpanded {
+                            expandedPanel
+                        } else {
+                            collapsedCapsule
+                        }
+                    }
+                    .frame(
+                        width: expansionState.isExpanded ? 460 : 140,
+                        height: expansionState.isExpanded ? 430 : 40
+                    )
+                    .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: expansionState.isExpanded ? 18 : 18))
                 }
             }
-            .frame(
-                width: expansionState.isExpanded ? 460 : 140,
-                height: expansionState.isExpanded ? 430 : 40
-            )
-            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: expansionState.isExpanded ? 18 : 18))
         }
         .animation(.snappy(duration: 0.22), value: expansionState.isExpanded)
     }
@@ -45,6 +51,32 @@ struct LoreleiToolbarView: View {
         case .finished(let success):
             success ? "Done" : "Failed"
         }
+    }
+
+    /// Lorelei peeking out from behind the notch: a black head shape whose
+    /// top runs under the physical camera housing (invisible), leaving only
+    /// the chin with the face visible below the notch edge. Solid black so
+    /// it blends seamlessly with the notch itself.
+    private var notchPeek: some View {
+        Button(action: { deferredAction { toggleExpansion() } }) {
+            ZStack(alignment: .bottom) {
+                UnevenRoundedRectangle(
+                    bottomLeadingRadius: 14,
+                    bottomTrailingRadius: 14,
+                    style: .continuous
+                )
+                .fill(.black)
+
+                faceView
+                    .environment(\.colorScheme, .dark)
+                    .padding(.bottom, 3)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(Self.statusLabel(for: companionManager.runStatus))
+        .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
     }
 
     private var collapsedCapsule: some View {

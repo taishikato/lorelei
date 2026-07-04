@@ -756,6 +756,21 @@ struct LoreleiTests {
         #expect(frame == CGRect(x: 870, y: 1156, width: 260, height: 36))
     }
 
+    @Test func collapsedPeekFrameHugsNotchAndExtendsChinBelowIt() async throws {
+        // 14" MacBook Pro shape: full frame 1512x982, notch/menu bar 32pt.
+        let frame = LoreleiToolbarController.collapsedPeekFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            safeAreaTop: 32,
+            width: 120,
+            chinHeight: 30
+        )
+
+        // Top edge flush with the screen top so the head runs into the
+        // notch; only the 30pt chin is visible below the 32pt safe area.
+        #expect(frame == CGRect(x: 696, y: 920, width: 120, height: 62))
+        #expect(frame.maxY == 982)
+    }
+
     @Test func cursorCapsuleSitsRightOfCursor() async throws {
         let origin = BlueCursorView.capsuleOrigin(
             cursorPoint: CGPoint(x: 500, y: 500),
@@ -2683,10 +2698,12 @@ struct LoreleiTests {
             ]
         )
         let completingExecutor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.05s: the timer must lose the race against
-            // consuming the scripted session/turn lines under parallel-suite load.
-            turnTimeoutSeconds: 1.0,
-            timeoutInterruptGraceSeconds: 0.5,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite
+            // load. 1.0s still flaked on cold first runs of the full suite,
+            // so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            timeoutInterruptGraceSeconds: 1.0,
             makeTransport: { completingTransport },
             approvalHandler: { _ in .cancel }
         )
@@ -2708,9 +2725,11 @@ struct LoreleiTests {
             #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
         ])
         let silentExecutor = CodexAppServerExecutor(
-            // 0.3s, not a knife-edge 0.05s: the timer must lose the race against
-            // consuming the scripted session/turn lines under parallel-suite load.
-            turnTimeoutSeconds: 1.0,
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite
+            // load. 1.0s still flaked on cold first runs of the full suite,
+            // so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
             timeoutInterruptGraceSeconds: 0.05,
             makeTransport: { silentTransport },
             approvalHandler: { _ in .cancel }
