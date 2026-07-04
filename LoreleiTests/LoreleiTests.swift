@@ -424,6 +424,26 @@ struct LoreleiTests {
         #expect(call.prompt.contains("use computer use to open TextEdit"))
     }
 
+    @Test func companionManagerShowsCursorOverlayOnlyWhileListening() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerListeningOverlayTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerListeningOverlayTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let overlayWindowManager = OverlayWindowManagerRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            overlayWindowManager: overlayWindowManager
+        )
+
+        manager.simulateShortcutTransitionForTesting(.pressed)
+        #expect(overlayWindowManager.events == ["show"])
+        #expect(manager.isOverlayVisible)
+
+        manager.simulateShortcutTransitionForTesting(.released)
+        #expect(overlayWindowManager.events == ["show", "hide"])
+        #expect(!manager.isOverlayVisible)
+    }
+
     @Test func companionManagerHidesCursorOverlayWhileDesktopActionRunsThroughAppServer() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionVisualClearanceTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionVisualClearanceTests")
@@ -443,7 +463,7 @@ struct LoreleiTests {
             codexAppServerDesktopActionRunner: recorder.run,
             overlayWindowManager: overlayWindowManager
         )
-        manager.setBuddyCursorEnabled(true)
+        manager.simulateShortcutTransitionForTesting(.pressed)
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
         for _ in 0..<20 {
@@ -454,8 +474,8 @@ struct LoreleiTests {
         }
 
         #expect(manager.pendingApprovalTitle == nil)
-        #expect(overlayWindowManager.events == ["show", "hide", "show"])
-        #expect(manager.isOverlayVisible)
+        #expect(overlayWindowManager.events == ["show", "hide"])
+        #expect(!manager.isOverlayVisible)
         #expect(manager.latestResultSummary == "Desktop action finished.")
     }
 
@@ -3899,7 +3919,6 @@ private final class AppServerDesktopActionRecorder {
 
 @MainActor
 private final class OverlayWindowManagerRecorder: OverlayWindowManaging {
-    var hasShownOverlayBefore = false
     private(set) var events: [String] = []
     private var isShowing = false
 
