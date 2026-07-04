@@ -15,7 +15,7 @@ enum CodexAppServerDesktopToolSuite {
             CodexAppServerDynamicToolSpec(
                 name: "desktop_snapshot",
                 namespace: namespace,
-                description: "Read the accessibility tree for the frontmost app, or for a named running app.",
+                description: "Read the accessibility tree for the frontmost app, or for a named running app. The first line is the current focused UI element as [focused] [eN] outside the normal element budget.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "additionalProperties": .bool(false),
@@ -30,7 +30,7 @@ enum CodexAppServerDesktopToolSuite {
             CodexAppServerDynamicToolSpec(
                 name: "desktop_action",
                 namespace: namespace,
-                description: "Perform an accessibility action on an element from the latest lorelei.desktop_snapshot.",
+                description: "Perform an accessibility action on an element from the latest lorelei.desktop_snapshot. Use elementId \"focused\" to target the current focused UI element at action time.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "additionalProperties": .bool(false),
@@ -38,11 +38,18 @@ enum CodexAppServerDesktopToolSuite {
                     "properties": .object([
                         "elementId": .object([
                             "type": .string("string"),
-                            "description": .string("Element ID from the latest lorelei.desktop_snapshot, for example e2.")
+                            "description": .string("Element ID from the latest lorelei.desktop_snapshot, for example e2, or \"focused\" for the current focused UI element.")
                         ]),
                         "action": .object([
                             "type": .string("string"),
-                            "enum": .array([.string("press"), .string("focus"), .string("raise")]),
+                            "enum": .array([
+                                .string("press"),
+                                .string("focus"),
+                                .string("raise"),
+                                .string("open"),
+                                .string("select"),
+                                .string("showMenu")
+                            ]),
                             "description": .string("Accessibility action to perform.")
                         ])
                     ])
@@ -51,7 +58,7 @@ enum CodexAppServerDesktopToolSuite {
             CodexAppServerDynamicToolSpec(
                 name: "set_text",
                 namespace: namespace,
-                description: "Set text through accessibility values. Use this for text entry, including non-ASCII text.",
+                description: "Set text through accessibility values. Use this for text entry, including non-ASCII text. When in doubt, use elementId \"focused\" to write to the currently focused text field.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "additionalProperties": .bool(false),
@@ -59,7 +66,7 @@ enum CodexAppServerDesktopToolSuite {
                     "properties": .object([
                         "elementId": .object([
                             "type": .string("string"),
-                            "description": .string("Element ID from the latest lorelei.desktop_snapshot, for example e2.")
+                            "description": .string("Element ID from the latest lorelei.desktop_snapshot, for example e2, or \"focused\" for the current focused UI element.")
                         ]),
                         "text": .object([
                             "type": .string("string"),
@@ -145,10 +152,10 @@ enum CodexAppServerDesktopToolSuite {
             return .failure("desktop_action requires elementId from the latest lorelei.desktop_snapshot.")
         }
         guard let actionText = arguments["action"]?.trimmedStringValue else {
-            return .failure("desktop_action requires action: press, focus, or raise.")
+            return .failure("desktop_action requires action: press, focus, raise, open, select, or showMenu.")
         }
         guard let action = DesktopElementAction(rawValue: actionText) else {
-            return .failure("desktop_action action must be one of: press, focus, raise.")
+            return .failure("desktop_action action must be one of: press, focus, raise, open, select, showMenu.")
         }
 
         let outcome = await executor.perform(action, elementID: elementID)

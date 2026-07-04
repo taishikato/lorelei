@@ -17,6 +17,9 @@ enum DesktopElementAction: String, Equatable, Sendable {
     case press
     case focus
     case raise
+    case open
+    case select
+    case showMenu
 }
 
 enum DesktopSetTextMode: String, Equatable, Sendable {

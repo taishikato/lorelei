@@ -186,6 +186,46 @@ struct LoreleiTests {
         #expect(manager.latestResultSummary == "Opened through App Server.")
     }
 
+    @Test func debugRunURLParsesPromptAndRejectsOthers() async throws {
+        let url = try #require(URL(string: "lorelei://run?prompt=%E3%83%A1%E3%83%A2%20%E3%82%92%20%E9%96%8B%E3%81%84%E3%81%A6"))
+
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: url) == "メモ を 開いて")
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://other")!) == nil)
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "https://run?prompt=open")!) == nil)
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://run")!) == nil)
+    }
+
+    @Test func companionManagerHandlesDebugPromptLikeTranscript() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDebugPromptTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDebugPromptTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Inspected TextEdit."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleDebugPrompt("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Inspected TextEdit." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        #expect(manager.conversationLog.first?.role == .user)
+        #expect(manager.conversationLog.first?.text == "use computer use to inspect TextEdit")
+        #expect(sentMessages.contains { $0["method"] as? String == "turn/start" })
+    }
+
     @Test func companionManagerRegistersDesktopToolSuiteWithForegroundTool() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDesktopToolSuiteRegistrationTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDesktopToolSuiteRegistrationTests")
@@ -636,9 +676,13 @@ struct LoreleiTests {
         #expect(prompt.contains("Codex App Server"))
         #expect(prompt.contains("lorelei.desktop_snapshot"))
         #expect(prompt.contains("lorelei.desktop_action"))
+        #expect(prompt.contains("open/select/showMenu"))
         #expect(prompt.contains("lorelei.set_text"))
+        #expect(prompt.contains("elementId \"focused\""))
         #expect(prompt.contains("lorelei.screenshot"))
         #expect(prompt.contains("Do not simulate keyboard shortcuts."))
+        #expect(prompt.contains("Shell commands may prepare files/data but must NEVER be used to drive UI"))
+        #expect(prompt.contains("AppleScript/osascript UI automation is unavailable"))
         #expect(prompt.contains("Do not commit changes."))
         #expect(!prompt.contains("non-interactive codex exec"))
         #expect(prompt.contains("open TextEdit and type hello"))
@@ -1268,6 +1312,33 @@ struct LoreleiTests {
         ])
     }
 
+    @Test func foregroundActivationPlanYieldsThenActivatesThenOpensBundleFallbackForRunningApps() throws {
+        #expect(LiveDesktopForegrounding.activationPlan(isAppAlreadyRunning: true) == [
+            .yieldActivationToRunningApplication,
+            .activateRunningApplication,
+            .openApplicationActivatingBundleURL,
+            .reResolveRunningApplicationAfterLaunch,
+            .waitUntilFinishedLaunching,
+            .setAccessibilityFrontmost,
+            .retryActivationUntilFrontmostApplication
+        ])
+    }
+
+    @Test func foregroundActivationPlanOpensApplicationForNotRunningApps() throws {
+        #expect(LiveDesktopForegrounding.activationPlan(isAppAlreadyRunning: false) == [
+            .openApplicationActivatingBundleURL,
+            .reResolveRunningApplicationAfterLaunch,
+            .waitUntilFinishedLaunching,
+            .setAccessibilityFrontmost,
+            .retryActivationUntilFrontmostApplication
+        ])
+    }
+
+    @Test func foregroundActivationPlanWaitsForFinishedLaunchingOnColdLaunch() throws {
+        #expect(LiveDesktopForegrounding.shouldWaitForFinishedLaunching(isAppAlreadyRunning: false))
+        #expect(!LiveDesktopForegrounding.shouldWaitForFinishedLaunching(isAppAlreadyRunning: true))
+    }
+
     @Test func foregroundDynamicToolReportsMissingTarget() async throws {
         let recorder = ForegroundEnvironmentRecorder(onscreenResults: [])
         let tool = CodexAppServerDesktopForegroundTool(environment: recorder.environment())
@@ -1467,6 +1538,9 @@ struct LoreleiTests {
         #expect(snapshotProperties["app"] != nil)
         #expect(actionSchema["required"] == .array([.string("elementId"), .string("action")]))
         #expect(setTextSchema["required"] == .array([.string("elementId"), .string("text")]))
+        #expect(snapshotSpec.description.contains("[focused]"))
+        #expect(actionSpec.description.contains("\"focused\""))
+        #expect(setTextSpec.description.contains("\"focused\""))
         #expect(screenshotSpec.description.contains("Fallback"))
         #expect(screenshotSpec.description.contains("lorelei.desktop_snapshot"))
 
@@ -1478,9 +1552,24 @@ struct LoreleiTests {
             return
         }
 
-        #expect(actionProperties["elementId"] != nil)
-        #expect(actionEnum == [.string("press"), .string("focus"), .string("raise")])
-        #expect(setTextProperties["elementId"] != nil)
+        guard case .object(let actionElementIDProperty) = actionProperties["elementId"],
+              case .object(let setTextElementIDProperty) = setTextProperties["elementId"],
+              case .string(let actionElementIDDescription) = actionElementIDProperty["description"],
+              case .string(let setTextElementIDDescription) = setTextElementIDProperty["description"] else {
+            Issue.record("Expected elementId schemas.")
+            return
+        }
+
+        #expect(actionElementIDDescription.contains("\"focused\""))
+        #expect(setTextElementIDDescription.contains("\"focused\""))
+        #expect(actionEnum == [
+            .string("press"),
+            .string("focus"),
+            .string("raise"),
+            .string("open"),
+            .string("select"),
+            .string("showMenu")
+        ])
         #expect(setTextProperties["text"] != nil)
         #expect(modeEnum == [.string("replace"), .string("insert")])
     }
@@ -1512,7 +1601,7 @@ struct LoreleiTests {
                 tool: "desktop_action",
                 arguments: .object([
                     "elementId": .string("e2"),
-                    "action": .string("press")
+                    "action": .string("showMenu")
                 ])
             ),
             executor: executor
@@ -1521,8 +1610,24 @@ struct LoreleiTests {
         #expect(result.success)
         #expect(result.contentItems == [.text("ok")])
         #expect(executor.performCalls.count == 1)
-        #expect(executor.performCalls.first?.0 == .press)
+        #expect(executor.performCalls.first?.0 == .showMenu)
         #expect(executor.performCalls.first?.1 == "e2")
+
+        let focusedResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "desktop_action",
+                arguments: .object([
+                    "elementId": .string("focused"),
+                    "action": .string("focus")
+                ])
+            ),
+            executor: executor
+        )
+
+        #expect(focusedResult.success)
+        #expect(executor.performCalls.count == 2)
+        #expect(executor.performCalls[1].0 == .focus)
+        #expect(executor.performCalls[1].1 == "focused")
     }
 
     @Test func desktopToolSuiteSetTextDefaultsToReplaceMode() async throws {
@@ -1559,6 +1664,23 @@ struct LoreleiTests {
         #expect(executor.setTextCalls[1].0 == " there")
         #expect(executor.setTextCalls[1].1 == "e2")
         #expect(executor.setTextCalls[1].2 == .insert)
+
+        let focusedResult = await CodexAppServerDesktopToolSuite.handle(
+            desktopToolRequest(
+                tool: "set_text",
+                arguments: .object([
+                    "elementId": .string("focused"),
+                    "text": .string("Focused body")
+                ])
+            ),
+            executor: executor
+        )
+
+        #expect(focusedResult.success)
+        #expect(executor.setTextCalls.count == 3)
+        #expect(executor.setTextCalls[2].0 == "Focused body")
+        #expect(executor.setTextCalls[2].1 == "focused")
+        #expect(executor.setTextCalls[2].2 == .replace)
     }
 
     @Test func desktopToolSuiteReportsStaleElementAsToolFailure() async throws {
@@ -1730,6 +1852,152 @@ struct LoreleiTests {
         #expect(registry == ["e1": 0, "e2": 1])
     }
 
+    @Test func axSerializerIncludesHintsAndRoleDescriptionsWhenTheyAddInformation() throws {
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Notes",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXButton",
+                    title: "New Folder",
+                    roleDescription: "toolbar button",
+                    value: nil,
+                    hint: "Create a new folder",
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: []
+                ),
+                DesktopUINode(
+                    role: "AXButton",
+                    title: "New Note",
+                    roleDescription: "New Note",
+                    value: nil,
+                    hint: "New Note",
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: []
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+
+        #expect(result.text == """
+        [e1] AXWindow "Notes"
+          [e2] AXButton "New Folder" roleDescription="toolbar button" hint="Create a new folder"
+          [e3] AXButton "New Note"
+        """)
+    }
+
+    @Test func axSerializerPrioritizesMenuBarAndFocusedWindowChromeBeforeLargeLists() throws {
+        let rows = (0..<26).map { index in
+            DesktopUINode(
+                role: "AXRow",
+                title: "Note \(index)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                supportedActions: [.press, .open, .showMenu],
+                children: []
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXApplication",
+            title: "Notes",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXWindow",
+                    title: "Notes",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: true,
+                    children: [
+                        DesktopUINode(
+                            role: "AXList",
+                            title: "Notes list",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: rows
+                        ),
+                        DesktopUINode(
+                            role: "AXToolbar",
+                            title: nil,
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: [
+                                DesktopUINode(
+                                    role: "AXButton",
+                                    title: "New Note",
+                                    value: nil,
+                                    frame: nil,
+                                    isEnabled: true,
+                                    isFocused: false,
+                                    children: []
+                                )
+                            ]
+                        )
+                    ]
+                ),
+                DesktopUINode(
+                    role: "AXMenuBar",
+                    title: nil,
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: [
+                        DesktopUINode(
+                            role: "AXMenuBarItem",
+                            title: "File",
+                            value: nil,
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: false,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines.prefix(9) == [
+            "[e1] AXApplication \"Notes\"",
+            "  [e2] AXMenuBar",
+            "    [e3] AXMenuBarItem \"File\"",
+            "  [e4] AXWindow \"Notes\" focused",
+            "    [e5] AXToolbar",
+            "      [e6] AXButton \"New Note\"",
+            "    [e7] AXList \"Notes list\"",
+            "      [e8] AXRow \"Note 0\" actions=\"open,showMenu\"",
+            "      [e9] AXRow \"Note 1\" actions=\"open,showMenu\""
+        ])
+        #expect(lines.contains("      … (+2 more rows)"))
+        #expect(result.elementCount == 31)
+        #expect(registry["e31"] == 30)
+        #expect(registry["e32"] == nil)
+    }
+
     @Test func axSerializerTruncatesLongValuesAndElementCount() throws {
         let longValue = String(repeating: "a", count: 90)
         let children = (0..<401).map { index in
@@ -1767,6 +2035,170 @@ struct LoreleiTests {
         #expect(registry["e401"] == nil)
     }
 
+    @Test func axSerializerPrefixesFocusedElementOutsideNormalBudget() throws {
+        let children = (0..<400).map { index in
+            DesktopUINode(
+                role: "AXButton",
+                title: "Button \(index)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                children: []
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: children
+        )
+        let focusedNode = DesktopUINode(
+            role: "AXTextArea",
+            title: nil,
+            value: "Draft body",
+            frame: nil,
+            isEnabled: true,
+            isFocused: true,
+            children: []
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(
+            root,
+            assigningIDsInto: &registry,
+            focusedLine: (node: focusedNode, elementID: "e401", registryIndex: 400)
+        )
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines.first == "[focused] [e401] AXTextArea value=\"Draft body\" focused")
+        #expect(lines[1] == "[e1] AXWindow \"Demo\"")
+        #expect(result.elementCount == 401)
+        #expect(registry["e401"] == 400)
+    }
+
+    @Test func axSerializerKeepsFocusedLineAndTreeLineOnSameElementID() throws {
+        let focusedNode = DesktopUINode(
+            role: "AXTextArea",
+            title: nil,
+            value: "Draft body",
+            frame: nil,
+            isEnabled: true,
+            isFocused: true,
+            children: []
+        )
+        let root = DesktopUINode(
+            role: "AXWindow",
+            title: "Demo",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [focusedNode]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(
+            root,
+            assigningIDsInto: &registry,
+            focusedLine: (node: focusedNode, elementID: "e2", registryIndex: 1)
+        )
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines == [
+            "[focused] [e2] AXTextArea value=\"Draft body\" focused",
+            "[e1] AXWindow \"Demo\"",
+            "  [e2] AXTextArea value=\"Draft body\" focused"
+        ])
+        #expect(result.elementCount == 2)
+        #expect(registry == ["e1": 0, "e2": 1])
+    }
+
+    @Test func axSerializerBudgetsMenuChildrenAndPreservesWindowContent() throws {
+        let menus = (0..<6).map { menuIndex in
+            DesktopUINode(
+                role: "AXMenuBarItem",
+                title: "Menu \(menuIndex)",
+                value: nil,
+                frame: nil,
+                isEnabled: true,
+                isFocused: false,
+                children: [
+                    DesktopUINode(
+                        role: "AXMenu",
+                        title: nil,
+                        value: nil,
+                        frame: nil,
+                        isEnabled: true,
+                        isFocused: false,
+                        children: (0..<30).map { itemIndex in
+                            DesktopUINode(
+                                role: "AXMenuItem",
+                                title: "Item \(menuIndex)-\(itemIndex)",
+                                value: nil,
+                                frame: nil,
+                                isEnabled: true,
+                                isFocused: false,
+                                children: []
+                            )
+                        }
+                    )
+                ]
+            )
+        }
+        let root = DesktopUINode(
+            role: "AXApplication",
+            title: "Notes",
+            value: nil,
+            frame: nil,
+            isEnabled: true,
+            isFocused: false,
+            children: [
+                DesktopUINode(
+                    role: "AXMenuBar",
+                    title: nil,
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: false,
+                    children: menus
+                ),
+                DesktopUINode(
+                    role: "AXWindow",
+                    title: "Notes",
+                    value: nil,
+                    frame: nil,
+                    isEnabled: true,
+                    isFocused: true,
+                    children: [
+                        DesktopUINode(
+                            role: "AXTextArea",
+                            title: nil,
+                            value: "Window text survives",
+                            frame: nil,
+                            isEnabled: true,
+                            isFocused: true,
+                            children: []
+                        )
+                    ]
+                )
+            ]
+        )
+        var registry: [String: Int] = [:]
+
+        let result = AXDesktopActionExecutor.serialize(root, assigningIDsInto: &registry)
+        let lines = result.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(lines.contains { $0.contains("… (+6 more rows)") })
+        #expect(result.text.contains("AXWindow \"Notes\" focused"))
+        #expect(result.text.contains("AXTextArea value=\"Window text survives\" focused"))
+        #expect(!result.text.contains("Item 0-24"))
+        #expect(result.elementCount < 170)
+    }
+
     @Test func axExecutorRejectsActionsWithUnknownElementID() async throws {
         let executor = AXDesktopActionExecutor(hasAccessibilityPermission: { true })
 
@@ -1782,6 +2214,15 @@ struct LoreleiTests {
         let result = await executor.snapshot(appName: nil)
 
         #expect(result == .failure(.accessibilityPermissionMissing))
+    }
+
+    @Test func appServerExecutorDefaultTurnTimeoutIsFiveMinutes() async throws {
+        let executor = CodexAppServerExecutor(
+            makeTransport: { FakeCodexAppServerTransport(lines: []) },
+            approvalHandler: { _ in .accept }
+        )
+
+        #expect(executor.defaultedTurnTimeoutSecondsForTesting == 300)
     }
 
     @Test func appServerExecutorAnswersMcpElicitationApprovalWithZeroID() async throws {
@@ -3500,7 +3941,7 @@ private final class ForegroundEnvironmentRecorder {
             },
             activateApp: { [weak self] appName, bundleIdentifier in
                 self?.events.append("activate:\(appName ?? "nil"):\(bundleIdentifier ?? "nil")")
-                return true
+                return .success()
             },
             appHasOnscreenWindow: { [weak self] appName, bundleIdentifier in
                 self?.events.append("check:\(appName ?? "nil"):\(bundleIdentifier ?? "nil")")

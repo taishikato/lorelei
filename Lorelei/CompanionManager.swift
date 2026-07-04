@@ -10,6 +10,7 @@
 import Combine
 import Foundation
 import AVFoundation
+import NaturalLanguage
 import ScreenCaptureKit
 import SwiftUI
 
@@ -37,7 +38,28 @@ final class SpeechOutputClient: SpeechOutputing {
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
-        synthesizer.speak(AVSpeechUtterance(string: text))
+        let utterance = AVSpeechUtterance(string: text)
+        // The default voice follows the system language and SILENTLY skips
+        // text in other scripts (Japanese summaries were never spoken on an
+        // English system). Pick a voice matching the text's dominant language.
+        if let voice = Self.voice(forText: text) {
+            utterance.voice = voice
+        }
+        synthesizer.speak(utterance)
+    }
+
+    static func voice(forText text: String) -> AVSpeechSynthesisVoice? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let language = recognizer.dominantLanguage else { return nil }
+
+        let code = language.rawValue // e.g. "ja", "en"
+        if let exact = AVSpeechSynthesisVoice(language: code) {
+            return exact
+        }
+        return AVSpeechSynthesisVoice.speechVoices().first { voice in
+            voice.language.hasPrefix("\(code)-") || voice.language == code
+        }
     }
 }
 
@@ -466,6 +488,10 @@ final class CompanionManager: ObservableObject {
 #if DEBUG
     func handleFinalTranscriptForTesting(_ transcript: String) {
         handleFinalTranscriptLocally(transcript)
+    }
+
+    func handleDebugPrompt(_ prompt: String) {
+        handleFinalTranscriptLocally(prompt)
     }
 #endif
 

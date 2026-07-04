@@ -356,7 +356,7 @@ final class CodexAppServerExecutor {
     private let approvalHandler: (CodexAppServerApprovalRequest) async -> CodexAppServerApprovalDecision
 
     init(
-        turnTimeoutSeconds: TimeInterval = 120,
+        turnTimeoutSeconds: TimeInterval = 300,
         timeoutInterruptGraceSeconds: TimeInterval = 5,
         makeTransport: @escaping () async throws -> CodexAppServerTransporting = {
             try await CodexAppServerStdioTransport.make()
@@ -387,6 +387,12 @@ final class CodexAppServerExecutor {
         self.onTransportReady = onTransportReady
         self.approvalHandler = approvalHandler
     }
+
+#if DEBUG
+    var defaultedTurnTimeoutSecondsForTesting: TimeInterval {
+        turnTimeoutSeconds
+    }
+#endif
 
     func runTurn(
         prompt: String,
