@@ -12,6 +12,8 @@ struct LoreleiToolbarView: View {
     @ObservedObject var expansionState: LoreleiToolbarExpansionState
     let toggleExpansion: @MainActor @Sendable () -> Void
 
+    @State private var isPeekHovered = false
+
     var body: some View {
         Group {
             if !expansionState.isExpanded && expansionState.showsNotchPeek {
@@ -56,6 +58,11 @@ struct LoreleiToolbarView: View {
     /// Lorelei peeking out from behind the notch: a glass head shape whose
     /// top runs under the physical camera housing (invisible), leaving only
     /// the chin with the face visible below the notch edge.
+    ///
+    /// Clickability affordance: the window is a bit taller than the resting
+    /// chin, and on hover the head leans further out (bottom inset animates
+    /// to zero) with a pointing-hand cursor - the motion signals that the
+    /// face is a control, not a decoration.
     private var notchPeek: some View {
         GlassEffectContainer {
             Button(action: { deferredAction { toggleExpansion() } }) {
@@ -71,10 +78,20 @@ struct LoreleiToolbarView: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: peekHeadShape)
+            .padding(.bottom, isPeekHovered ? 0 : peekHoverLeanDistance)
+            .animation(.snappy(duration: 0.18), value: isPeekHovered)
+            .onHover { hovering in
+                isPeekHovered = hovering
+            }
+            .pointerCursor()
             .help(Self.statusLabel(for: companionManager.runStatus))
             .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
         }
     }
+
+    /// Extra chin the peek gains while hovered. Must match the difference
+    /// between the controller's window chin height and the resting look.
+    private let peekHoverLeanDistance: CGFloat = 8
 
     private var peekHeadShape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(
@@ -105,8 +122,9 @@ struct LoreleiToolbarView: View {
                 approvalBlock
             }
 
-            Spacer(minLength: 0)
-            footer
+            if showsStopButton {
+                footer
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -155,7 +173,7 @@ struct LoreleiToolbarView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: .infinity)
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -232,12 +250,10 @@ struct LoreleiToolbarView: View {
         HStack {
             Spacer()
 
-            if showsStopButton {
-                Button("Stop") {
-                    deferredAction { companionManager.stopCurrentRun() }
-                }
-                .buttonStyle(.bordered)
+            Button("Stop") {
+                deferredAction { companionManager.stopCurrentRun() }
             }
+            .buttonStyle(.bordered)
         }
     }
 

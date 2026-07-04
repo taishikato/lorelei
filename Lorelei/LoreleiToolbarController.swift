@@ -22,7 +22,9 @@ final class LoreleiToolbarController {
         static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
         static let peekWidth: CGFloat = 104
-        static let peekChinHeight: CGFloat = 22
+        // 22pt resting chin + 8pt of hover lean-out headroom; the view keeps
+        // the extra 8pt as bottom padding until the pointer hovers the head.
+        static let peekChinHeight: CGFloat = 30
     }
 
     private let companionManager: CompanionManager
