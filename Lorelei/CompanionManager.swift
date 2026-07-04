@@ -459,6 +459,8 @@ final class CompanionManager: ObservableObject {
             return
         }
 
+        LoreleiAnalytics.capture(.runStopped)
+
         if let activeTurn,
            let liveCodexAppServerTransport,
            let codexAppServerExecutor {
@@ -529,6 +531,11 @@ final class CompanionManager: ObservableObject {
                         transport: liveCodexAppServerTransport
                     )
                     appendConversationEntry(role: .user, text: "↪ \(transcript)")
+                    LoreleiAnalytics.capture(.steerSent)
+                    LoreleiAnalytics.capture(.dictationCompleted(
+                        transcriptCharacters: transcript.count,
+                        viaSteer: true
+                    ))
                     // Close the streaming assistant entry so the reply to
                     // the steer opens a NEW entry below it - otherwise all
                     // deltas keep appending to the pre-steer bubble and the
@@ -537,6 +544,7 @@ final class CompanionManager: ObservableObject {
                     recordDebugEvent("Steered: \(Self.conciseDebugLine(transcript))")
                 } catch {
                     outstandingSteerTranscripts.removeValue(forKey: requestID)
+                    LoreleiAnalytics.capture(.steerFailed)
                     recordDebugEvent("Steer failed - starting a new turn")
                     routeFinalTranscriptAsNewTurn(transcript)
                 }
@@ -555,6 +563,10 @@ final class CompanionManager: ObservableObject {
             appendConversationEntry(role: .user, text: transcript)
         }
         currentAssistantConversationEntryID = nil
+        LoreleiAnalytics.capture(.dictationCompleted(
+            transcriptCharacters: transcript.count,
+            viaSteer: false
+        ))
         recordDebugEvent("Transcript: \(Self.conciseDebugLine(transcript))")
         let action = commandRouter.route(transcript)
         recordDebugEvent("Route: \(action.debugLabel)")
@@ -626,6 +638,7 @@ final class CompanionManager: ObservableObject {
             runStatusIdleReturnTask?.cancel()
             runStatusIdleReturnTask = nil
             runStatus = .needsApproval(request.title)
+            LoreleiAnalytics.capture(.approvalRequested)
             recordDebugEvent("Waiting for App Server approval: \(request.title)")
             updateLatestResultSummary(request.detail)
             audioFeedback.play(.approvalRequested, spokenSummary: nil)
@@ -643,6 +656,7 @@ final class CompanionManager: ObservableObject {
         case .cancel:
             recordDebugEvent("App Server approval cancelled")
         }
+        LoreleiAnalytics.capture(.approvalResolved(accepted: decision == .accept))
         continuation.resume(returning: decision)
         return true
     }
@@ -681,8 +695,10 @@ final class CompanionManager: ObservableObject {
         let cwd = codexAppServerWorkingDirectory()
         recordDebugEvent("Codex App Server desktop action started")
         recordDebugEvent("Codex App Server cwd: \(cwd)")
+        LoreleiAnalytics.capture(.turnStarted(sandboxPolicy: "desktopAction"))
+        let turnStartedAt = Date()
 
-        return await withDesktopActionOverlayHidden {
+        let result = await withDesktopActionOverlayHidden {
             if let codexAppServerDesktopActionRunner = self.codexAppServerDesktopActionRunner {
                 return await codexAppServerDesktopActionRunner(appServerPrompt, cwd)
             }
@@ -690,6 +706,12 @@ final class CompanionManager: ObservableObject {
             let executor = self.sharedCodexAppServerExecutor()
             return await executor.runDesktopAction(prompt: appServerPrompt, cwd: cwd)
         }
+
+        LoreleiAnalytics.capture(.turnCompleted(
+            success: result.status == .succeeded,
+            durationSeconds: Date().timeIntervalSince(turnStartedAt)
+        ))
+        return result
     }
 
     private func runCodexAppServerTurn(
@@ -701,8 +723,10 @@ final class CompanionManager: ObservableObject {
         let cwd = codexAppServerWorkingDirectory()
         recordDebugEvent("Codex App Server turn started")
         recordDebugEvent("Codex App Server cwd: \(cwd)")
+        LoreleiAnalytics.capture(.turnStarted(sandboxPolicy: sandboxPolicy))
+        let turnStartedAt = Date()
 
-        return await withDesktopActionOverlayHidden {
+        let result = await withDesktopActionOverlayHidden {
             let executor = self.sharedCodexAppServerExecutor()
             return await executor.runTurn(
                 prompt: prompt,
@@ -712,6 +736,12 @@ final class CompanionManager: ObservableObject {
                 removeLocalImageInputsAfterRun: removeLocalImageInputsAfterRun
             )
         }
+
+        LoreleiAnalytics.capture(.turnCompleted(
+            success: result.status == .succeeded,
+            durationSeconds: Date().timeIntervalSince(turnStartedAt)
+        ))
+        return result
     }
 
     private func sharedCodexAppServerExecutor() -> CodexAppServerExecutor {
@@ -857,6 +887,7 @@ final class CompanionManager: ObservableObject {
             guard let transcript = outstandingSteerTranscripts.removeValue(forKey: requestID) else {
                 return
             }
+            LoreleiAnalytics.capture(.steerFailed)
             recordDebugEvent("Steer failed - starting a new turn")
             routeFinalTranscriptAsNewTurn(transcript, appendUserEntry: false)
         case .agentMessageDelta(let delta):

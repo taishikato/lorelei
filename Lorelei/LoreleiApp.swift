@@ -52,6 +52,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 0])
 
+        LoreleiAnalytics.capture(.appLaunched)
+
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         toolbarController = LoreleiToolbarController(companionManager: companionManager)
         menuBarPanelManager?.onPanelVisibilityChanged = { [weak self] visible in

@@ -66,6 +66,9 @@ final class LoreleiToolbarController {
     func setExpanded(_ expanded: Bool) {
         guard expansionState.isExpanded != expanded else { return }
         expansionState.isExpanded = expanded
+        if expanded {
+            LoreleiAnalytics.capture(.toolbarExpanded)
+        }
         guard let panel else { return }
         positionPanel(panel, animated: true)
     }
