@@ -27,6 +27,14 @@ protocol BuddyTranscriptionProvider {
         onFinalTranscriptReady: @escaping (String) -> Void,
         onError: @escaping (Error) -> Void
     ) async throws -> any BuddyStreamingTranscriptionSession
+
+    /// Optional warm-up performed once at app launch so the first real
+    /// session does not pay model-loading latency.
+    func prewarm() async
+}
+
+extension BuddyTranscriptionProvider {
+    func prewarm() async {}
 }
 
 enum BuddyTranscriptionProviderFactory {

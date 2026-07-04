@@ -214,7 +214,11 @@ private struct BuddyDictationDraftCallbacks {
 
 @MainActor
 final class BuddyDictationManager: NSObject, ObservableObject {
-    private static let defaultFinalTranscriptFallbackDelaySeconds: TimeInterval = 2.4
+    // Used when the shortcut is released before the transcription session
+    // exists: the provider still has to finish starting AND finalize the
+    // prerolled audio within this window, so it is longer than the
+    // per-session fallback the providers report themselves.
+    private static let defaultFinalTranscriptFallbackDelaySeconds: TimeInterval = 4.0
     private static let recordedAudioPowerHistoryLength = 44
     private static let recordedAudioPowerHistoryBaselineLevel: CGFloat = 0.02
     private static let recordedAudioPowerHistorySampleIntervalSeconds: TimeInterval = 0.07
@@ -258,6 +262,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private let transcriptionProvider: any BuddyTranscriptionProvider
     private let audioEngine = AVAudioEngine()
     private var activeTranscriptionSession: (any BuddyStreamingTranscriptionSession)?
+    private var audioPrerollForwarder: BuddyAudioPrerollForwarder?
     private var activeStartSource: BuddyDictationStartSource?
     private var draftCallbacks: BuddyDictationDraftCallbacks?
     private var draftTextBeforeCurrentDictation = ""
@@ -278,6 +283,10 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         self.transcriptionProvider = transcriptionProvider
         self.transcriptionProviderDisplayName = transcriptionProvider.displayName
         super.init()
+
+        Task.detached(priority: .utility) {
+            await transcriptionProvider.prewarm()
+        }
     }
 
     func updateContextualKeyterms(_ contextualKeyterms: [String]) {
@@ -441,13 +450,28 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         }
 
         do {
-            try await startRecognitionSession()
+            // Shield the provider startup from push-to-talk release: if the
+            // parent task's cancellation propagated into the provider, a
+            // quick press-speak-release would abort the session and throw
+            // away audio the preroll has already captured. Release during
+            // startup is handled below via isFinalizingTranscript instead.
+            let recognitionSessionStartTask = Task { try await self.startRecognitionSession() }
+            try await recognitionSessionStartTask.value
             guard !Task.isCancelled else {
-                print("🎙️ BuddyDictationManager: start cancelled (shortcut released during session start)")
-                audioEngine.stop()
-                audioEngine.inputNode.removeTap(onBus: 0)
-                activeTranscriptionSession?.cancel()
-                resetSessionState()
+                if isFinalizingTranscript {
+                    // The shortcut was released while the provider was still
+                    // starting. The preroll captured the whole utterance, so
+                    // finalize it instead of dropping the audio - quick
+                    // press-speak-release commands used to be lost here.
+                    print("🎙️ BuddyDictationManager: finalizing utterance captured during session start")
+                    activeTranscriptionSession?.requestFinalTranscript()
+                } else {
+                    print("🎙️ BuddyDictationManager: start cancelled (shortcut released during session start)")
+                    audioEngine.stop()
+                    audioEngine.inputNode.removeTap(onBus: 0)
+                    activeTranscriptionSession?.cancel()
+                    resetSessionState()
+                }
                 return
             }
             if startSource == .microphoneButton {
@@ -507,49 +531,68 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private func startRecognitionSession() async throws {
         activeTranscriptionSession?.cancel()
         activeTranscriptionSession = nil
+        audioPrerollForwarder?.discard()
 
-        print("🎙️ BuddyDictationManager: opening transcription provider \(transcriptionProvider.displayName)")
-
-        let activeTranscriptionSession = try await transcriptionProvider.startStreamingSession(
-            keyterms: buildTranscriptionKeyterms(),
-            onTranscriptUpdate: { [weak self] transcriptText in
-                Task { @MainActor in
-                    self?.latestRecognizedText = transcriptText
-                }
-            },
-            onFinalTranscriptReady: { [weak self] transcriptText in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.latestRecognizedText = transcriptText
-
-                    if self.isFinalizingTranscript {
-                        self.finishCurrentDictationSessionIfNeeded(
-                            shouldSubmitFinalDraft: self.shouldAutomaticallySubmitFinalDraft
-                        )
-                    }
-                }
-            },
-            onError: { [weak self] error in
-                Task { @MainActor in
-                    self?.handleRecognitionError(error)
-                }
-            }
-        )
-
-        self.activeTranscriptionSession = activeTranscriptionSession
-        print("🎙️ BuddyDictationManager: provider ready, starting audio engine")
+        // Capture from the first instant of the hold: the provider can take
+        // over a second to come up (model load, asset checks), and speech
+        // from the beginning of the utterance used to be lost in that
+        // window. The forwarder buffers everything until the session is
+        // ready, then replays it in order.
+        let prerollForwarder = BuddyAudioPrerollForwarder()
+        audioPrerollForwarder = prerollForwarder
 
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-            self?.activeTranscriptionSession?.appendAudioBuffer(buffer)
+            prerollForwarder.forward(buffer)
             self?.updateAudioPowerLevel(from: buffer)
         }
 
         audioEngine.prepare()
         try audioEngine.start()
+
+        print("🎙️ BuddyDictationManager: audio capture started, opening transcription provider \(transcriptionProvider.displayName)")
+
+        let activeTranscriptionSession: any BuddyStreamingTranscriptionSession
+        do {
+            activeTranscriptionSession = try await transcriptionProvider.startStreamingSession(
+                keyterms: buildTranscriptionKeyterms(),
+                onTranscriptUpdate: { [weak self] transcriptText in
+                    Task { @MainActor in
+                        self?.latestRecognizedText = transcriptText
+                    }
+                },
+                onFinalTranscriptReady: { [weak self] transcriptText in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.latestRecognizedText = transcriptText
+
+                        if self.isFinalizingTranscript {
+                            self.finishCurrentDictationSessionIfNeeded(
+                                shouldSubmitFinalDraft: self.shouldAutomaticallySubmitFinalDraft
+                            )
+                        }
+                    }
+                },
+                onError: { [weak self] error in
+                    Task { @MainActor in
+                        self?.handleRecognitionError(error)
+                    }
+                }
+            )
+        } catch {
+            audioEngine.stop()
+            inputNode.removeTap(onBus: 0)
+            prerollForwarder.discard()
+            audioPrerollForwarder = nil
+            throw error
+        }
+
+        self.activeTranscriptionSession = activeTranscriptionSession
+        prerollForwarder.attach(activeTranscriptionSession)
+        print("🎙️ BuddyDictationManager: provider ready, preroll flushed")
     }
 
     private func handleRecognitionError(_ error: Error) {
@@ -622,6 +665,8 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     private func resetSessionState() {
         pendingStartRequestIdentifier = UUID()
         activeTranscriptionSession = nil
+        audioPrerollForwarder?.discard()
+        audioPrerollForwarder = nil
         draftCallbacks = nil
         activeStartSource = nil
         draftTextBeforeCurrentDictation = ""

@@ -78,6 +78,42 @@ final class SpeechAnalyzerTranscriptionProvider: BuddyTranscriptionProvider {
         }
     }
 
+    /// Loads the dictation model ahead of the first push-to-talk press so
+    /// the first real session starts fast. Combined with the
+    /// processLifetime retention policy the model then stays resident.
+    func prewarm() async {
+        let locale = await Self.bestAvailableLocale()
+        let transcriber = DictationTranscriber(
+            locale: locale,
+            contentHints: [.shortForm],
+            transcriptionOptions: [.punctuation],
+            reportingOptions: [.volatileResults, .frequentFinalization],
+            attributeOptions: []
+        )
+
+        do {
+            try await ensureAssetsAvailable(for: transcriber)
+        } catch {
+            print("SpeechAnalyzer: prewarm asset check failed: \(error)")
+            return
+        }
+
+        let modules: [any SpeechModule] = [transcriber]
+        let targetAudioFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules)
+        let analyzer = SpeechAnalyzer(
+            modules: modules,
+            options: SpeechAnalyzer.Options(priority: .utility, modelRetention: .processLifetime)
+        )
+
+        do {
+            try await analyzer.prepareToAnalyze(in: targetAudioFormat)
+        } catch {
+            print("SpeechAnalyzer: prewarm failed: \(error)")
+        }
+
+        await analyzer.cancelAndFinishNow()
+    }
+
     func startStreamingSession(
         keyterms: [String],
         onTranscriptUpdate: @escaping (String) -> Void,
@@ -207,7 +243,10 @@ private final class SpeechAnalyzerTranscriptionSession: BuddyStreamingTranscript
 
         self.analyzer = SpeechAnalyzer(
             modules: modules,
-            options: SpeechAnalyzer.Options(priority: .userInitiated, modelRetention: .whileInUse)
+            // processLifetime keeps the dictation model resident between
+            // push-to-talk sessions; whileInUse reloaded it on every press,
+            // adding over a second of startup before audio was accepted.
+            options: SpeechAnalyzer.Options(priority: .userInitiated, modelRetention: .processLifetime)
         )
         self.inputContinuation = streamContinuation!
         self.onTranscriptUpdate = onTranscriptUpdate
