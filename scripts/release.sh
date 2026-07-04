@@ -27,8 +27,8 @@ require_developer_id_identity() {
 }
 
 require_notary_profile() {
-  if ! security find-generic-password -s 'com.apple.gke.notary.tool' -a "${NOTARY_PROFILE}" >/dev/null 2>&1 \
-    && ! security find-generic-password -s "${NOTARY_PROFILE}" >/dev/null 2>&1; then
+  # Ask notarytool itself - keychain item naming is an implementation detail.
+  if ! xcrun notarytool history --keychain-profile "${NOTARY_PROFILE}" >/dev/null 2>&1; then
     fail "Missing notary keychain profile '${NOTARY_PROFILE}'. Recreate it with 'xcrun notarytool store-credentials ${NOTARY_PROFILE} --team-id ${TEAM_ID} --apple-id <apple-id> --password <app-specific-password>'. See docs/release.md."
   fi
 }
