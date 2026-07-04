@@ -26,14 +26,17 @@ private class KeyablePanel: NSPanel {
 
 @MainActor
 final class MenuBarPanelManager: NSObject {
+    /// Notified when the settings dropdown appears/disappears (used to
+    /// conceal the floating toolbar so the glass surfaces do not overlap).
+    var onPanelVisibilityChanged: ((Bool) -> Void)?
     private var statusItem: NSStatusItem?
     private var panel: NSPanel?
     private var clickOutsideMonitor: Any?
     private var dismissPanelObserver: NSObjectProtocol?
 
     private let companionManager: CompanionManager
-    private let panelWidth: CGFloat = 320
-    private let panelHeight: CGFloat = 380
+    private let panelWidth: CGFloat = 340
+    private let minimumPanelHeight: CGFloat = 1
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
@@ -73,39 +76,38 @@ final class MenuBarPanelManager: NSObject {
         button.target = self
     }
 
-    /// Draws the Lorelei cursor triangle as a menu bar icon. Uses the same shape
-    /// and rotation as the in-app cursor so the menu bar icon matches.
+    /// Draws the Lorelei face as a template menu bar icon so it adapts to the
+    /// current menu bar appearance.
     private func makeLoreleiMenuBarIcon() -> NSImage {
         let iconSize: CGFloat = 18
         let image = NSImage(size: NSSize(width: iconSize, height: iconSize))
         image.lockFocus()
 
-        let triangleSize = iconSize * 0.7
-        let cx = iconSize * 0.50
-        let cy = iconSize * 0.50
-        let height = triangleSize * sqrt(3.0) / 2.0
-
-        let top = CGPoint(x: cx, y: cy + height / 1.5)
-        let bottomLeft = CGPoint(x: cx - triangleSize / 2, y: cy - height / 3)
-        let bottomRight = CGPoint(x: cx + triangleSize / 2, y: cy - height / 3)
-
-        let angle = 35.0 * .pi / 180.0
-        func rotate(_ point: CGPoint) -> CGPoint {
-            let dx = point.x - cx, dy = point.y - cy
-            let cosA = CGFloat(cos(angle)), sinA = CGFloat(sin(angle))
-            return CGPoint(x: cx + cosA * dx - sinA * dy, y: cy + sinA * dx + cosA * dy)
-        }
-
-        let path = NSBezierPath()
-        path.move(to: rotate(top))
-        path.line(to: rotate(bottomLeft))
-        path.line(to: rotate(bottomRight))
-        path.close()
-
         NSColor.black.setFill()
-        path.fill()
+        NSColor.black.setStroke()
+
+        let faceRect = NSRect(x: 2.25, y: 3.4, width: 13.5, height: 11.2)
+        let outline = NSBezierPath(roundedRect: faceRect, xRadius: 5.2, yRadius: 5.2)
+        outline.lineWidth = 1.6
+        outline.stroke()
+
+        let eyeSize: CGFloat = 2.2
+        NSBezierPath(ovalIn: NSRect(x: 5.0, y: 8.3, width: eyeSize, height: eyeSize)).fill()
+        NSBezierPath(ovalIn: NSRect(x: 10.8, y: 8.3, width: eyeSize, height: eyeSize)).fill()
+
+        let mouth = NSBezierPath()
+        mouth.move(to: CGPoint(x: 6.4, y: 6.5))
+        mouth.curve(
+            to: CGPoint(x: 11.6, y: 6.5),
+            controlPoint1: CGPoint(x: 7.6, y: 5.7),
+            controlPoint2: CGPoint(x: 10.4, y: 5.7)
+        )
+        mouth.lineWidth = 1.25
+        mouth.lineCapStyle = .round
+        mouth.stroke()
 
         image.unlockFocus()
+        image.isTemplate = true
         return image
     }
 
@@ -138,24 +140,30 @@ final class MenuBarPanelManager: NSObject {
         panel?.makeKeyAndOrderFront(nil)
         panel?.orderFrontRegardless()
         installClickOutsideMonitor()
+        onPanelVisibilityChanged?(true)
     }
 
     private func hidePanel() {
         panel?.orderOut(nil)
         removeClickOutsideMonitor()
+        onPanelVisibilityChanged?(false)
     }
 
     private func createPanel() {
-        let companionPanelView = CompanionPanelView(companionManager: companionManager)
-            .frame(width: panelWidth)
+        let companionPanelView = AnyView(
+            CompanionPanelView(companionManager: companionManager)
+                .frame(width: panelWidth)
+        )
 
         let hostingView = NSHostingView(rootView: companionPanelView)
-        hostingView.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
+        hostingView.frame = NSRect(x: 0, y: 0, width: panelWidth, height: minimumPanelHeight)
         hostingView.wantsLayer = true
+        hostingView.layer?.isOpaque = false
         hostingView.layer?.backgroundColor = .clear
 
+        let panelSize = Self.fittingPanelSize(for: hostingView, width: panelWidth, minimumHeight: minimumPanelHeight)
         let menuBarPanel = KeyablePanel(
-            contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
+            contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -165,6 +173,8 @@ final class MenuBarPanelManager: NSObject {
         menuBarPanel.level = .floating
         menuBarPanel.isOpaque = false
         menuBarPanel.backgroundColor = .clear
+        // A window shadow on a translucent panel draws a rectangular outline
+        // around the rounded glass - the SwiftUI shape carries its own shadow.
         menuBarPanel.hasShadow = false
         menuBarPanel.hidesOnDeactivate = false
         menuBarPanel.isExcludedFromWindowsMenu = true
@@ -179,33 +189,56 @@ final class MenuBarPanelManager: NSObject {
 
     private func positionPanelBelowStatusItem() {
         guard let panel else { return }
-        let gapBelowMenuBar: CGFloat = 4
+        let gapBelowMenuBar: CGFloat = 6
 
-        // Calculate the panel's content height from the hosting view's fitting size
-        // so the panel snugly wraps the SwiftUI content instead of using a fixed height.
-        let fittingSize = panel.contentView?.fittingSize ?? CGSize(width: panelWidth, height: panelHeight)
-        let actualPanelHeight = fittingSize.height
+        let panelSize: CGSize
+        if let hostingView = panel.contentView as? NSHostingView<AnyView> {
+            panelSize = Self.fittingPanelSize(for: hostingView, width: panelWidth, minimumHeight: minimumPanelHeight)
+            hostingView.setFrameSize(panelSize)
+        } else {
+            panelSize = panel.frame.size
+        }
         let buttonWindow = statusItem?.button?.window
         let screenFrame = (buttonWindow?.screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
-            ?? CGRect(x: 0, y: 0, width: panelWidth, height: actualPanelHeight)
+            ?? CGRect(origin: .zero, size: panelSize)
 
         let frame = Self.settingsPanelFrame(
             anchorFrame: buttonWindow?.frame,
             screenFrame: screenFrame,
-            panelSize: CGSize(width: panelWidth, height: actualPanelHeight),
+            panelSize: panelSize,
             gapBelowMenuBar: gapBelowMenuBar
         )
 
         panel.setFrame(frame, display: true)
     }
 
+    private static func fittingPanelSize(
+        for hostingView: NSHostingView<AnyView>,
+        width: CGFloat,
+        minimumHeight: CGFloat
+    ) -> CGSize {
+        hostingView.setFrameSize(CGSize(width: width, height: minimumHeight))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let fittingSize = hostingView.fittingSize
+        return CGSize(
+            width: width,
+            height: max(minimumHeight, ceil(fittingSize.height))
+        )
+    }
+
     static func settingsPanelFrame(
         anchorFrame: CGRect?,
         screenFrame: CGRect,
         panelSize: CGSize,
-        gapBelowMenuBar: CGFloat = 4
+        gapBelowMenuBar: CGFloat = 6
     ) -> CGRect {
-        guard let anchorFrame, screenFrame.intersects(anchorFrame) else {
+        // Status items live in the menu bar, ABOVE the visible frame, so an
+        // intersection test always fails. Treat the anchor as usable when it
+        // is horizontally within the screen.
+        guard let anchorFrame,
+              anchorFrame.midX >= screenFrame.minX,
+              anchorFrame.midX <= screenFrame.maxX else {
             return CGRect(
                 x: screenFrame.midX - (panelSize.width / 2),
                 y: screenFrame.midY - (panelSize.height / 2),
@@ -214,9 +247,16 @@ final class MenuBarPanelManager: NSObject {
             )
         }
 
+        let proposedX = anchorFrame.maxX - panelSize.width
+        let minX = screenFrame.minX
+        let maxX = max(screenFrame.maxX - panelSize.width, minX)
+        let clampedX = min(max(proposedX, minX), maxX)
+        let proposedY = anchorFrame.minY - panelSize.height - gapBelowMenuBar
+        let clampedY = max(proposedY, screenFrame.minY)
+
         return CGRect(
-            x: anchorFrame.midX - (panelSize.width / 2),
-            y: anchorFrame.minY - panelSize.height - gapBelowMenuBar,
+            x: clampedX,
+            y: clampedY,
             width: panelSize.width,
             height: panelSize.height
         )

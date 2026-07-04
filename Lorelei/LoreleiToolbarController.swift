@@ -44,6 +44,18 @@ final class LoreleiToolbarController {
         panel.orderFrontRegardless()
     }
 
+    /// Temporarily hides the capsule while the settings dropdown is open so
+    /// the two glass surfaces never overlap on narrow screens.
+    func setConcealed(_ concealed: Bool) {
+        guard let panel else { return }
+        if concealed {
+            panel.orderOut(nil)
+        } else {
+            positionPanel(panel)
+            panel.orderFrontRegardless()
+        }
+    }
+
     var isExpanded: Bool {
         expansionState.isExpanded
     }

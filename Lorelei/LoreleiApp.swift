@@ -8,7 +8,6 @@
 //
 
 import AppKit
-import ServiceManagement
 import SwiftUI
 
 enum LoreleiDebugURLHandler {
@@ -39,14 +38,6 @@ struct LoreleiApp: App {
     }
 }
 
-enum LoginItemRegistrationPolicy {
-    static let enabledDefaultsKey = "registerAsLoginItemOnLaunch"
-
-    static func shouldRegisterOnLaunch(defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: enabledDefaultsKey)
-    }
-}
-
 /// Manages the companion lifecycle: creates the menu bar panel and starts
 /// the companion voice pipeline on launch.
 @MainActor
@@ -63,6 +54,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         toolbarController = LoreleiToolbarController(companionManager: companionManager)
+        menuBarPanelManager?.onPanelVisibilityChanged = { [weak self] visible in
+            self?.toolbarController?.setConcealed(visible)
+        }
         companionManager.start()
 #if DEBUG
         NSAppleEventManager.shared().setEventHandler(
@@ -76,9 +70,6 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         // Auto-open the panel only when permissions are missing or revoked.
         if !companionManager.allPermissionsGranted {
             menuBarPanelManager?.showPanelOnLaunch()
-        }
-        if LoginItemRegistrationPolicy.shouldRegisterOnLaunch() {
-            registerAsLoginItemIfNeeded()
         }
     }
 
@@ -112,20 +103,5 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         companionManager.handleDebugPrompt(prompt)
     }
 #endif
-
-    /// Registers the app as a login item so it launches automatically on
-    /// startup. Uses SMAppService which shows the app in System Settings >
-    /// General > Login Items, letting the user toggle it off if they want.
-    private func registerAsLoginItemIfNeeded() {
-        let loginItemService = SMAppService.mainApp
-        if loginItemService.status != .enabled {
-            do {
-                try loginItemService.register()
-                print("🎯 Lorelei: Registered as login item")
-            } catch {
-                print("⚠️ Lorelei: Failed to register as login item: \(error)")
-            }
-        }
-    }
 
 }
