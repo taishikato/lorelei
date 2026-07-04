@@ -843,6 +843,20 @@ struct LoreleiTests {
         #expect(offscreenAnchorFrame == nilAnchorFrame)
     }
 
+    @Test func settingsPanelFrameAnchorsWhenStatusItemSitsAboveVisibleFrame() async throws {
+        // Regression: status items live in the menu bar, entirely ABOVE the
+        // visible frame - an intersection-based offscreen check sent the
+        // panel to the screen-center fallback on every real click.
+        let frame = MenuBarPanelManager.settingsPanelFrame(
+            anchorFrame: CGRect(x: 905, y: 949, width: 38, height: 33),
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 949),
+            panelSize: CGSize(width: 340, height: 458),
+            gapBelowMenuBar: 6
+        )
+
+        #expect(frame == CGRect(x: 603, y: 485, width: 340, height: 458))
+    }
+
     @Test func settingsPanelFrameAlignsRightEdgeBelowMenuBarAnchor() async throws {
         let screenFrame = CGRect(x: 0, y: 0, width: 2000, height: 1200)
         let panelSize = CGSize(width: 340, height: 520)

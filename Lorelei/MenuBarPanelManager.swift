@@ -168,7 +168,9 @@ final class MenuBarPanelManager: NSObject {
         menuBarPanel.level = .floating
         menuBarPanel.isOpaque = false
         menuBarPanel.backgroundColor = .clear
-        menuBarPanel.hasShadow = true
+        // A window shadow on a translucent panel draws a rectangular outline
+        // around the rounded glass - the SwiftUI shape carries its own shadow.
+        menuBarPanel.hasShadow = false
         menuBarPanel.hidesOnDeactivate = false
         menuBarPanel.isExcludedFromWindowsMenu = true
         menuBarPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -226,7 +228,12 @@ final class MenuBarPanelManager: NSObject {
         panelSize: CGSize,
         gapBelowMenuBar: CGFloat = 6
     ) -> CGRect {
-        guard let anchorFrame, screenFrame.intersects(anchorFrame) else {
+        // Status items live in the menu bar, ABOVE the visible frame, so an
+        // intersection test always fails. Treat the anchor as usable when it
+        // is horizontally within the screen.
+        guard let anchorFrame,
+              anchorFrame.midX >= screenFrame.minX,
+              anchorFrame.midX <= screenFrame.maxX else {
             return CGRect(
                 x: screenFrame.midX - (panelSize.width / 2),
                 y: screenFrame.midY - (panelSize.height / 2),
