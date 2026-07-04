@@ -154,9 +154,6 @@ final class CompanionManager: ObservableObject {
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var runStatusIdleReturnTask: Task<Void, Never>?
-    /// Scheduled hide for transient cursor mode — cancelled if the user
-    /// speaks again before the delay elapses.
-    private var transientHideTask: Task<Void, Never>?
 
     /// True when all three required permissions (accessibility, screen recording,
     /// microphone) are granted. Used by the panel to show a single "all good" state.
@@ -195,41 +192,13 @@ final class CompanionManager: ObservableObject {
         UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
     }
 
-    /// User preference for whether the Lorelei cursor should be shown.
-    /// When toggled off, the overlay is hidden and push-to-talk is disabled.
-    /// Persisted to UserDefaults so the choice survives app restarts.
-    @Published var isBuddyCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyCursorEnabled") == nil
-        ? true
-        : UserDefaults.standard.bool(forKey: "isClickyCursorEnabled")
-
-    func setBuddyCursorEnabled(_ enabled: Bool) {
-        isBuddyCursorEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: "isClickyCursorEnabled")
-        transientHideTask?.cancel()
-        transientHideTask = nil
-
-        if enabled {
-            overlayWindowManager.hasShownOverlayBefore = true
-            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-            isOverlayVisible = true
-        } else {
-            overlayWindowManager.hideOverlay()
-            isOverlayVisible = false
-        }
-    }
-
     func start() {
         refreshAllPermissions()
-        print("🔑 Lorelei start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
+        print("🔑 Lorelei start - accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
-        if allPermissionsGranted && isBuddyCursorEnabled {
-            overlayWindowManager.hasShownOverlayBefore = true
-            overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-            isOverlayVisible = true
-        }
     }
 
     func clearDetectedElementLocation() {
@@ -264,7 +233,6 @@ final class CompanionManager: ObservableObject {
         globalPushToTalkShortcutMonitor.stop()
         buddyDictationManager.cancelCurrentDictation()
         overlayWindowManager.hideOverlay()
-        transientHideTask?.cancel()
 
         currentResponseTask?.cancel()
         currentResponseTask = nil
@@ -302,10 +270,10 @@ final class CompanionManager: ObservableObject {
         if previouslyHadAccessibility != hasAccessibilityPermission
             || previouslyHadScreenRecording != hasScreenRecordingPermission
             || previouslyHadMicrophone != hasMicrophonePermission {
-            print("🔑 Permissions — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
+            print("🔑 Permissions - accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
         }
 
-        // Screen content permission is persisted — once the user has approved the
+        // Screen content permission is persisted - once the user has approved the
         // SCShareableContent picker, we don't need to re-check it.
         if !hasScreenContentPermission {
             hasScreenContentPermission = UserDefaults.standard.bool(forKey: "hasScreenContentPermission")
@@ -332,21 +300,15 @@ final class CompanionManager: ObservableObject {
                 config.width = 320
                 config.height = 240
                 let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                // Verify the capture actually returned real content — a 0x0 or
+                // Verify the capture actually returned real content - a 0x0 or
                 // fully-empty image means the user denied the prompt.
                 let didCapture = image.width > 0 && image.height > 0
-                print("🔑 Screen content capture result — width: \(image.width), height: \(image.height), didCapture: \(didCapture)")
+                print("🔑 Screen content capture result - width: \(image.width), height: \(image.height), didCapture: \(didCapture)")
                 await MainActor.run {
                     isRequestingScreenContent = false
                     guard didCapture else { return }
                     hasScreenContentPermission = true
                     UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
-
-                    if allPermissionsGranted && !isOverlayVisible && isBuddyCursorEnabled {
-                        overlayWindowManager.hasShownOverlayBefore = true
-                        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-                        isOverlayVisible = true
-                    }
                 }
             } catch {
                 print("⚠️ Screen content permission request failed: \(error)")
@@ -369,7 +331,7 @@ final class CompanionManager: ObservableObject {
     }
 
     /// Polls all permissions frequently so the UI updates live after the
-    /// user grants them in System Settings. Screen Recording is the exception —
+    /// user grants them in System Settings. Screen Recording is the exception -
     /// macOS requires an app restart for that one to take effect.
     private func startPermissionPolling() {
         accessibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -396,7 +358,7 @@ final class CompanionManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] isRecording, isFinalizing, isPreparing in
                 guard let self else { return }
-                // Don't override .responding — the AI response pipeline
+                // Don't override .responding - the AI response pipeline
                 // manages that state directly until streaming finishes.
                 guard self.voiceState != .responding else { return }
 
@@ -408,14 +370,9 @@ final class CompanionManager: ObservableObject {
                     self.voiceState = .processing
                 } else {
                     self.voiceState = .idle
-                    // If the user pressed and released the hotkey without
-                    // saying anything, no response task runs — schedule the
-                    // transient hide here so the overlay doesn't get stuck.
-                    // Only do this when no response is in flight, otherwise
-                    // the brief idle gap between recording and processing
-                    // would prematurely hide the overlay.
-                    if self.currentResponseTask == nil {
-                        self.scheduleTransientHideIfNeeded()
+                    if self.currentResponseTask == nil && self.isOverlayVisible {
+                        self.overlayWindowManager.hideOverlay()
+                        self.isOverlayVisible = false
                     }
                 }
             }
@@ -436,13 +393,7 @@ final class CompanionManager: ObservableObject {
             guard !buddyDictationManager.isDictationInProgress else { return }
             setRunStatusListening()
 
-            // Cancel any pending transient hide so the overlay stays visible
-            transientHideTask?.cancel()
-            transientHideTask = nil
-
-            // If the cursor is hidden, bring it back transiently for this interaction
-            if !isBuddyCursorEnabled && !isOverlayVisible {
-                overlayWindowManager.hasShownOverlayBefore = true
+            if !isOverlayVisible {
                 overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
                 isOverlayVisible = true
             }
@@ -478,6 +429,8 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+            overlayWindowManager.hideOverlay()
+            isOverlayVisible = false
         case .none:
             break
         }
@@ -541,8 +494,14 @@ final class CompanionManager: ObservableObject {
         switch transition {
         case .pressed:
             setRunStatusListening()
+            if !isOverlayVisible {
+                overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
+                isOverlayVisible = true
+            }
         case .released:
             setRunStatusTranscribing()
+            overlayWindowManager.hideOverlay()
+            isOverlayVisible = false
         case .none:
             break
         }
@@ -835,22 +794,11 @@ final class CompanionManager: ObservableObject {
     private func withDesktopActionOverlayHidden(
         _ operation: @escaping @MainActor () async -> WorkspaceCommandResult
     ) async -> WorkspaceCommandResult {
-        let shouldRestoreOverlay = isOverlayVisible && isBuddyCursorEnabled
-        transientHideTask?.cancel()
-        transientHideTask = nil
         clearDetectedElementLocation()
 
         if isOverlayVisible {
             overlayWindowManager.hideOverlay()
             isOverlayVisible = false
-        }
-
-        defer {
-            if shouldRestoreOverlay && isBuddyCursorEnabled {
-                overlayWindowManager.hasShownOverlayBefore = true
-                overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-                isOverlayVisible = true
-            }
         }
 
         return await operation()
@@ -1008,7 +956,6 @@ final class CompanionManager: ObservableObject {
         liveCodexAppServerTransport = nil
         activeTurn = nil
         outstandingSteerTranscripts.removeAll()
-        scheduleTransientHideIfNeeded()
     }
 
     private func runCodexScreenRequest(_ prompt: String) async -> WorkspaceCommandResult {
@@ -1028,30 +975,6 @@ final class CompanionManager: ObservableObject {
                 )
             }
         )
-    }
-
-    /// If the cursor is in transient mode (user toggled the cursor off),
-    /// waits for any pointing animation to finish, then fades out the overlay
-    /// after a 1-second pause. Cancelled automatically
-    /// if the user starts another push-to-talk interaction.
-    private func scheduleTransientHideIfNeeded() {
-        guard !isBuddyCursorEnabled && isOverlayVisible else { return }
-
-        transientHideTask?.cancel()
-        transientHideTask = Task {
-            // Wait for pointing animation to finish (location is cleared
-            // when the buddy flies back to the cursor)
-            while detectedElementScreenLocation != nil {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
-            }
-
-            // Pause 1s after everything finishes, then fade out
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            guard !Task.isCancelled else { return }
-            overlayWindowManager.fadeOutAndHideOverlay()
-            isOverlayVisible = false
-        }
     }
 
 }
