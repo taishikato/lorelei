@@ -100,7 +100,6 @@ struct LoreleiToolbarView: View {
         VStack(alignment: .leading, spacing: 14) {
             expandedHeader
             conversationArea
-            activityLine
 
             if case .needsApproval = companionManager.runStatus {
                 approvalBlock
@@ -198,23 +197,6 @@ struct LoreleiToolbarView: View {
         }
     }
 
-    private var activityLine: some View {
-        HStack(spacing: 8) {
-            if case .working = companionManager.runStatus {
-                ProgressView()
-                    .controlSize(.mini)
-                    .frame(width: 14, height: 14)
-            }
-
-            Text(activityText)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .frame(height: 16)
-    }
-
     private var approvalBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(companionManager.pendingApprovalTitle ?? "Needs approval")
@@ -271,23 +253,6 @@ struct LoreleiToolbarView: View {
         }
 
         return companionManager.latestResultSummary ?? ""
-    }
-
-    private var activityText: String {
-        if let currentActivity = companionManager.currentActivity {
-            return currentActivity
-        }
-
-        switch companionManager.runStatus {
-        case .working(let activity):
-            return activity
-        case .needsApproval:
-            return "Waiting for approval"
-        case .finished(let success):
-            return success ? "Done" : "Failed"
-        default:
-            return Self.statusLabel(for: companionManager.runStatus)
-        }
     }
 
     private var showsStopButton: Bool {
