@@ -31,6 +31,7 @@ final class LoreleiToolbarController {
     private let expansionState = LoreleiToolbarExpansionState()
     private var runStatusCancellable: AnyCancellable?
     private var panel: NSPanel?
+    var onOpenSettings: (() -> Void)?
 
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
@@ -47,18 +48,6 @@ final class LoreleiToolbarController {
         self.panel = panel
         positionPanel(panel)
         panel.orderFrontRegardless()
-    }
-
-    /// Temporarily hides the capsule while the settings dropdown is open so
-    /// the two glass surfaces never overlap on narrow screens.
-    func setConcealed(_ concealed: Bool) {
-        guard let panel else { return }
-        if concealed {
-            panel.orderOut(nil)
-        } else {
-            positionPanel(panel)
-            panel.orderFrontRegardless()
-        }
     }
 
     var isExpanded: Bool {
@@ -137,6 +126,9 @@ final class LoreleiToolbarController {
             toggleExpansion: { [weak self] in
                 guard let self else { return }
                 setExpanded(!isExpanded)
+            },
+            openSettings: { [weak self] in
+                self?.onOpenSettings?()
             }
         )
         let hostingView = NSHostingView(rootView: rootView)

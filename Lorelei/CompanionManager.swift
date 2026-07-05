@@ -398,9 +398,6 @@ final class CompanionManager: ObservableObject {
                 isOverlayVisible = true
             }
 
-            // Dismiss the menu bar panel so it doesn't cover the screen
-            NotificationCenter.default.post(name: .loreleiDismissPanel, object: nil)
-
             // Do NOT cancel currentResponseTask here: pressing the shortcut
             // mid-turn is exactly how steering starts. Cancelling used to
             // kill the running turn, which invalidated the app-server

@@ -11,6 +11,7 @@ struct LoreleiToolbarView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var expansionState: LoreleiToolbarExpansionState
     let toggleExpansion: @MainActor @Sendable () -> Void
+    let openSettings: @MainActor @Sendable () -> Void
 
     @State private var isPeekHovered = false
 
@@ -160,6 +161,18 @@ struct LoreleiToolbarView: View {
             .help("Start a fresh conversation")
             .accessibilityLabel("New chat")
 
+            Button(action: { deferredAction { openSettings() } }) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Settings")
+            .accessibilityLabel("Settings")
+
             Button(action: { deferredAction { toggleExpansion() } }) {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 12, weight: .semibold))
@@ -168,7 +181,9 @@ struct LoreleiToolbarView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .pointerCursor()
             .help("Collapse")
+            .accessibilityLabel("Collapse")
         }
     }
 

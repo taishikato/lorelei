@@ -2,7 +2,7 @@
 //  CompanionPanelView.swift
 //  Lorelei
 //
-//  Compact menu bar control panel for Lorelei.
+//  Settings content for Lorelei.
 //
 
 import AppKit
@@ -31,28 +31,24 @@ struct CompanionPanelView: View {
     }
 
     var body: some View {
-        GlassEffectContainer {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 12) {
-                    header
-                    generalSection
-                    workspaceSection
-                    voiceSection
-                    debugDisclosure
-                }
-                .padding(12)
-
-                Divider()
-                    .background(.white.opacity(0.12))
-
-                footer
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                header
+                generalSection
+                workspaceSection
+                voiceSection
             }
-            .frame(width: 340)
-            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
-            .shadow(color: Color.black.opacity(0.28), radius: 18, x: 0, y: 10)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            Divider()
+
+            footer
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
         }
+        .frame(width: 380)
+        .background(.regularMaterial)
         .onAppear {
             loginItemController.refresh()
         }
@@ -171,31 +167,6 @@ struct CompanionPanelView: View {
         }
     }
 
-    private var debugDisclosure: some View {
-        DisclosureGroup {
-            debugBlock
-                .padding(.top, 6)
-        } label: {
-            Text("Debug")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-        }
-    }
-
-    private var debugBlock: some View {
-        ScrollView {
-            Text(companionManager.debugLogText)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(nil)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(minHeight: 64, maxHeight: 96)
-        .padding(8)
-        .background(rowBackground)
-    }
 
     private var footer: some View {
         Button {
