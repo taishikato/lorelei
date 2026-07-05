@@ -19,6 +19,7 @@ struct LoreleiAnalyticsTests {
         #expect(LoreleiAnalyticsEvent.approvalResolved(accepted: true).name == "approval_resolved")
         #expect(LoreleiAnalyticsEvent.settingsPanelOpened.name == "settings_panel_opened")
         #expect(LoreleiAnalyticsEvent.toolbarExpanded.name == "toolbar_expanded")
+        #expect(LoreleiAnalyticsEvent.newChatStarted.name == "new_chat_started")
     }
 
     @Test func dictationEventCarriesOnlyMetadataNeverContent() async throws {

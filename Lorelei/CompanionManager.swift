@@ -486,6 +486,28 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    func startNewChatSession() {
+        currentResponseTask?.cancel()
+        currentResponseTask = nil
+        _ = resolvePendingCodexAppServerApproval(.cancel)
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        activeTurn = nil
+        outstandingSteerTranscripts.removeAll()
+        conversationLog.removeAll()
+        currentAssistantConversationEntryID = nil
+        streamText = ""
+        currentActivity = nil
+        latestResultSummary = nil
+        runStatus = .idle
+        LoreleiAnalytics.capture(.newChatStarted)
+        recordDebugEvent("New chat started")
+
+        Task { @MainActor in
+            await invalidateLiveCodexAppServerSessionWhenReady()
+        }
+    }
+
     private func stopCurrentRunByInvalidatingSession() async {
         await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
@@ -511,6 +533,10 @@ final class CompanionManager: ObservableObject {
         case .none:
             break
         }
+    }
+
+    func seedConversationEntryForTesting(role: ConversationEntry.Role, text: String) {
+        appendConversationEntry(role: role, text: text)
     }
 #endif
 
