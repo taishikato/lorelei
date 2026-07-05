@@ -2,9 +2,8 @@
 //  LoreleiApp.swift
 //  Lorelei
 //
-//  Menu bar-only companion app. No dock icon, no main window — just an
-//  always-available status item in the macOS menu bar. Clicking the icon
-//  opens a floating panel with companion voice controls.
+//  Accessory companion app. The always-visible floating buddy is the primary
+//  entry point, and its toolbar opens a standard macOS settings window.
 //
 
 import AppKit
@@ -29,20 +28,27 @@ struct LoreleiApp: App {
     @NSApplicationDelegateAdaptor(CompanionAppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // The app lives entirely in the menu bar panel managed by the AppDelegate.
+        // The app is driven by AppKit windows managed by the AppDelegate.
         // This empty Settings scene satisfies SwiftUI's requirement for at least
-        // one scene but is never shown (LSUIElement=true removes the app menu).
+        // one scene while LSUIElement=true keeps the Dock icon hidden by default.
         Settings {
             EmptyView()
+        }
+        .commands {
+            // The real settings live in an AppKit window opened from the
+            // floating toolbar's gear button. Remove the default "Settings…"
+            // menu item (and its Cmd-, shortcut) so the placeholder SwiftUI
+            // Settings scene is never surfaced when the app is .regular.
+            CommandGroup(replacing: .appSettings) { }
         }
     }
 }
 
-/// Manages the companion lifecycle: creates the menu bar panel and starts
-/// the companion voice pipeline on launch.
+/// Manages the companion lifecycle: creates the floating buddy, settings
+/// window controller, and companion voice pipeline on launch.
 @MainActor
 final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
-    private var menuBarPanelManager: MenuBarPanelManager?
+    private var settingsWindowController: SettingsWindowController?
     private var toolbarController: LoreleiToolbarController?
     private let companionManager = CompanionManager()
 
@@ -54,10 +60,13 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         LoreleiAnalytics.capture(.appLaunched)
 
-        menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
+        settingsWindowController = SettingsWindowController(companionManager: companionManager)
         toolbarController = LoreleiToolbarController(companionManager: companionManager)
-        menuBarPanelManager?.onPanelVisibilityChanged = { [weak self] visible in
-            self?.toolbarController?.setConcealed(visible)
+        toolbarController?.onOpenSettings = { [weak self] in
+            // Collapse the floating panel so it doesn't sit over the settings
+            // window the user just opened from it.
+            self?.toolbarController?.setExpanded(false)
+            self?.settingsWindowController?.show()
         }
         companionManager.start()
 #if DEBUG
@@ -69,9 +78,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         )
 #endif
         toolbarController?.show()
-        // Auto-open the panel only when permissions are missing or revoked.
+        // Auto-open settings only when permissions are missing or revoked.
         if !companionManager.allPermissionsGranted {
-            menuBarPanelManager?.showPanelOnLaunch()
+            settingsWindowController?.show()
         }
     }
 
