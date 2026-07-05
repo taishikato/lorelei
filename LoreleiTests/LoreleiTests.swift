@@ -8,6 +8,7 @@
 import Testing
 import AppKit
 import Combine
+import CoreAudio
 import Foundation
 import CoreGraphics
 import ServiceManagement
@@ -116,6 +117,75 @@ struct LoreleiTests {
         let reloadedStore = WorkspaceSettingsStore(defaults: defaults)
         #expect(defaults.string(forKey: WorkspaceSettingsStore.selectedWorkspacePathDefaultsKey) == nil)
         #expect(reloadedStore.selectedWorkspacePath == nil)
+    }
+
+    @Test func selectedAudioInputDevicePersistsAndReloads() async throws {
+        let defaults = UserDefaults(suiteName: "AudioInputDeviceStorePersistenceTests")!
+        defaults.removePersistentDomain(forName: "AudioInputDeviceStorePersistenceTests")
+        let enumerator = FakeAudioInputDeviceEnumerator(devices: [
+            AudioInputDevice(id: "built-in", name: "Built-in Microphone"),
+            AudioInputDevice(id: "usb", name: "USB Microphone")
+        ])
+
+        let store = AudioInputDeviceStore(enumerator: enumerator, defaults: defaults)
+        store.selectedDeviceUID = "usb"
+
+        let reloadedStore = AudioInputDeviceStore(enumerator: enumerator, defaults: defaults)
+        #expect(reloadedStore.selectedDeviceUID == "usb")
+        #expect(defaults.string(forKey: AudioInputDeviceStore.selectedInputDeviceUIDDefaultsKey) == "usb")
+    }
+
+    @Test func systemDefaultAudioInputRemovesPersistedSelection() async throws {
+        let defaults = UserDefaults(suiteName: "AudioInputDeviceStoreSystemDefaultTests")!
+        defaults.removePersistentDomain(forName: "AudioInputDeviceStoreSystemDefaultTests")
+        let enumerator = FakeAudioInputDeviceEnumerator(devices: [
+            AudioInputDevice(id: "built-in", name: "Built-in Microphone")
+        ])
+
+        let store = AudioInputDeviceStore(enumerator: enumerator, defaults: defaults)
+        store.selectedDeviceUID = "built-in"
+        store.selectedDeviceUID = nil
+
+        let reloadedStore = AudioInputDeviceStore(enumerator: enumerator, defaults: defaults)
+        #expect(defaults.string(forKey: AudioInputDeviceStore.selectedInputDeviceUIDDefaultsKey) == nil)
+        #expect(reloadedStore.selectedDeviceUID == nil)
+    }
+
+    @Test func disconnectedAudioInputDeviceFallsBackToSystemDefault() async throws {
+        let defaults = UserDefaults(suiteName: "AudioInputDeviceStoreDisconnectedTests")!
+        defaults.removePersistentDomain(forName: "AudioInputDeviceStoreDisconnectedTests")
+        defaults.set("missing", forKey: AudioInputDeviceStore.selectedInputDeviceUIDDefaultsKey)
+        let enumerator = FakeAudioInputDeviceEnumerator(devices: [
+            AudioInputDevice(id: "built-in", name: "Built-in Microphone")
+        ])
+
+        let store = AudioInputDeviceStore(enumerator: enumerator, defaults: defaults)
+
+        #expect(store.selectedDeviceUID == "missing")
+        #expect(store.resolvedDeviceID() == nil)
+    }
+
+    @Test func effectiveInputDeviceReleasesPreviousSelectionOnFallback() async throws {
+        let defaults = UserDefaults(suiteName: "AudioInputDeviceStoreEffectiveDeviceTests")!
+        defaults.removePersistentDomain(forName: "AudioInputDeviceStoreEffectiveDeviceTests")
+        let enumerator = FakeAudioInputDeviceEnumerator(devices: [
+            AudioInputDevice(id: "built-in", name: "Built-in Microphone"),
+            AudioInputDevice(id: "usb", name: "USB Microphone")
+        ])
+        let store = AudioInputDeviceStore(enumerator: enumerator, defaults: defaults)
+
+        // A connected selection resolves to that device.
+        store.selectedDeviceUID = "usb"
+        #expect(store.effectiveInputDeviceID() == AudioDeviceID(2))
+
+        // System Default falls back to the default device (built-in), not the
+        // previously selected one, so the engine can un-pin the USB device.
+        store.selectedDeviceUID = nil
+        #expect(store.effectiveInputDeviceID() == AudioDeviceID(1))
+
+        // A disconnected selection also falls back to the default device.
+        store.selectedDeviceUID = "missing"
+        #expect(store.effectiveInputDeviceID() == AudioDeviceID(1))
     }
 
     @Test func workspacePathStatusRequiresExistingDirectory() async throws {
@@ -2902,6 +2972,29 @@ struct LoreleiTests {
         #expect(manager.streamText == "Hello")
     }
 
+    @Test func companionManagerReturnsToIdleWhenTranscribeProducesNoTurn() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerTranscribingWatchdogTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerTranscribingWatchdogTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            transcribingWatchdogDelay: .milliseconds(300)
+        )
+
+        manager.simulateShortcutTransitionForTesting(.pressed)
+        manager.simulateShortcutTransitionForTesting(.released)
+        #expect(manager.runStatus == .transcribing)
+
+        // No transcript ever arrives (silent hold / no-audio device); the
+        // watchdog must return the status to idle instead of sticking.
+        for _ in 0..<150 {
+            if manager.runStatus == .idle { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(manager.runStatus == .idle)
+    }
+
     @Test func companionManagerPlaysCuesThroughVoiceTurn() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerAudioVoiceTurnTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerAudioVoiceTurnTests")
@@ -3938,6 +4031,31 @@ private actor BlockingCodexAppServerTransport: CodexAppServerTransporting {
 @MainActor
 private final class SilentSpeechOutput: SpeechOutputing {
     func speak(_ text: String) {}
+}
+
+private struct FakeAudioInputDeviceEnumerator: AudioInputDeviceEnumerating {
+    let devices: [AudioInputDevice]
+
+    func availableInputDevices() -> [AudioInputDevice] {
+        devices
+    }
+
+    func defaultInputDeviceUID() -> String? {
+        devices.first?.id
+    }
+
+    func defaultInputDeviceID() -> AudioDeviceID? {
+        guard let first = devices.first else { return nil }
+        return deviceID(for: first.id)
+    }
+
+    func deviceID(for uid: String) -> AudioDeviceID? {
+        guard let index = devices.firstIndex(where: { $0.id == uid }) else {
+            return nil
+        }
+
+        return AudioDeviceID(index + 1)
+    }
 }
 
 @MainActor

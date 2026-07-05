@@ -8,8 +8,10 @@
 //
 
 import AppKit
+import AudioToolbox
 import AVFoundation
 import Combine
+import CoreAudio
 import Foundation
 
 enum BuddyPushToTalkShortcut {
@@ -221,6 +223,17 @@ enum BuddyDictationPermissionProblem {
     case microphoneAccessDenied
 }
 
+enum BuddyDictationError: LocalizedError {
+    case inputDeviceProvidesNoAudio
+
+    var errorDescription: String? {
+        switch self {
+        case .inputDeviceProvidesNoAudio:
+            return "The selected microphone isn't providing audio. Pick another input in Settings."
+        }
+    }
+}
+
 private enum BuddyDictationStartSource {
     case microphoneButton
     case keyboardShortcut
@@ -279,6 +292,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     }
 
     private let transcriptionProvider: any BuddyTranscriptionProvider
+    let audioInputDeviceStore: AudioInputDeviceStore
     private let audioEngine = AVAudioEngine()
     private var activeTranscriptionSession: (any BuddyStreamingTranscriptionSession)?
     private var audioPrerollForwarder: BuddyAudioPrerollForwarder?
@@ -297,9 +311,16 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     /// rapid follow-up requests that arrive before macOS updates its cache.
     private var lastPermissionRequestCompletedAt: Date?
 
-    override init() {
-        let transcriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
+    override convenience init() {
+        self.init(audioInputDeviceStore: AudioInputDeviceStore())
+    }
+
+    init(
+        audioInputDeviceStore: AudioInputDeviceStore,
+        transcriptionProvider: any BuddyTranscriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
+    ) {
         self.transcriptionProvider = transcriptionProvider
+        self.audioInputDeviceStore = audioInputDeviceStore
         self.transcriptionProviderDisplayName = transcriptionProvider.displayName
         super.init()
 
@@ -564,7 +585,18 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         audioPrerollForwarder = prerollForwarder
 
         let inputNode = audioEngine.inputNode
+        applySelectedAudioInputDevice(to: inputNode)
         let inputFormat = inputNode.outputFormat(forBus: 0)
+
+        // A device that provides no input (e.g. AirPods in output-only mode)
+        // reports a zero-channel format. installTap raises an exception on
+        // such a format, so bail out with a clean error instead of crashing.
+        guard inputFormat.channelCount > 0 else {
+            audioEngine.stop()
+            prerollForwarder.discard()
+            audioPrerollForwarder = nil
+            throw BuddyDictationError.inputDeviceProvidesNoAudio
+        }
 
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
@@ -617,6 +649,41 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         prerollForwarder.attach(activeTranscriptionSession)
         print("🎙️ BuddyDictationManager: provider ready, preroll flushed")
         LoreleiDiagLog.log("dictation: provider ready, preroll flushed")
+    }
+
+    private func applySelectedAudioInputDevice(to inputNode: AVAudioInputNode) {
+        // Re-enumerate at record time so a device hot-plugged since the
+        // settings window was last open is still resolvable this session.
+        audioInputDeviceStore.refreshDevices()
+        // Always pin to the effective device (chosen when connected, else the
+        // system default) so picking System Default or unplugging the chosen
+        // device releases a previously pinned one - the long-lived engine
+        // keeps the last set device otherwise.
+        guard var deviceID = audioInputDeviceStore.effectiveInputDeviceID() else {
+            return
+        }
+
+        guard let audioUnit = inputNode.audioUnit else {
+            print("⚠️ BuddyDictationManager: unable to apply selected input device because input audio unit is unavailable")
+            LoreleiDiagLog.log("dictation: selected input device unavailable because input audio unit is nil")
+            return
+        }
+
+        // Pin AVAudioEngine input to the chosen Core Audio device before
+        // reading its format. System Default leaves the input unpinned.
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+
+        if status != noErr {
+            print("⚠️ BuddyDictationManager: failed to apply selected input device (\(status))")
+            LoreleiDiagLog.log("dictation: failed to apply selected input device status=\(status)")
+        }
     }
 
     private func handleRecognitionError(_ error: Error) {
