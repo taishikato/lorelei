@@ -14,12 +14,16 @@ import SwiftUI
 struct CompanionPanelView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject private var workspaceStore: WorkspaceSettingsStore
+    @ObservedObject private var audioInputDeviceStore: AudioInputDeviceStore
     @StateObject private var loginItemController: LoginItemSettingsController
 
     @MainActor
     init(companionManager: CompanionManager) {
         self.companionManager = companionManager
         _workspaceStore = ObservedObject(wrappedValue: companionManager.workspaceSettingsStore)
+        _audioInputDeviceStore = ObservedObject(
+            wrappedValue: companionManager.buddyDictationManager.audioInputDeviceStore
+        )
         _loginItemController = StateObject(wrappedValue: LoginItemSettingsController())
     }
 
@@ -27,6 +31,9 @@ struct CompanionPanelView: View {
     init(companionManager: CompanionManager, workspaceStore: WorkspaceSettingsStore) {
         self.companionManager = companionManager
         _workspaceStore = ObservedObject(wrappedValue: workspaceStore)
+        _audioInputDeviceStore = ObservedObject(
+            wrappedValue: companionManager.buddyDictationManager.audioInputDeviceStore
+        )
         _loginItemController = StateObject(wrappedValue: LoginItemSettingsController())
     }
 
@@ -51,6 +58,7 @@ struct CompanionPanelView: View {
         .background(.regularMaterial)
         .onAppear {
             loginItemController.refresh()
+            audioInputDeviceStore.refreshDevices()
         }
     }
 
@@ -156,6 +164,7 @@ struct CompanionPanelView: View {
     private var voiceSection: some View {
         section("Voice") {
             VStack(spacing: 5) {
+                inputDeviceRow
                 microphonePermissionRow
                 accessibilityPermissionRow
                 screenRecordingPermissionRow
@@ -164,6 +173,59 @@ struct CompanionPanelView: View {
                     screenContentPermissionRow
                 }
             }
+        }
+    }
+
+    private var inputDeviceRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "waveform")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            Text("Input Device")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            Menu {
+                // deferredAction: mutating the selection synchronously from a
+                // menu item action tears down this view while SwiftUI is still
+                // inside the menu callback, which crashes (EXC_BAD_ACCESS in
+                // MainActor.assumeIsolated). Defer one tick like other buttons.
+                Button("System Default") {
+                    deferredAction { audioInputDeviceStore.selectedDeviceUID = nil }
+                }
+
+                ForEach(audioInputDeviceStore.availableDevices) { device in
+                    Button(device.name) {
+                        deferredAction { audioInputDeviceStore.selectedDeviceUID = device.id }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(selectedInputDeviceName)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 170, alignment: .trailing)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
+            .onTapGesture {
+                audioInputDeviceStore.refreshDevices()
+            }
+        }
+        .padding(8)
+        .background(rowBackground)
+        .onAppear {
+            audioInputDeviceStore.refreshDevices()
         }
     }
 
@@ -321,6 +383,15 @@ struct CompanionPanelView: View {
         case .invalidDirectory:
             return DS.Colors.warningText
         }
+    }
+
+    private var selectedInputDeviceName: String {
+        guard let selectedDeviceUID = audioInputDeviceStore.selectedDeviceUID else {
+            return "System Default"
+        }
+
+        return audioInputDeviceStore.availableDevices.first { $0.id == selectedDeviceUID }?.name
+            ?? "System Default"
     }
 
     private var appVersion: String {

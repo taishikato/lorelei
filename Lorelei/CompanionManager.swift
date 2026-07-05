@@ -136,6 +136,7 @@ final class CompanionManager: ObservableObject {
     private let speechOutput: SpeechOutputing
     private let audioFeedback: BuddyAudioFeedbacking
     private let runStatusIdleReturnDelay: Duration
+    private let transcribingWatchdogDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
     private var codexAppServerExecutor: CodexAppServerExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
@@ -154,6 +155,7 @@ final class CompanionManager: ObservableObject {
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var runStatusIdleReturnTask: Task<Void, Never>?
+    private var transcribingWatchdogTask: Task<Void, Never>?
 
     /// True when all three required permissions (accessibility, screen recording,
     /// microphone) are granted. Used by the panel to show a single "all good" state.
@@ -174,6 +176,7 @@ final class CompanionManager: ObservableObject {
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
+        transcribingWatchdogDelay: Duration = .seconds(6),
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
         audioFeedback: BuddyAudioFeedbacking? = nil
     ) {
@@ -184,6 +187,7 @@ final class CompanionManager: ObservableObject {
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
+        self.transcribingWatchdogDelay = transcribingWatchdogDelay
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
     }
 
@@ -241,6 +245,8 @@ final class CompanionManager: ObservableObject {
         outstandingSteerTranscripts.removeAll()
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
+        transcribingWatchdogTask?.cancel()
+        transcribingWatchdogTask = nil
         shortcutTransitionCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
@@ -489,6 +495,7 @@ final class CompanionManager: ObservableObject {
         _ = resolvePendingCodexAppServerApproval(.cancel)
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
+        cancelTranscribingWatchdog()
         activeTurn = nil
         outstandingSteerTranscripts.removeAll()
         conversationLog.removeAll()
@@ -873,6 +880,7 @@ final class CompanionManager: ObservableObject {
     private func setRunStatusListening() {
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
+        cancelTranscribingWatchdog()
         let shouldPlayCue = runStatus != .listening
         runStatus = .listening
         if shouldPlayCue {
@@ -888,11 +896,35 @@ final class CompanionManager: ObservableObject {
         if shouldPlayCue {
             audioFeedback.play(.listeningEnded, spokenSummary: nil)
         }
+        armTranscribingWatchdog()
+    }
+
+    /// Returns the toolbar to idle when a transcribe never produces a turn -
+    /// e.g. a silent hold, or an input device that delivers no audio - so the
+    /// status does not stay stuck on "Transcribing...". A real transcript
+    /// starts a turn (moving runStatus to .working) well before this fires,
+    /// and the guard keeps it from disturbing a running or steered turn.
+    private func armTranscribingWatchdog() {
+        transcribingWatchdogTask?.cancel()
+        transcribingWatchdogTask = Task { @MainActor [weak self, transcribingWatchdogDelay] in
+            try? await Task.sleep(for: transcribingWatchdogDelay)
+            guard let self, !Task.isCancelled else { return }
+            guard self.currentResponseTask == nil,
+                  self.activeTurn == nil,
+                  self.runStatus == .transcribing else { return }
+            self.runStatus = .idle
+        }
+    }
+
+    private func cancelTranscribingWatchdog() {
+        transcribingWatchdogTask?.cancel()
+        transcribingWatchdogTask = nil
     }
 
     private func beginRunStatus() {
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
+        cancelTranscribingWatchdog()
         streamText = ""
         currentAssistantConversationEntryID = nil
         currentActivity = nil
@@ -984,6 +1016,7 @@ final class CompanionManager: ObservableObject {
 
     private func finishRunStatus(success: Bool) {
         runStatusIdleReturnTask?.cancel()
+        cancelTranscribingWatchdog()
         currentActivity = nil
         runStatus = .finished(success: success)
         runStatusIdleReturnTask = Task { @MainActor [runStatusIdleReturnDelay] in
