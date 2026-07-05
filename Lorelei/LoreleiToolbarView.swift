@@ -144,14 +144,20 @@ struct LoreleiToolbarView: View {
             Spacer()
 
             Button(action: { deferredAction { companionManager.startNewChatSession() } }) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 12, weight: .semibold))
+                Text("New Chat")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Circle())
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(.white.opacity(0.12))
+                    )
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .help("New chat")
+            .pointerCursor()
+            .help("Start a fresh conversation")
             .accessibilityLabel("New chat")
 
             Button(action: { deferredAction { toggleExpansion() } }) {
