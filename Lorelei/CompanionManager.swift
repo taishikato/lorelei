@@ -157,10 +157,20 @@ final class CompanionManager: ObservableObject {
     private var runStatusIdleReturnTask: Task<Void, Never>?
     private var transcribingWatchdogTask: Task<Void, Never>?
 
-    /// True when all three required permissions (accessibility, screen recording,
-    /// microphone) are granted. Used by the panel to show a single "all good" state.
+    /// True when all required permissions are granted. Used by the panel to show
+    /// a single "all good" state.
     var allPermissionsGranted: Bool {
         hasAccessibilityPermission && hasScreenRecordingPermission && hasMicrophonePermission && hasScreenContentPermission
+    }
+
+    var missingPermissionNames: [String] {
+        [
+            (hasMicrophonePermission, "Microphone"),
+            (hasAccessibilityPermission, "Accessibility"),
+            (hasScreenRecordingPermission, "Screen Recording"),
+            (hasScreenContentPermission, "Screen Content")
+        ]
+            .compactMap { isGranted, name in isGranted ? nil : name }
     }
 
     /// Whether the blue cursor overlay is currently visible on screen.

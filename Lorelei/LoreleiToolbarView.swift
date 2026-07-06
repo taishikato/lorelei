@@ -231,6 +231,21 @@ struct LoreleiToolbarView: View {
     }
 
     private var conversationEmptyState: some View {
+        VStack(spacing: 16) {
+            if companionManager.allPermissionsGranted {
+                emptyStateGuidance
+            } else {
+                emptyStateGuidance
+                    .opacity(0.35)
+
+                permissionNotice
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
+    }
+
+    private var emptyStateGuidance: some View {
         VStack(spacing: 14) {
             Image(systemName: "waveform")
                 .font(.system(size: 26, weight: .medium))
@@ -266,8 +281,40 @@ struct LoreleiToolbarView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 24)
+    }
+
+    private var permissionNotice: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.orange)
+
+                Text("Lorelei needs permissions before it can listen: \(companionManager.missingPermissionNames.joined(separator: ", "))")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            Button(action: { deferredAction { openSettings() } }) {
+                Text("Open Settings")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(.white.opacity(0.18))
+                    )
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Open Settings")
+            .accessibilityLabel("Open Settings")
+        }
     }
 
     @ViewBuilder
