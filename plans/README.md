@@ -24,7 +24,7 @@ xcodebuild -project Lorelei.xcodeproj -scheme Lorelei -configuration Debug \
 | 005 | Track the codex app-server schema snapshot | P2 | S | - | TODO |
 | 006 | Router hardening: questions never escalate; desktop turns readOnly | P1 | M | 001 recommended | TODO |
 | 007 | Manual update check against GitHub Releases | P2 | M | - | TODO |
-| 008 | Guided first-run onboarding | P3 | M | - (line numbers drift after 004) | TODO |
+| 008 | Guided first-run onboarding | P3 | M | - (line numbers drift after 004) | DONE (executed 2026-07-06 on branch `first-run-onboarding`; approved by reviewer, pending owner merge) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale).
