@@ -285,7 +285,9 @@ struct LoreleiToolbarView: View {
 
     private var permissionNotice: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 6) {
+            // firstTextBaseline keeps the icon on the first line when the
+            // permission list wraps; a centered HStack floats it mid-block.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.orange)
