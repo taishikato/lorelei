@@ -2696,10 +2696,12 @@ struct LoreleiTests {
         // Generous, not knife-edge: the scripted lines - including the
         // waitingOnApproval status the hint depends on - must be consumed
         // before the timer fires now that the timeout also covers session
-        // establishment. 1.0s still flaked on cold first runs of the full
-        // suite, so this uses 2.0s.
+        // establishment. This test needs THREE lines consumed pre-timeout,
+        // making it the most schedule-sensitive of the timeout family: it
+        // flaked at 1.0s and again at 2.0s under parallel-suite load, so it
+        // alone uses 3.0s.
         let executor = CodexAppServerExecutor(
-            turnTimeoutSeconds: 2.0,
+            turnTimeoutSeconds: 3.0,
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )
