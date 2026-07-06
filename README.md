@@ -113,7 +113,7 @@ The three seams to know:
 - **English only for now.** Japanese speech is currently mis-transcribed as English phonetics; ja-JP model installation and locale selection are planned follow-ups.
 - One active turn at a time; no session history UI and no text input in the toolbar (deliberate v1 scope).
 - Apps with poor accessibility support depend on the screenshot fallback, which is slower and less precise.
-- Codex computer use may land officially in the App Server someday ([openai/codex#20851](https://github.com/openai/codex/issues/20851)); Lorelei would evaluate switching.
+- Codex computer use may land officially in the App Server someday ([openai/codex#20851](https://github.com/openai/codex/issues/20851)); Lorelei'd evaluate switching.
 
 ## Privacy
 
@@ -122,4 +122,4 @@ The three seams to know:
 
 ## Acknowledgements
 
-Lorelei started from [farza](https://github.com/farzaa)'s clicky (learning buddy) codebase.
+Lorelei started from [farzaa/clicky](https://github.com/farzaa/clicky) codebase.
