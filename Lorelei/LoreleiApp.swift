@@ -49,6 +49,7 @@ struct LoreleiApp: App {
 @MainActor
 final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindowController: SettingsWindowController?
+    private var onboardingWindowController: OnboardingWindowController?
     private var toolbarController: LoreleiToolbarController?
     private let companionManager = CompanionManager()
 
@@ -61,6 +62,7 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         LoreleiAnalytics.capture(.appLaunched)
 
         settingsWindowController = SettingsWindowController(companionManager: companionManager)
+        onboardingWindowController = OnboardingWindowController(companionManager: companionManager)
         toolbarController = LoreleiToolbarController(companionManager: companionManager)
         toolbarController?.onOpenSettings = { [weak self] in
             // Collapse the floating panel so it doesn't sit over the settings
@@ -78,8 +80,11 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         )
 #endif
         toolbarController?.show()
-        // Auto-open settings only when permissions are missing or revoked.
-        if !companionManager.allPermissionsGranted {
+        // Guide fresh installs through a first-run flow before falling back
+        // to auto-opening settings when permissions are missing or revoked.
+        if LoreleiOnboarding.shouldShow() {
+            onboardingWindowController?.show()
+        } else if !companionManager.allPermissionsGranted {
             settingsWindowController?.show()
         }
     }
