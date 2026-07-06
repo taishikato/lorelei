@@ -138,6 +138,7 @@ final class CompanionManager: ObservableObject {
     private let runStatusIdleReturnDelay: Duration
     private let transcribingWatchdogDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
+    private var loreleiCursorOrbManager: LoreleiCursorOrbManager?
     private var codexAppServerExecutor: CodexAppServerExecutor?
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var liveCodexAppServerTransport: CodexAppServerTransporting?
@@ -866,6 +867,9 @@ final class CompanionManager: ObservableObject {
             return axDesktopActionExecutor
         }
         let executor = AXDesktopActionExecutor()
+        let orbManager = loreleiCursorOrbManager ?? LoreleiCursorOrbManager()
+        loreleiCursorOrbManager = orbManager
+        executor.visualizer = orbManager
         axDesktopActionExecutor = executor
         return executor
     }

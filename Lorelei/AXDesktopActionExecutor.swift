@@ -74,6 +74,7 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
     private let hasAccessibilityPermission: @MainActor () -> Bool
     private var elementRegistry: [String: Int] = [:]
     private var elements: [AXUIElement] = []
+    weak var visualizer: (any DesktopActionVisualizing)?
 
     init(hasAccessibilityPermission: @escaping @MainActor () -> Bool = WindowPositionManager.hasAccessibilityPermission) {
         self.hasAccessibilityPermission = hasAccessibilityPermission
@@ -183,6 +184,12 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
             )
         }
 
+        if shouldVisualize(action),
+           let frame = frame(of: element),
+           let visualizer {
+            await visualizer.animateAction(toAXFrame: frame)
+        }
+
         let error: AXError
         switch action {
         case .press:
@@ -228,6 +235,11 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
             )
         }
 
+        if let frame = frame(of: element),
+           let visualizer {
+            await visualizer.animateAction(toAXFrame: frame)
+        }
+
         let attribute = mode == .replace ? kAXValueAttribute : kAXSelectedTextAttribute
         let error = AXUIElementSetAttributeValue(element, attribute as CFString, text as CFString)
 
@@ -241,11 +253,25 @@ final class AXDesktopActionExecutor: DesktopActionExecuting {
     }
 
     func screenshot() async -> Result<Data, DesktopActionError> {
+        visualizer?.concealForScreenshot()
+        defer {
+            visualizer?.revealAfterScreenshot()
+        }
+
         do {
             let data = try await CompanionScreenCaptureUtility.captureCursorScreenAsPNG(maxDimension: 1568)
             return .success(data)
         } catch {
             return .failure(.captureFailed(error.localizedDescription))
+        }
+    }
+
+    private func shouldVisualize(_ action: DesktopElementAction) -> Bool {
+        switch action {
+        case .press, .open, .showMenu, .select:
+            return true
+        case .focus, .raise:
+            return false
         }
     }
 
