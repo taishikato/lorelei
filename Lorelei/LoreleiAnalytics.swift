@@ -33,6 +33,8 @@ enum LoreleiAnalyticsEvent {
     case settingsPanelOpened
     case toolbarExpanded
     case newChatStarted
+    case onboardingStarted
+    case onboardingCompleted
 
     var name: String {
         switch self {
@@ -48,6 +50,8 @@ enum LoreleiAnalyticsEvent {
         case .settingsPanelOpened: "settings_panel_opened"
         case .toolbarExpanded: "toolbar_expanded"
         case .newChatStarted: "new_chat_started"
+        case .onboardingStarted: "onboarding_started"
+        case .onboardingCompleted: "onboarding_completed"
         }
     }
 
@@ -55,7 +59,7 @@ enum LoreleiAnalyticsEvent {
         switch self {
         case .appLaunched, .steerSent, .steerFailed, .runStopped,
              .approvalRequested, .settingsPanelOpened, .toolbarExpanded,
-             .newChatStarted:
+             .newChatStarted, .onboardingStarted, .onboardingCompleted:
             return [:]
         case .dictationCompleted(let transcriptCharacters, let viaSteer):
             return [

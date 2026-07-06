@@ -6,7 +6,6 @@
 //
 
 import AppKit
-import AVFoundation
 import Combine
 import ServiceManagement
 import SwiftUI
@@ -165,13 +164,7 @@ struct CompanionPanelView: View {
         section("Voice") {
             VStack(spacing: 5) {
                 inputDeviceRow
-                microphonePermissionRow
-                accessibilityPermissionRow
-                screenRecordingPermissionRow
-
-                if companionManager.hasScreenRecordingPermission {
-                    screenContentPermissionRow
-                }
+                PermissionRowsView(companionManager: companionManager)
             }
         }
     }
@@ -251,51 +244,6 @@ struct CompanionPanelView: View {
         .pointerCursor()
     }
 
-    private var microphonePermissionRow: some View {
-        permissionRow(
-            title: "Microphone",
-            iconName: "mic",
-            isGranted: companionManager.hasMicrophonePermission
-        ) {
-            let status = AVCaptureDevice.authorizationStatus(for: .audio)
-            if status == .notDetermined {
-                AVCaptureDevice.requestAccess(for: .audio) { _ in }
-            } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                NSWorkspace.shared.open(url)
-            }
-        }
-    }
-
-    private var accessibilityPermissionRow: some View {
-        permissionRow(
-            title: "Accessibility",
-            iconName: "hand.raised",
-            isGranted: companionManager.hasAccessibilityPermission
-        ) {
-            WindowPositionManager.requestAccessibilityPermission()
-        }
-    }
-
-    private var screenRecordingPermissionRow: some View {
-        permissionRow(
-            title: "Screen Recording",
-            iconName: "rectangle.dashed.badge.record",
-            isGranted: companionManager.hasScreenRecordingPermission
-        ) {
-            WindowPositionManager.requestScreenRecordingPermission()
-        }
-    }
-
-    private var screenContentPermissionRow: some View {
-        permissionRow(
-            title: "Screen Content",
-            iconName: "eye",
-            isGranted: companionManager.hasScreenContentPermission
-        ) {
-            companionManager.requestScreenContentPermission()
-        }
-    }
-
     private func section<Content: View>(
         _ title: String,
         @ViewBuilder content: () -> Content
@@ -307,41 +255,6 @@ struct CompanionPanelView: View {
 
             content()
         }
-    }
-
-    private func permissionRow(
-        title: String,
-        iconName: String,
-        isGranted: Bool,
-        grantAction: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: iconName)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isGranted ? .secondary : DS.Colors.warning)
-                .frame(width: 18)
-
-            Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.primary)
-
-            Spacer()
-
-            if isGranted {
-                Text("Granted")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(DS.Colors.success)
-                    .lineLimit(2)
-            } else {
-                Button("Grant") {
-                    grantAction()
-                }
-                .buttonStyle(PanelButtonStyle(kind: .small))
-                .pointerCursor()
-            }
-        }
-        .padding(8)
-        .background(rowBackground)
     }
 
     private func chooseWorkspace() {
