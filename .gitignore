@@ -4,3 +4,6 @@ xcuserdata/
 DerivedData/
 dist/
 docs/
+.claude/
+.agents/
+skills-lock.json
