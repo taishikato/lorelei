@@ -90,31 +90,100 @@ struct LoreleiCommandRouter {
             return .unsupported("I didn't catch a command.")
         }
 
-        if isScreenRequest(command) {
+        let normalizedCommand = normalizeCommand(command)
+
+        if isScreenRequest(normalizedCommand) {
             return .codexScreen(originalCommand)
         }
 
-        if isComputerUseRequest(command) {
-            return .codexDesktopAction(originalCommand)
-        }
-
-        if isStatusRequest(command) {
+        if isStatusRequest(normalizedCommand) {
             return .gitStatus
         }
 
-        if isDiffRequest(command) {
+        if isDiffRequest(normalizedCommand) {
             return .gitDiff
         }
 
-        if isRunTestsRequest(command) {
+        if isRunTestsRequest(normalizedCommand) {
             return .runTests
         }
 
-        if isMutatingRequest(command) {
+        if isQuestion(normalizedCommand) {
+            return .codexReadOnly(originalCommand)
+        }
+
+        if isComputerUseRequest(normalizedCommand) {
+            return .codexDesktopAction(originalCommand)
+        }
+
+        if isMutatingRequest(normalizedCommand) {
             return .codexWorkspaceWrite(originalCommand)
         }
 
         return .codexReadOnly(originalCommand)
+    }
+
+    private func normalizeCommand(_ command: String) -> String {
+        let prefixes = [
+            "please ",
+            "hey lorelei ",
+            "lorelei ",
+            "hey ",
+            "can you ",
+            "could you ",
+            "would you ",
+            "will you ",
+            "i need you to ",
+            "i want you to ",
+            "i'd like you to ",
+            "i would like you to "
+        ]
+        var normalized = command
+        var didStripPrefix = true
+
+        while didStripPrefix {
+            didStripPrefix = false
+            for prefix in prefixes where normalized.hasPrefix(prefix) {
+                normalized.removeFirst(prefix.count)
+                didStripPrefix = true
+                break
+            }
+        }
+
+        return normalized
+    }
+
+    private func isQuestion(_ command: String) -> Bool {
+        let commandTokens = tokens(in: command)
+        guard let firstToken = commandTokens.first else {
+            return false
+        }
+
+        let whWords: Set<String> = [
+            "what", "why", "how", "when", "where", "who", "whose", "which"
+        ]
+        if whWords.contains(firstToken) {
+            return true
+        }
+
+        // A leading auxiliary only reads as a question when a subject
+        // follows ("do you see...", "should i add..."). Without one it is
+        // an imperative ("do a google search...") and must keep routing.
+        let auxiliaries: Set<String> = [
+            "should", "shall", "would", "could", "can",
+            "do", "does", "did", "is", "are", "was", "were", "am", "will"
+        ]
+        let subjects: Set<String> = [
+            "you", "i", "we", "they", "he", "she", "it",
+            "this", "that", "these", "those", "there", "lorelei"
+        ]
+        guard auxiliaries.contains(firstToken) else {
+            return false
+        }
+        guard commandTokens.count > 1 else {
+            return true
+        }
+        return subjects.contains(commandTokens[1])
     }
 
     private func isStatusRequest(_ command: String) -> Bool {
@@ -138,7 +207,7 @@ struct LoreleiCommandRouter {
     }
 
     private func isMutatingRequest(_ command: String) -> Bool {
-        containsAnyWord(in: command, words: [
+        matchesWord(in: command, words: [
             "fix",
             "edit",
             "write",
@@ -158,7 +227,7 @@ struct LoreleiCommandRouter {
             "replace",
             "configure",
             "setup"
-        ]) || command.contains("set up")
+        ], withinLeadingTokens: 4) || command.contains("set up")
     }
 
     private func isComputerUseRequest(_ command: String) -> Bool {
@@ -171,7 +240,7 @@ struct LoreleiCommandRouter {
             || command.contains("computer use")
             || command.contains("system settings")
             || command.contains("use the browser")
-            || containsAnyWord(in: command, words: [
+            || matchesWord(in: command, words: [
                 "browser",
                 "open",
                 "launch",
@@ -183,24 +252,30 @@ struct LoreleiCommandRouter {
                 "press",
                 "click",
                 "scroll"
-            ])
+            ], withinLeadingTokens: 4)
     }
 
     private func isScreenRequest(_ command: String) -> Bool {
         command.contains("look at my screen")
             || command.contains("look at the screen")
             || command.contains("see my screen")
+            || command.contains("what's on my screen")
+            || command.contains("what is on my screen")
             || command.contains("capture my screen")
             || command.contains("screen context")
             || command.contains("screenshot")
             || command.contains("visual context")
     }
 
-    private func containsAnyWord(in command: String, words: [String]) -> Bool {
+    private func matchesWord(in command: String, words: [String], withinLeadingTokens tokenLimit: Int) -> Bool {
+        let leadingTokens = tokens(in: command).prefix(tokenLimit)
+        return words.contains { leadingTokens.contains($0) }
+    }
+
+    private func tokens(in command: String) -> [String] {
         let separators = CharacterSet.alphanumerics.inverted
-        let tokens = command
+        return command
             .components(separatedBy: separators)
             .filter { !$0.isEmpty }
-        return words.contains { tokens.contains($0) }
     }
 }
