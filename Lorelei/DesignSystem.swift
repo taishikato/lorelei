@@ -128,14 +128,6 @@ enum DS {
         /// Warning text — brighter variant for text on dark backgrounds.
         static let warningText = Color(hex: "#F1A10D")        // Radix Amber 11
 
-        /// Info/feature highlight — used for prompt card headers, code highlights.
-        /// Lighter than accentText so informational elements are visually distinct
-        /// from interactive accent-colored elements.
-        static let info = Color(hex: "#70B8FF")               // Radix Blue 9
-
-        /// Inline code text color — slightly brighter blue for monospace code snippets.
-        static let codeText = Color(hex: "#9DC2FF")           // Radix Blue 11 variant
-
         // ── Overlay Cursor ───────────────────────────────────────────
 
         /// The blue cursor/bubble color used in OverlayWindow.
@@ -143,29 +135,10 @@ enum DS {
         /// (screen overlay vs in-app UI).
         static let overlayCursorBlue = Color(hex: "#3380FF")
 
-        // ── Floating Button Gradient ─────────────────────────────────
-
-        /// The floating session button gradient colors (unchanged from original —
-        /// this gradient is intentionally distinct from the rest of the palette
-        /// to make the floating button stand out as a "jewel" on the desktop).
-        static let floatingGradientPurple = Color(hex: "#8F46EB")
-        static let floatingGradientPink = Color(hex: "#E84D9E")
-        static let floatingGradientOrange = Color(hex: "#FF8C33")
-
         // ── Help Chat ──────────────────────────────────────────────
-
-        /// User message bubble background in the help chat.
-        /// Blue 800 — deep blue that's clearly distinct from the dark surface
-        /// while keeping white text highly readable (~9:1 contrast).
-        static let helpChatUserBubble = blue800
 
         /// Slightly lighter variant for hover/pressed states on user bubbles.
         static let helpChatUserBubbleHover = blue700
-
-        /// Footer/backdrop behind the floating help chat.
-        /// Slightly lighter than the main window background so the chat zone reads
-        /// as a distinct docked surface even before the pill input is visible.
-        static let helpChatBackdrop = Color(hex: "#212121")
 
         // ── Disabled State ───────────────────────────────────────────
         // Following Material Design 3's disabled pattern:
@@ -175,11 +148,6 @@ enum DS {
         /// Disabled button/container background.
         static var disabledBackground: Color {
             textPrimary.opacity(0.12)
-        }
-
-        /// Disabled text/icon color.
-        static var disabledText: Color {
-            textPrimary.opacity(0.38)
         }
     }
 
@@ -232,8 +200,6 @@ enum DS {
         static let focus: Double = 0.12
         /// Pressed: active press feedback (same strength as focus).
         static let pressed: Double = 0.12
-        /// Dragged: strongest overlay (rarely used).
-        static let dragged: Double = 0.16
     }
 }
 
@@ -750,9 +716,7 @@ extension View {
 // MARK: - Buddy Composer Visual Style
 
 enum BuddyComposerVisualStyle {
-    static let waveformLeadingColor = Color(hex: "#F3FBFF")
     static let waveformTrailingColor = Color(hex: "#8FD2FF")
-    static let waveformGlowColor = Color(hex: "#AEE3FF")
 }
 
 // MARK: - Pointer Cursor (AppKit Bridge)

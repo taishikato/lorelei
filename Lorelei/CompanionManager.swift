@@ -114,17 +114,6 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var conversationLog: [ConversationEntry] = []
     @Published private(set) var currentActivity: String?
 
-    /// Screen location (global AppKit coords) of a detected UI element the
-    /// buddy should fly to and point at. Parsed from Claude's response;
-    /// observed by BlueCursorView to trigger the flight animation.
-    @Published var detectedElementScreenLocation: CGPoint?
-    /// The display frame (global AppKit coords) of the screen the detected
-    /// element is on, so BlueCursorView knows which screen overlay should animate.
-    @Published var detectedElementDisplayFrame: CGRect?
-    /// Custom speech bubble text for the pointing animation. When set,
-    /// BlueCursorView uses this instead of a random pointer phrase.
-    @Published var detectedElementBubbleText: String?
-
     let buddyDictationManager = BuddyDictationManager()
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager: any OverlayWindowManaging
@@ -178,9 +167,6 @@ final class CompanionManager: ObservableObject {
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
 
-    /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
-
     init(
         speechOutput: SpeechOutputing? = nil,
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,
@@ -202,11 +188,6 @@ final class CompanionManager: ObservableObject {
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
     }
 
-    func setSelectedModel(_ model: String) {
-        selectedModel = model
-        UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
-    }
-
     func start() {
         refreshAllPermissions()
         print("🔑 Lorelei start - accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
@@ -214,12 +195,6 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
-    }
-
-    func clearDetectedElementLocation() {
-        detectedElementScreenLocation = nil
-        detectedElementDisplayFrame = nil
-        detectedElementBubbleText = nil
     }
 
     func updateLatestResultSummary(_ summary: String?) {
@@ -422,7 +397,6 @@ final class CompanionManager: ObservableObject {
             // with no memory of the conversation. Any needed cancellation
             // happens in routeFinalTranscriptAsNewTurn once we know the
             // transcript is NOT a steer.
-            clearDetectedElementLocation()
 
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
@@ -877,8 +851,6 @@ final class CompanionManager: ObservableObject {
     private func withDesktopActionOverlayHidden(
         _ operation: @escaping @MainActor () async -> WorkspaceCommandResult
     ) async -> WorkspaceCommandResult {
-        clearDetectedElementLocation()
-
         if isOverlayVisible {
             overlayWindowManager.hideOverlay()
             isOverlayVisible = false
