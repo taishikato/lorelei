@@ -33,7 +33,13 @@ Lorelei talks to `codex app-server` over stdio, so the Codex CLI must be install
 
 ## Install and run
 
-There is no packaged release yet; you build from source.
+### Download
+
+Download the latest signed and notarized DMG from [GitHub Releases](https://github.com/taishikato/lorelei/releases/latest).
+It installs without a Gatekeeper warning; drag Lorelei to Applications.
+Lorelei can also check for updates from Settings -> General -> Check for Updates.
+
+### Build from source
 
 ```bash
 git clone https://github.com/taishikato/lorelei.git
@@ -46,14 +52,18 @@ Debug builds are signed with your Apple Development certificate so that macOS pe
 
 ### First-run setup
 
-Lorelei needs three permissions, all granted to the single Lorelei app:
+Fresh installs walk through a first-run onboarding flow: welcome -> permissions -> workspace.
+Afterwards, permissions and settings live in the Lorelei Settings window, opened from the gear button in the expanded floating toolbar.
+The settings window also opens automatically if permissions go missing.
+
+Lorelei needs these permissions and approvals, all granted to the single Lorelei app:
 
 1. **Microphone** - to hear you.
 2. **Accessibility** - to read UI trees and press buttons.
 3. **Screen Recording** - for the screenshot fallback when an app exposes poor accessibility data.
+4. **Screen Content Picker** - a one-time approval used by screen questions.
 
-The setup panel (menu bar icon) shows a Grant button for each, plus a one-time screen-content picker approval used by screen questions.
-You also pick a **workspace folder** there; Codex uses it as the working directory for file and shell commands.
+You also pick a **workspace folder** in onboarding or settings; Codex uses it as the working directory for file and shell commands.
 
 ### Talking to Lorelei
 
@@ -95,16 +105,16 @@ Design notes:
 
 Docs live in the repo:
 
-- Product spec and decision log: `docs/superpowers/specs/2026-07-02-lorelei-buddy-redesign.md`
-- Per-phase implementation plans: `docs/superpowers/plans/`
 - PRD: [issue #2](https://github.com/taishikato/lorelei/issues/2)
+- App Server schema snapshot: `docs/appserver-schema/` tracks the codex app-server JSON schema. Regenerate it with `./scripts/update-appserver-schema.sh` after Codex CLI upgrades, then review the diff against `CodexAppServerProtocol.swift`.
 
 Run the tests:
 
 ```bash
-xcodebuild test -project Lorelei.xcodeproj -scheme Lorelei -destination 'platform=macOS'
+xcodebuild test -project Lorelei.xcodeproj -scheme Lorelei -destination 'platform=macOS' -test-timeouts-enabled YES -default-test-execution-time-allowance 60
 ```
 
+CI runs the same suite on every PR.
 The suite needs no real codex process, no microphone, and no granted permissions: transcription, the App Server protocol, and desktop actions are all seams with scripted fakes.
 The three seams to know:
 
@@ -123,6 +133,7 @@ The three seams to know:
 
 - Audio never leaves your Mac; transcription is fully on-device.
 - Transcripts, accessibility-tree text, and screenshots taken by `lorelei.screenshot` are sent to OpenAI through your Codex account, subject to its data controls.
+- Release builds send anonymous usage stats (event names, counts, durations) to PostHog so I can see what's used; never transcripts, screen content, or file paths. Debug builds send nothing.
 
 ## Acknowledgements
 
