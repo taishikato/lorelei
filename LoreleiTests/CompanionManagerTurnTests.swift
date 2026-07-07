@@ -1,8 +1,6 @@
 //
-//  LoreleiTests.swift
+//  CompanionManagerTurnTests.swift
 //  LoreleiTests
-//
-//  Created by thorfinn on 3/2/26.
 //
 
 import Testing
@@ -15,7 +13,7 @@ import ServiceManagement
 @testable import Lorelei
 
 @MainActor
-struct LoreleiTests {
+struct CompanionManagerTurnTests {
 
     @Test func companionManagerTracksRunStatusThroughVoiceTurn() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerRunStatusVoiceTurnTests")!
@@ -632,5 +630,4 @@ struct LoreleiTests {
         #expect(manager.latestResultSummary == nil)
         #expect(manager.pendingApprovalTitle == nil)
     }
-
 }
