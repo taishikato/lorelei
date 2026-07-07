@@ -89,8 +89,11 @@ enum CodexAppServerJSONValue: Equatable, Sendable {
         switch value {
         case _ as NSNull:
             self = .null
-        case let value as Bool:
-            self = .bool(value)
+        // JSONSerialization surfaces both numbers and booleans as NSNumber, and
+        // `NSNumber as? Bool` also succeeds for integer 0/1 - identify real JSON
+        // booleans by CFBoolean type identity so 0/1 stay numeric.
+        case let value as NSNumber where CFGetTypeID(value) == CFBooleanGetTypeID():
+            self = .bool(value.boolValue)
         case let value as NSNumber:
             self = .number(value.doubleValue)
         case let value as String:
