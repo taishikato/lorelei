@@ -15,6 +15,7 @@ struct CompanionPanelView: View {
     @ObservedObject private var workspaceStore: WorkspaceSettingsStore
     @ObservedObject private var audioInputDeviceStore: AudioInputDeviceStore
     @StateObject private var loginItemController: LoginItemSettingsController
+    @StateObject private var updateChecker = UpdateChecker()
 
     @MainActor
     init(companionManager: CompanionManager) {
@@ -87,35 +88,98 @@ struct CompanionPanelView: View {
 
     private var generalSection: some View {
         section("General") {
-            HStack(spacing: 10) {
-                Image(systemName: "powerplug")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Launch at Login")
+            VStack(spacing: 5) {
+                HStack(spacing: 10) {
+                    Image(systemName: "powerplug")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.primary)
-                    Text(loginItemController.presentation.statusText)
-                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
-                }
+                        .frame(width: 18)
 
-                Spacer()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Launch at Login")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Text(loginItemController.presentation.statusText)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
 
-                Toggle(
-                    "",
-                    isOn: Binding(
-                        get: { loginItemController.presentation.isOn },
-                        set: { loginItemController.setEnabled($0) }
+                    Spacer()
+
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { loginItemController.presentation.isOn },
+                            set: { loginItemController.setEnabled($0) }
+                        )
                     )
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+                .padding(8)
+                .background(rowBackground)
+
+                updateCheckRow
             }
-            .padding(8)
-            .background(rowBackground)
+        }
+    }
+
+    private var updateCheckRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Check for Updates")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                Text(updateCheckStatusText)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if case let .updateAvailable(result) = updateChecker.state {
+                Button("Open Release Page") {
+                    deferredAction { NSWorkspace.shared.open(result.releaseURL) }
+                }
+                .buttonStyle(PanelButtonStyle(kind: .small))
+                .pointerCursor()
+            } else {
+                Button("Check") {
+                    deferredAction { Task { await updateChecker.check() } }
+                }
+                .buttonStyle(PanelButtonStyle(kind: .small))
+                .disabled(isCheckingForUpdates)
+                .pointerCursor(isEnabled: !isCheckingForUpdates)
+            }
+        }
+        .padding(8)
+        .background(rowBackground)
+    }
+
+    private var isCheckingForUpdates: Bool {
+        if case .checking = updateChecker.state {
+            return true
+        }
+        return false
+    }
+
+    private var updateCheckStatusText: String {
+        switch updateChecker.state {
+        case .idle:
+            return "You're on \(appVersion)"
+        case .checking:
+            return "Checking..."
+        case .upToDate:
+            return "Up to date"
+        case let .updateAvailable(result):
+            return "\(result.latestVersion) available"
+        case let .failed(message):
+            return message
         }
     }
 

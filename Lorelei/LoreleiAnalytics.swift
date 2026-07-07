@@ -35,6 +35,7 @@ enum LoreleiAnalyticsEvent {
     case newChatStarted
     case onboardingStarted
     case onboardingCompleted
+    case updateCheckPerformed(updateAvailable: Bool)
 
     var name: String {
         switch self {
@@ -52,6 +53,7 @@ enum LoreleiAnalyticsEvent {
         case .newChatStarted: "new_chat_started"
         case .onboardingStarted: "onboarding_started"
         case .onboardingCompleted: "onboarding_completed"
+        case .updateCheckPerformed: "update_check_performed"
         }
     }
 
@@ -75,6 +77,8 @@ enum LoreleiAnalyticsEvent {
             ]
         case .approvalResolved(let accepted):
             return ["accepted": accepted]
+        case .updateCheckPerformed(let updateAvailable):
+            return ["update_available": updateAvailable]
         }
     }
 }
