@@ -788,6 +788,35 @@ struct LoreleiTests {
         #expect(router.route("use computer use to open System Settings") == .codexDesktopAction("use computer use to open System Settings"))
     }
 
+    @Test func routerKeepsQuestionsReadOnlyAndEscalatesOnlyClearLeadingCommands() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("should I add error handling here?") == .codexReadOnly("should I add error handling here?"))
+        #expect(router.route("what would you add to this file?") == .codexReadOnly("what would you add to this file?"))
+        #expect(router.route("can you search the git history for the bug?") == .codexDesktopAction("can you search the git history for the bug?"))
+        #expect(router.route("open textedit and write a story") == .codexDesktopAction("open textedit and write a story"))
+        #expect(router.route("can you open textedit") == .codexDesktopAction("can you open textedit"))
+        #expect(router.route("please fix the failing test") == .codexWorkspaceWrite("please fix the failing test"))
+        #expect(router.route("fix the login bug") == .codexWorkspaceWrite("fix the login bug"))
+        #expect(router.route("tell me about the codebase and how files are added") == .codexReadOnly("tell me about the codebase and how files are added"))
+        #expect(router.route("what's on my screen?") == .codexScreen("what's on my screen?"))
+        #expect(router.route("what changed?") == .gitDiff)
+        #expect(router.route("is it safe to delete the cache?") == .codexReadOnly("is it safe to delete the cache?"))
+        #expect(router.route("update the readme with the new install steps") == .codexWorkspaceWrite("update the readme with the new install steps"))
+        // 'will' is in the interrogative list, so the polite-command form
+        // must be rescued by prefix stripping, not swallowed by the guard.
+        #expect(router.route("will you fix the failing test?") == .codexWorkspaceWrite("will you fix the failing test?"))
+        #expect(router.route("will you open chrome?") == .codexDesktopAction("will you open chrome?"))
+        // Imperative preambles are stripped so the verb lands inside the
+        // leading-token window instead of falling through to read-only.
+        #expect(router.route("I need you to fix the failing test") == .codexWorkspaceWrite("I need you to fix the failing test"))
+        #expect(router.route("I want you to open chrome") == .codexDesktopAction("I want you to open chrome"))
+        // A leading auxiliary is a question only with a subject after it -
+        // imperative 'do ...' commands must keep routing to their action.
+        #expect(router.route("do a google search for swift concurrency") == .codexDesktopAction("do a google search for swift concurrency"))
+        #expect(router.route("do you see any bugs here?") == .codexReadOnly("do you see any bugs here?"))
+    }
+
     @Test func workspaceWritePromptIncludesNoCommitGuard() async throws {
         let prompt = CodexPromptBuilder.workspaceWritePrompt(for: "fix the test")
 
@@ -2485,6 +2514,29 @@ struct LoreleiTests {
         #expect(result.status == .succeeded)
         #expect(result.summary == "Done")
         #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
+    }
+
+    @Test func appServerDesktopActionTurnStartUsesReadOnlySandbox() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let params = try #require(turnStart["params"] as? [String: Any])
+        let sandboxPolicy = try #require(params["sandboxPolicy"] as? [String: Any])
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Done")
+        #expect(sandboxPolicy["type"] as? String == "readOnly")
     }
 
     @Test func appServerSessionReusesTransportAcrossTurns() async throws {

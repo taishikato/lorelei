@@ -442,7 +442,7 @@ final class CodexAppServerExecutor {
     }
 
     func runDesktopAction(prompt: String, cwd: String) async -> WorkspaceCommandResult {
-        await runTurn(prompt: prompt, cwd: cwd)
+        await runTurn(prompt: prompt, cwd: cwd, sandboxPolicy: "readOnly")
     }
 
     func runComputerUse(prompt: String, cwd: String) async -> WorkspaceCommandResult {
