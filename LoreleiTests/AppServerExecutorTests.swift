@@ -401,6 +401,7 @@ struct AppServerExecutorTests {
     }
 
     @Test func appServerExecutorTimeoutInterruptsBeforeTerminating() async throws {
+        let timeoutGate = SleepGate()
         let completingTransport = InterruptCompletingCodexAppServerTransport(
             initialLines: [
                 #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
@@ -409,15 +410,15 @@ struct AppServerExecutorTests {
             ],
             interruptCompletionLines: [
                 #"{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"interrupted"}}}"#
-            ]
+            ],
+            onInitialLinesDrained: {
+                Task { await timeoutGate.release() }
+            }
         )
         let completingExecutor = CodexAppServerExecutor(
-            // Generous, not knife-edge: the timer must lose the race against
-            // consuming the scripted session/turn lines under parallel-suite
-            // load. 1.0s still flaked on cold first runs of the full suite,
-            // so this uses 2.0s.
             turnTimeoutSeconds: 2.0,
             timeoutInterruptGraceSeconds: 1.0,
+            timeoutSleep: { _ in try await timeoutGate.wait() },
             makeTransport: { completingTransport },
             approvalHandler: { _ in .cancel }
         )
@@ -433,18 +434,21 @@ struct AppServerExecutorTests {
         #expect(interruptParams["turnId"] as? String == "turn-9")
         #expect(!(await completingTransport.didTerminate))
 
+        let silentTimeoutGate = SleepGate()
         let silentTransport = HangingAfterLinesCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
             #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
             #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
-        ])
+        ], onInitialLinesDrained: {
+            Task {
+                await silentTimeoutGate.release()
+                await silentTimeoutGate.release()
+            }
+        })
         let silentExecutor = CodexAppServerExecutor(
-            // Generous, not knife-edge: the timer must lose the race against
-            // consuming the scripted session/turn lines under parallel-suite
-            // load. 1.0s still flaked on cold first runs of the full suite,
-            // so this uses 2.0s.
             turnTimeoutSeconds: 2.0,
             timeoutInterruptGraceSeconds: 0.05,
+            timeoutSleep: { _ in try await silentTimeoutGate.wait() },
             makeTransport: { silentTransport },
             approvalHandler: { _ in .cancel }
         )
