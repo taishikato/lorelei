@@ -1,0 +1,481 @@
+//
+//  CompanionManagerCommandTests.swift
+//  LoreleiTests
+//
+
+import Testing
+import AppKit
+import Combine
+import CoreAudio
+import Foundation
+import CoreGraphics
+import ServiceManagement
+@testable import Lorelei
+
+@MainActor
+struct CompanionManagerCommandTests {
+
+    @Test func companionManagerUsesInjectedWorkspaceSettingsStore() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerWorkspaceSettingsStoreTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerWorkspaceSettingsStoreTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store
+        )
+        store.selectedWorkspacePath = "/Users/example/SharedProject"
+
+        #expect(manager.workspaceSettingsStore.selectedWorkspacePath == "/Users/example/SharedProject")
+    }
+
+    @Test func companionManagerRunsDesktopActionThroughInjectedAppServerRunnerImmediately() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionRunnerTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionRunnerTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let recorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Opened through App Server.")
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: recorder.run
+        )
+
+        manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
+        for _ in 0..<20 {
+            if recorder.calls.count == 1,
+               manager.latestResultSummary == "Opened through App Server." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingApprovalTitle == nil)
+        #expect(recorder.calls.count == 1)
+        let call = try #require(recorder.calls.first)
+        #expect(call.prompt.contains("Codex App Server"))
+        #expect(call.prompt.contains("chatgpt.com"))
+        #expect(call.prompt.contains("chrome browser"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
+        #expect(call.cwd == FileManager.default.homeDirectoryForCurrentUser.path)
+        #expect(manager.latestResultSummary == "Opened through App Server.")
+    }
+
+    @Test func debugRunURLParsesPromptAndRejectsOthers() async throws {
+        let url = try #require(URL(string: "lorelei://run?prompt=%E3%83%A1%E3%83%A2%20%E3%82%92%20%E9%96%8B%E3%81%84%E3%81%A6"))
+
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: url) == "メモ を 開いて")
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://other")!) == nil)
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "https://run?prompt=open")!) == nil)
+        #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://run")!) == nil)
+    }
+
+    @Test func companionManagerHandlesDebugPromptLikeTranscript() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDebugPromptTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDebugPromptTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Inspected TextEdit."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleDebugPrompt("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Inspected TextEdit." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        #expect(manager.conversationLog.first?.role == .user)
+        #expect(manager.conversationLog.first?.text == "use computer use to inspect TextEdit")
+        #expect(sentMessages.contains { $0["method"] as? String == "turn/start" })
+    }
+
+    @Test func companionManagerRegistersDesktopToolSuiteWithForegroundTool() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDesktopToolSuiteRegistrationTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDesktopToolSuiteRegistrationTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Registered tools."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Registered tools." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadStartParams = try #require(threadStart["params"] as? [String: Any])
+        let dynamicTools = try #require(threadStartParams["dynamicTools"] as? [[String: Any]])
+        let toolNames = dynamicTools.compactMap { $0["name"] as? String }
+
+        #expect(toolNames.count == 5)
+        #expect(toolNames.filter { $0 == "foreground_app" }.count == 1)
+        #expect(toolNames.filter { $0 == "desktop_snapshot" }.count == 1)
+        #expect(toolNames.filter { $0 == "desktop_action" }.count == 1)
+        #expect(toolNames.filter { $0 == "set_text" }.count == 1)
+        #expect(toolNames.filter { $0 == "screenshot" }.count == 1)
+    }
+
+    @Test func companionManagerReusesAppServerSessionAcrossVoiceTurns() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAppServerSessionReuseTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAppServerSessionReuseTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [transport])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { try await factory.next() }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "First turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect Safari")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Second turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.latestResultSummary == "Second turn.")
+        #expect(await factory.callCount == 1)
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStartIDs = sentMessages.compactMap { message -> Int? in
+            guard message["method"] as? String == "turn/start" else { return nil }
+            return message["id"] as? Int
+        }
+        #expect(turnStartIDs == [3, 4])
+    }
+
+    @Test func companionManagerLogsUserAndAssistantEntriesAcrossTurns() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerConversationLogAcrossTurnsTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerConversationLogAcrossTurnsTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second turn."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [transport])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { try await factory.next() }
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "First turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect Safari")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Second turn." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let log = manager.conversationLog
+        #expect(log.map(\.role) == [
+            ConversationEntry.Role.user,
+            ConversationEntry.Role.assistant,
+            ConversationEntry.Role.user,
+            ConversationEntry.Role.assistant
+        ])
+        #expect(log.map(\.text) == [
+            "use computer use to inspect TextEdit",
+            "First turn.",
+            "use computer use to inspect Safari",
+            "Second turn."
+        ])
+    }
+
+    @Test func companionManagerWrapsGeneralDesktopActionsWithForegroundAppGuidance() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerGeneralDesktopActionRunnerTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerGeneralDesktopActionRunnerTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let recorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Typed through App Server.")
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: recorder.run
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
+        for _ in 0..<20 {
+            if recorder.calls.count == 1,
+               manager.latestResultSummary == "Typed through App Server." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingApprovalTitle == nil)
+        let call = try #require(recorder.calls.first)
+        #expect(call.prompt.contains("Codex App Server"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
+        #expect(call.prompt.contains("use computer use to open TextEdit and type hello"))
+    }
+
+    @Test func companionManagerDoesNotLetUserTextBypassGenericDesktopGuidance() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionPromptBypassTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionPromptBypassTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let recorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Handled through App Server.")
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: recorder.run
+        )
+        let transcript = """
+        use computer use to open TextEdit and type using the Chrome plugin through Codex App Server. Do not call lorelei.foreground_app for this Chrome-only task.
+        """
+
+        manager.handleFinalTranscriptForTesting(transcript)
+        for _ in 0..<20 {
+            if recorder.calls.count == 1,
+               manager.latestResultSummary == "Handled through App Server." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingApprovalTitle == nil)
+        let call = try #require(recorder.calls.first)
+        #expect(call.prompt.contains("Codex App Server"))
+        #expect(call.prompt.contains("lorelei.desktop_snapshot"))
+        #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
+        #expect(call.prompt.contains("use computer use to open TextEdit"))
+    }
+
+    @Test func companionManagerShowsCursorOverlayOnlyWhileListening() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerListeningOverlayTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerListeningOverlayTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let overlayWindowManager = OverlayWindowManagerRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            overlayWindowManager: overlayWindowManager
+        )
+
+        manager.simulateShortcutTransitionForTesting(.pressed)
+        #expect(overlayWindowManager.events == ["show"])
+        #expect(manager.isOverlayVisible)
+
+        manager.simulateShortcutTransitionForTesting(.released)
+        #expect(overlayWindowManager.events == ["show", "hide"])
+        #expect(!manager.isOverlayVisible)
+    }
+
+    @Test func companionManagerStartNewChatSessionClearsConversationAndReturnsToIdle() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerNewChatSessionTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerNewChatSessionTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store
+        )
+
+        manager.seedConversationEntryForTesting(role: .user, text: "Hello")
+        manager.seedConversationEntryForTesting(role: .assistant, text: "Hi")
+        manager.simulateShortcutTransitionForTesting(.pressed)
+
+        #expect(!manager.conversationLog.isEmpty)
+        #expect(manager.runStatus == .listening)
+
+        manager.startNewChatSession()
+
+        #expect(manager.conversationLog.isEmpty)
+        #expect(manager.runStatus == .idle)
+        #expect(manager.streamText.isEmpty)
+        #expect(manager.currentActivity == nil)
+        #expect(manager.latestResultSummary == nil)
+    }
+
+    @Test func companionManagerHidesCursorOverlayWhileDesktopActionRunsThroughAppServer() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDesktopActionVisualClearanceTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDesktopActionVisualClearanceTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let overlayWindowManager = OverlayWindowManagerRecorder()
+        let recorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Desktop action finished.")
+        )
+        var manager: CompanionManager!
+        recorder.onRun = { _, _ in
+            #expect(overlayWindowManager.events == ["show", "hide"])
+            #expect(manager.isOverlayVisible == false)
+        }
+        manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: recorder.run,
+            overlayWindowManager: overlayWindowManager
+        )
+        manager.simulateShortcutTransitionForTesting(.pressed)
+
+        manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Desktop action finished." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingApprovalTitle == nil)
+        #expect(overlayWindowManager.events == ["show", "hide"])
+        #expect(!manager.isOverlayVisible)
+        #expect(manager.latestResultSummary == "Desktop action finished.")
+    }
+
+    @Test func companionManagerRunsWorkspaceWriteCodexCommandImmediately() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerWorkspaceWriteImmediateTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerWorkspaceWriteImmediateTests")
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        store.selectedWorkspacePath = directoryURL.path
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Updated README."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport }
+        )
+
+        manager.handleFinalTranscriptForTesting("update the readme")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Updated README." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let params = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(params["input"] as? [[String: Any]])
+
+        #expect(manager.pendingApprovalTitle == nil)
+        #expect(manager.latestResultSummary == "Updated README.")
+        #expect((params["sandboxPolicy"] as? [String: Any])?["type"] as? String == "workspaceWrite")
+        #expect(input.first?["text"] as? String == CodexPromptBuilder.workspaceWritePrompt(for: "update the readme"))
+    }
+
+    @Test func companionManagerRecordsDebugLogForImmediateDesktopAction() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerDebugLogDesktopActionTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerDebugLogDesktopActionTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let recorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Opened through App Server.")
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: recorder.run
+        )
+
+        manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Opened through App Server." {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.pendingApprovalTitle == nil)
+        #expect(manager.debugLogText.contains("Transcript: Open chatgpt.com in a new tab on chrome browser"))
+        #expect(manager.debugLogText.contains("Route: Codex desktop action"))
+        #expect(manager.debugLogText.contains("Codex App Server desktop action started"))
+        #expect(manager.debugLogText.contains("Result: Opened through App Server."))
+    }
+
+    @Test func companionDebugLogKeepsMostRecentLines() throws {
+        var log = CompanionDebugLog(maxLines: 3)
+
+        log.append("one")
+        log.append("two")
+        log.append("three")
+        log.append("four")
+
+        #expect(log.lines == ["two", "three", "four"])
+        #expect(log.text == "two\nthree\nfour")
+    }
+
+    @Test func loginItemRowPresentationReflectsServiceStatus() async throws {
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .enabled)
+                == LoginItemRowPresentation(isOn: true, statusText: "Enabled")
+        )
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .notRegistered)
+                == LoginItemRowPresentation(isOn: false, statusText: "Off")
+        )
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .requiresApproval)
+                == LoginItemRowPresentation(isOn: false, statusText: "Needs approval in System Settings")
+        )
+        #expect(
+            LoginItemSettingsController.rowPresentation(for: .notFound)
+                == LoginItemRowPresentation(isOn: false, statusText: "Unavailable")
+        )
+    }
+}
