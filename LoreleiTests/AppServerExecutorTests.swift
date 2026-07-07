@@ -1,0 +1,615 @@
+//
+//  AppServerExecutorTests.swift
+//  LoreleiTests
+//
+
+import Testing
+import AppKit
+import Combine
+import CoreAudio
+import Foundation
+import CoreGraphics
+import ServiceManagement
+@testable import Lorelei
+
+@MainActor
+struct AppServerExecutorTests {
+
+    @Test func appServerExecutorDefaultTurnTimeoutIsFiveMinutes() async throws {
+        let executor = CodexAppServerExecutor(
+            makeTransport: { FakeCodexAppServerTransport(lines: []) },
+            approvalHandler: { _ in .accept }
+        )
+
+        #expect(executor.defaultedTurnTimeoutSecondsForTesting == 300)
+    }
+
+    @Test func appServerExecutorAnswersMcpElicitationApprovalWithZeroID() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":0,"method":"mcpServer/elicitation/request","params":{"threadId":"thread-1","turnId":"turn-1","serverName":"example-server","mode":"form","_meta":null,"message":"Allow Codex to use Google Chrome?","requestedSchema":{"type":"object","properties":{}}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Approved and done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            approvalHandler: { _ in .accept }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "inspect Chrome", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Approved and done")
+        #expect(await transport.sentLines.contains { line in
+            line.contains(#""id":0"#)
+                && line.contains(#""action":"accept""#)
+                && line.contains(#""content":{}"#)
+        })
+    }
+
+    @Test func appServerExecutorAnswersPermissionsApproval() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":46,"method":"item/permissions/requestApproval","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-3","startedAtMs":1779912000000,"cwd":"/Users/example","reason":"Need network access.","permissions":{"network":{"enabled":true},"fileSystem":null}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Approved permissions and done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            approvalHandler: { _ in .accept }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open a URL", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Approved permissions and done")
+
+        let responseLine = try #require(await transport.sentLines.first { line in
+            guard let data = line.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return false
+            }
+            return root["id"] as? Int == 46
+        })
+        let response = try #require(try JSONSerialization.jsonObject(with: Data(responseLine.utf8)) as? [String: Any])
+        let responseResult = try #require(response["result"] as? [String: Any])
+        let permissions = try #require(responseResult["permissions"] as? [String: Any])
+        let network = try #require(permissions["network"] as? [String: Any])
+
+        #expect(network["enabled"] as? Bool == true)
+        #expect(permissions["fileSystem"] == nil)
+        #expect(responseResult["scope"] as? String == "turn")
+    }
+
+    @Test func appServerExecutorReportsFailedMcpToolCallEvenWhenTurnCompletes() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"id":"item-1","type":"mcpToolCall","status":"failed","server":"example-server","tool":"get_app_state","result":{"content":[{"type":"text","text":"Example server error"}],"isError":true}}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"I could not read the Google Chrome window."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            approvalHandler: { _ in .accept }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "inspect Chrome", cwd: "/Users/example")
+
+        #expect(result.status == .failed)
+        #expect(result.summary == "I could not read the Google Chrome window.")
+    }
+
+    @Test func appServerProtocolParsesGeneratedTurnCompletedShape() throws {
+        let line = """
+        {"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"itemsView":"all","status":"failed","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}
+        """
+
+        let event = try CodexAppServerProtocol.parseInboundLine(line)
+
+        #expect(event == .turnCompleted(status: "failed"))
+    }
+
+    @Test func appServerProtocolParsesWaitingOnApprovalStatus() throws {
+        let line = """
+        {"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}
+        """
+
+        let event = try CodexAppServerProtocol.parseInboundLine(line)
+
+        #expect(event == .threadWaitingOnApproval(true))
+    }
+
+    @Test func appServerProtocolFailsFastForUnsupportedServerRequests() throws {
+        let line = """
+        {"id":45,"method":"item/unknown/request","params":{"threadId":"thread-1","turnId":"turn-1"}}
+        """
+
+        let event = try CodexAppServerProtocol.parseInboundLine(line)
+
+        #expect(event == .unsupportedServerRequest(requestID: 45, method: "item/unknown/request"))
+    }
+
+    @Test func appServerExecutorStartsThreadAndTurn() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Done")
+        #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
+    }
+
+    @Test func appServerDesktopActionTurnStartUsesReadOnlySandbox() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let params = try #require(turnStart["params"] as? [String: Any])
+        let sandboxPolicy = try #require(params["sandboxPolicy"] as? [String: Any])
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Done")
+        #expect(sandboxPolicy["type"] as? String == "readOnly")
+    }
+
+    @Test func appServerSessionReusesTransportAcrossTurns() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factoryCallCount = AsyncCounter()
+        let executor = CodexAppServerExecutor(
+            makeTransport: {
+                await factoryCallCount.increment()
+                return transport
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let first = await executor.runDesktopAction(prompt: "first", cwd: "/Users/example")
+        let didTerminateAfterFirstTurn = await transport.didTerminate
+        let second = await executor.runDesktopAction(prompt: "second", cwd: "/Users/example")
+
+        #expect(first.status == .succeeded)
+        #expect(first.summary == "First")
+        #expect(second.status == .succeeded)
+        #expect(second.summary == "Second")
+        #expect(await factoryCallCount.value == 1)
+        #expect(!didTerminateAfterFirstTurn)
+        let sentMessages = try await transport.sentJSONMessages()
+        let turnStarts = sentMessages.filter { $0["method"] as? String == "turn/start" }
+        #expect(turnStarts.map { $0["id"] as? Int } == [3, 4])
+    }
+
+    @Test func appServerSessionRespawnsWhenCwdChanges() async throws {
+        let firstTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let secondTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-2"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [firstTransport, secondTransport])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { try await factory.next() },
+            approvalHandler: { _ in .cancel }
+        )
+
+        _ = await executor.runDesktopAction(prompt: "first", cwd: "/Users/example/one")
+        _ = await executor.runDesktopAction(prompt: "second", cwd: "/Users/example/two")
+
+        #expect(await factory.callCount == 2)
+        #expect(await firstTransport.didTerminate)
+        let sentMessages = try await secondTransport.sentJSONMessages()
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let params = try #require(threadStart["params"] as? [String: Any])
+        #expect(params["cwd"] as? String == "/Users/example/two")
+    }
+
+    @Test func appServerSessionRetriesOnceOnDeadTransport() async throws {
+        let deadTransport = ThrowingSendCodexAppServerTransport()
+        let healthyTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-2"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Recovered"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [deadTransport, healthyTransport])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { try await factory.next() },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "recover", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Recovered")
+        #expect(await factory.callCount == 2)
+        #expect(await deadTransport.didTerminate)
+    }
+
+    @Test func appServerStopInvalidatesSession() async throws {
+        let firstTransport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
+        ])
+        let secondTransport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-2"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Fresh"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let factory = AppServerTransportFactoryRecorder(transports: [firstTransport, secondTransport])
+        let executor = CodexAppServerExecutor(
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            makeTransport: { try await factory.next() },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let stopped = await executor.runDesktopAction(prompt: "stop", cwd: "/Users/example")
+        let fresh = await executor.runDesktopAction(prompt: "fresh", cwd: "/Users/example")
+
+        #expect(stopped.status == .failed)
+        #expect(stopped.summary.contains("Codex App Server command timed out."))
+        #expect(fresh.status == .succeeded)
+        #expect(fresh.summary == "Fresh")
+        #expect(await factory.callCount == 2)
+    }
+
+    @Test func appServerExecutorAnswersToolUserInputApproval() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":44,"method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","questions":[{"id":"approval","header":"Computer Use","question":"Allow control?","isOther":false,"isSecret":false,"options":[{"label":"Accept","description":"Allow."},{"label":"Decline","description":"Stop."}]}]}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Approved and done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            approvalHandler: { _ in .accept }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "click submit", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(result.summary == "Approved and done")
+        #expect(await transport.sentLines.contains { $0.contains(#""id":44"#) && $0.contains(#""Accept"#) })
+    }
+
+    @Test func appServerExecutorTimesOutSilentServer() async throws {
+        let transport = HangingCodexAppServerTransport()
+        let executor = CodexAppServerExecutor(
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+
+        #expect(result.summary.contains("Codex App Server command timed out."))
+        #expect(result.status == .failed)
+        #expect(await transport.didTerminate)
+    }
+
+    @Test func appServerExecutorIncludesProtocolTraceWhenTimeoutHappensAfterThreadStart() async throws {
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open Chrome", cwd: "/Users/example")
+
+        #expect(result.status == .failed)
+        #expect(result.summary.contains("Codex App Server command timed out."))
+        #expect(result.summary.contains("Trace:"))
+        #expect(result.summary.contains("outbound initialize#1"))
+        #expect(result.summary.contains("inbound threadStarted#2:thread-1"))
+        #expect(result.summary.contains("outbound turn/start#3"))
+    }
+
+    @Test func appServerExecutorReportsTimeoutWhenTransportReadThrowsAfterTermination() async throws {
+        let transport = ThrowingAfterTerminateCodexAppServerTransport()
+        let executor = CodexAppServerExecutor(
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines, or the turn never
+            // starts and the timeout-shape contract cannot hold. 1.0s still
+            // flaked on cold first runs of the full suite, so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+
+        #expect(result.summary.contains("Codex App Server command timed out."))
+        #expect(result.status == .failed)
+        #expect(await transport.didTerminate)
+    }
+
+    @Test func appServerExecutorReportsUndeliveredApprovalRequestOnTimeout() async throws {
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}"#
+        ])
+        // Generous, not knife-edge: the scripted lines - including the
+        // waitingOnApproval status the hint depends on - must be consumed
+        // before the timer fires now that the timeout also covers session
+        // establishment. This test needs THREE lines consumed pre-timeout,
+        // making it the most schedule-sensitive of the timeout family: it
+        // flaked at 1.0s and again at 2.0s under parallel-suite load, so it
+        // alone uses 3.0s.
+        let executor = CodexAppServerExecutor(
+            turnTimeoutSeconds: 3.0,
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "inspect TextEdit", cwd: "/Users/example")
+
+        #expect(result.summary.contains("Codex App Server is waiting for approval, but no approval request was delivered."))
+        #expect(result.status == .failed)
+        #expect(await transport.didTerminate)
+    }
+
+    @Test func appServerExecutorTimeoutInterruptsBeforeTerminating() async throws {
+        let completingTransport = InterruptCompletingCodexAppServerTransport(
+            initialLines: [
+                #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+                #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+                #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
+            ],
+            interruptCompletionLines: [
+                #"{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"interrupted"}}}"#
+            ]
+        )
+        let completingExecutor = CodexAppServerExecutor(
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite
+            // load. 1.0s still flaked on cold first runs of the full suite,
+            // so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            timeoutInterruptGraceSeconds: 1.0,
+            makeTransport: { completingTransport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let completingResult = await completingExecutor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+        let completingMessages = try await completingTransport.sentJSONMessages()
+        let interrupt = try #require(completingMessages.first { $0["method"] as? String == "turn/interrupt" })
+        let interruptParams = try #require(interrupt["params"] as? [String: Any])
+
+        #expect(completingResult.status == .failed)
+        #expect(completingResult.summary.contains("Codex App Server command timed out."))
+        #expect(interruptParams["threadId"] as? String == "thread-1")
+        #expect(interruptParams["turnId"] as? String == "turn-9")
+        #expect(!(await completingTransport.didTerminate))
+
+        let silentTransport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
+        ])
+        let silentExecutor = CodexAppServerExecutor(
+            // Generous, not knife-edge: the timer must lose the race against
+            // consuming the scripted session/turn lines under parallel-suite
+            // load. 1.0s still flaked on cold first runs of the full suite,
+            // so this uses 2.0s.
+            turnTimeoutSeconds: 2.0,
+            timeoutInterruptGraceSeconds: 0.05,
+            makeTransport: { silentTransport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let silentResult = await silentExecutor.runDesktopAction(prompt: "open TextEdit", cwd: "/Users/example")
+        let silentMessages = try await silentTransport.sentJSONMessages()
+
+        #expect(silentResult.status == .failed)
+        #expect(silentResult.summary.contains("Codex App Server command timed out."))
+        #expect(silentMessages.contains { $0["method"] as? String == "turn/interrupt" })
+        #expect(await silentTransport.didTerminate)
+    }
+
+    @Test func appServerExecutorRegistersAndAnswersDynamicToolCalls() async throws {
+        let dynamicTool = CodexAppServerDynamicToolSpec(
+            name: "foreground_app",
+            namespace: "lorelei",
+            description: "Bring an app onscreen.",
+            inputSchema: .object(["type": .string("object")])
+        )
+        let dynamicToolRequestRecorder = StringRecorder()
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":47,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"lorelei","tool":"foreground_app","arguments":{"bundleIdentifier":"com.google.Chrome"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Foregrounded and done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            dynamicToolSpecsResolver: { [dynamicTool] },
+            dynamicToolHandler: { request in
+                dynamicToolRequestRecorder.record(request.tool)
+                return CodexAppServerDynamicToolCallResult(
+                    success: true,
+                    contentText: "Google Chrome is onscreen."
+                )
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "foreground Chrome", cwd: "/Users/example")
+
+        #expect(result.summary == "Foregrounded and done")
+        #expect(dynamicToolRequestRecorder.values == ["foreground_app"])
+        let sentMessages = try await transport.sentLines.map { line in
+            try #require(try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
+        }
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadStartParams = try #require(threadStart["params"] as? [String: Any])
+        let dynamicTools = try #require(threadStartParams["dynamicTools"] as? [[String: Any]])
+        let firstDynamicTool = try #require(dynamicTools.first)
+        #expect(firstDynamicTool["name"] as? String == "foreground_app")
+
+        let dynamicToolResponse = try #require(sentMessages.first { $0["id"] as? Int == 47 })
+        let responseResult = try #require(dynamicToolResponse["result"] as? [String: Any])
+        #expect(responseResult["success"] as? Bool == true)
+        #expect((responseResult["contentItems"] as? [[String: Any]])?.first?["text"] as? String == "Google Chrome is onscreen.")
+    }
+
+    @Test func appServerExecutorRecordsProtocolAndDynamicToolTraceEvents() async throws {
+        let dynamicTool = CodexAppServerDynamicToolSpec(
+            name: "foreground_app",
+            namespace: "lorelei",
+            description: "Bring an app onscreen.",
+            inputSchema: .object(["type": .string("object")])
+        )
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"id":47,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"lorelei","tool":"foreground_app","arguments":{"bundleIdentifier":"com.google.Chrome"}}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let recorder = AppServerTraceRecorder()
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            dynamicToolSpecsResolver: { [dynamicTool] },
+            dynamicToolHandler: { _ in
+                CodexAppServerDynamicToolCallResult(
+                    success: true,
+                    contentText: "Google Chrome is onscreen."
+                )
+            },
+            traceHandler: { event in
+                recorder.record(event)
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        _ = await executor.runDesktopAction(prompt: "foreground Chrome", cwd: "/Users/example")
+
+        let eventLines = Set(recorder.eventLines)
+        #expect(eventLines.contains("outbound initialize#1"))
+        #expect(eventLines.contains("inbound response#1"))
+        #expect(eventLines.contains("inbound dynamicToolCall#47:lorelei.foreground_app"))
+        #expect(eventLines.contains("dynamicToolStarted 47:lorelei.foreground_app"))
+        #expect(eventLines.contains("dynamicToolCompleted 47:lorelei.foreground_app:success=true"))
+        #expect(eventLines.contains("outbound response#47"))
+    }
+
+    @Test func executorReportsProgressForDeltasAndToolCalls() async throws {
+        let dynamicTool = CodexAppServerDynamicToolSpec(
+            name: "desktop_snapshot",
+            namespace: "lorelei",
+            description: "Read the desktop.",
+            inputSchema: .object(["type": .string("object")])
+        )
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"id":47,"method":"item/tool/call","params":{"threadId":"thread-1","turnId":"turn-1","callId":"call-1","namespace":"lorelei","tool":"desktop_snapshot","arguments":{}}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let recorder = AppServerProgressRecorder()
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            dynamicToolSpecsResolver: { [dynamicTool] },
+            dynamicToolHandler: { _ in
+                CodexAppServerDynamicToolCallResult(success: true, contentText: "snapshot")
+            },
+            progressHandler: { progress in
+                recorder.record(progress)
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        _ = await executor.runDesktopAction(prompt: "inspect desktop", cwd: "/Users/example")
+
+        #expect(recorder.progress == [
+            .agentMessageDelta("Hel"),
+            .agentMessageDelta("lo"),
+            .toolCallStarted(name: "lorelei.desktop_snapshot"),
+            .toolCallCompleted(name: "lorelei.desktop_snapshot", success: true),
+            .turnEnded
+        ])
+    }
+
+    @Test func appServerExecutorReportsTurnStartedAndEnded() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let recorder = AppServerProgressRecorder()
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            progressHandler: { progress in
+                recorder.record(progress)
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runDesktopAction(prompt: "inspect desktop", cwd: "/Users/example")
+
+        #expect(result.status == .succeeded)
+        #expect(recorder.progress == [
+            .turnStarted(threadID: "thread-1", turnID: "turn-9"),
+            .agentMessageDelta("Hel"),
+            .agentMessageDelta("lo"),
+            .turnEnded
+        ])
+    }
+}
