@@ -70,17 +70,6 @@ enum CompanionVoiceState {
     case responding
 }
 
-struct ConversationEntry: Identifiable, Equatable, Sendable {
-    enum Role: Equatable, Sendable {
-        case user
-        case assistant
-    }
-
-    let id: UUID
-    let role: Role
-    var text: String
-}
-
 struct CompanionResponseTaskTracker {
     private(set) var currentTaskID: UUID?
 
@@ -111,7 +100,8 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var debugLog = CompanionDebugLog()
     @Published private(set) var runStatus: LoreleiRunStatus = .idle
     @Published private(set) var streamText: String = ""
-    @Published private(set) var conversationLog: [ConversationEntry] = []
+    @Published private(set) var conversation = ConversationLog()
+    var conversationLog: [ConversationEntry] { conversation.entries }
     @Published private(set) var currentActivity: String?
 
     let buddyDictationManager = BuddyDictationManager()
@@ -133,7 +123,6 @@ final class CompanionManager: ObservableObject {
     private var liveCodexAppServerTransport: CodexAppServerTransporting?
     private var activeTurn: (threadID: String, turnID: String)?
     private var outstandingSteerTranscripts: [Int: String] = [:]
-    private var currentAssistantConversationEntryID: UUID?
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
     /// speaks again so a new response can begin immediately.
@@ -483,8 +472,7 @@ final class CompanionManager: ObservableObject {
         cancelTranscribingWatchdog()
         activeTurn = nil
         outstandingSteerTranscripts.removeAll()
-        conversationLog.removeAll()
-        currentAssistantConversationEntryID = nil
+        conversation.removeAll()
         streamText = ""
         currentActivity = nil
         latestResultSummary = nil
@@ -525,7 +513,7 @@ final class CompanionManager: ObservableObject {
     }
 
     func seedConversationEntryForTesting(role: ConversationEntry.Role, text: String) {
-        appendConversationEntry(role: role, text: text)
+        conversation.append(role: role, text: text)
     }
 #endif
 
@@ -545,7 +533,7 @@ final class CompanionManager: ObservableObject {
                         prompt: transcript,
                         transport: liveCodexAppServerTransport
                     )
-                    appendConversationEntry(role: .user, text: "↪ \(transcript)")
+                    conversation.append(role: .user, text: "↪ \(transcript)")
                     LoreleiAnalytics.capture(.steerSent)
                     LoreleiAnalytics.capture(.dictationCompleted(
                         transcriptCharacters: transcript.count,
@@ -555,7 +543,7 @@ final class CompanionManager: ObservableObject {
                     // the steer opens a NEW entry below it - otherwise all
                     // deltas keep appending to the pre-steer bubble and the
                     // steered line visually sinks to the bottom of the log.
-                    currentAssistantConversationEntryID = nil
+                    conversation.closeAssistantEntry()
                     recordDebugEvent("Steered: \(Self.conciseDebugLine(transcript))")
                 } catch {
                     outstandingSteerTranscripts.removeValue(forKey: requestID)
@@ -575,9 +563,9 @@ final class CompanionManager: ObservableObject {
         _ = resolvePendingCodexAppServerApproval(.cancel)
         lastTranscript = transcript
         if appendUserEntry {
-            appendConversationEntry(role: .user, text: transcript)
+            conversation.append(role: .user, text: transcript)
         }
-        currentAssistantConversationEntryID = nil
+        conversation.closeAssistantEntry()
         LoreleiAnalytics.capture(.dictationCompleted(
             transcriptCharacters: transcript.count,
             viaSteer: false
@@ -912,7 +900,7 @@ final class CompanionManager: ObservableObject {
         runStatusIdleReturnTask = nil
         cancelTranscribingWatchdog()
         streamText = ""
-        currentAssistantConversationEntryID = nil
+        conversation.closeAssistantEntry()
         currentActivity = nil
         runStatus = .working("Thinking…")
     }
@@ -933,7 +921,7 @@ final class CompanionManager: ObservableObject {
             routeFinalTranscriptAsNewTurn(transcript, appendUserEntry: false)
         case .agentMessageDelta(let delta):
             streamText += delta
-            appendAssistantDeltaToConversation(delta)
+            conversation.appendAssistantDelta(delta)
         case .toolCallStarted(let name):
             currentActivity = name
             runStatus = .working(name)
@@ -954,50 +942,11 @@ final class CompanionManager: ObservableObject {
         // tool-only turns without deltas).
         if streamText.trimmingCharacters(in: .whitespacesAndNewlines)
             != result.summary.trimmingCharacters(in: .whitespacesAndNewlines) {
-            updateAssistantConversationEntry(text: result.summary)
+            conversation.updateAssistantEntry(text: result.summary)
         }
         let succeeded = result.status == .succeeded
         finishRunStatus(success: succeeded)
         audioFeedback.play(succeeded ? .runSucceeded : .runFailed, spokenSummary: result.summary)
-    }
-
-    private func appendConversationEntry(role: ConversationEntry.Role, text: String) {
-        let entry = ConversationEntry(id: UUID(), role: role, text: text)
-        conversationLog.append(entry)
-        if role == .assistant {
-            currentAssistantConversationEntryID = entry.id
-        }
-        capConversationLog()
-    }
-
-    private func appendAssistantDeltaToConversation(_ delta: String) {
-        guard !delta.isEmpty else { return }
-        if let currentAssistantConversationEntryID,
-           let index = conversationLog.firstIndex(where: { $0.id == currentAssistantConversationEntryID }) {
-            conversationLog[index].text += delta
-        } else {
-            appendConversationEntry(role: .assistant, text: delta)
-        }
-    }
-
-    private func updateAssistantConversationEntry(text: String) {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if let currentAssistantConversationEntryID,
-           let index = conversationLog.firstIndex(where: { $0.id == currentAssistantConversationEntryID }) {
-            conversationLog[index].text = text
-        } else {
-            appendConversationEntry(role: .assistant, text: text)
-        }
-    }
-
-    private func capConversationLog() {
-        let maximumConversationEntries = 200
-        guard conversationLog.count > maximumConversationEntries else { return }
-        conversationLog.removeFirst(conversationLog.count - maximumConversationEntries)
-        if let currentAssistantConversationEntryID,
-           !conversationLog.contains(where: { $0.id == currentAssistantConversationEntryID }) {
-            self.currentAssistantConversationEntryID = nil
-        }
     }
 
     private func finishRunStatus(success: Bool) {
