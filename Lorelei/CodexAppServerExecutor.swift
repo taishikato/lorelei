@@ -346,6 +346,7 @@ private actor CodexAppServerSteerRequestTracker {
 final class CodexAppServerExecutor {
     private let turnTimeoutSeconds: TimeInterval
     private let timeoutInterruptGraceSeconds: TimeInterval
+    private let timeoutSleep: @Sendable (TimeInterval) async throws -> Void
     private let sessionStore: CodexAppServerSessionStore
     private let steerRequestTracker = CodexAppServerSteerRequestTracker()
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
@@ -358,6 +359,9 @@ final class CodexAppServerExecutor {
     init(
         turnTimeoutSeconds: TimeInterval = 300,
         timeoutInterruptGraceSeconds: TimeInterval = 5,
+        timeoutSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
+            try await Task.sleep(for: .seconds(seconds))
+        },
         makeTransport: @escaping () async throws -> CodexAppServerTransporting = {
             try await CodexAppServerStdioTransport.make()
         },
@@ -376,6 +380,7 @@ final class CodexAppServerExecutor {
     ) {
         self.turnTimeoutSeconds = turnTimeoutSeconds
         self.timeoutInterruptGraceSeconds = timeoutInterruptGraceSeconds
+        self.timeoutSleep = timeoutSleep
         self.sessionStore = CodexAppServerSessionStore(
             makeTransport: makeTransport,
             onLifecycleEvent: onSessionLifecycleEvent
@@ -517,12 +522,13 @@ final class CodexAppServerExecutor {
             turnTimeoutSeconds,
             timeoutInterruptGraceSeconds,
             sessionStore,
+            timeoutSleep,
             timeoutState,
             traceBuffer,
             traceHandler
         ] in
             do {
-                try await Task.sleep(for: .seconds(turnTimeoutSeconds))
+                try await timeoutSleep(turnTimeoutSeconds)
             } catch {
                 return
             }
@@ -548,7 +554,7 @@ final class CodexAppServerExecutor {
             }
 
             do {
-                try await Task.sleep(for: .seconds(timeoutInterruptGraceSeconds))
+                try await timeoutSleep(timeoutInterruptGraceSeconds)
             } catch {
                 return
             }

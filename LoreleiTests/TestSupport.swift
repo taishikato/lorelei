@@ -225,11 +225,15 @@ actor HangingCodexAppServerTransport: CodexAppServerTransporting {
 
 actor HangingAfterLinesCodexAppServerTransport: CodexAppServerTransporting {
     private var lines: [String]
+    private var initialLinesRemaining: Int
     private var recordedSentLines: [String] = []
     private var terminated = false
+    private let onInitialLinesDrained: (@Sendable () -> Void)?
 
-    init(lines: [String]) {
+    init(lines: [String], onInitialLinesDrained: (@Sendable () -> Void)? = nil) {
         self.lines = lines
+        self.initialLinesRemaining = lines.count
+        self.onInitialLinesDrained = onInitialLinesDrained
     }
 
     func sentJSONMessages() throws -> [[String: Any]] {
@@ -248,7 +252,14 @@ actor HangingAfterLinesCodexAppServerTransport: CodexAppServerTransporting {
 
     func nextLine() async throws -> String? {
         if !lines.isEmpty {
-            return lines.removeFirst()
+            let line = lines.removeFirst()
+            if initialLinesRemaining > 0 {
+                initialLinesRemaining -= 1
+                if initialLinesRemaining == 0 {
+                    onInitialLinesDrained?()
+                }
+            }
+            return line
         }
 
         while !terminated {
@@ -264,13 +275,21 @@ actor HangingAfterLinesCodexAppServerTransport: CodexAppServerTransporting {
 
 actor InterruptCompletingCodexAppServerTransport: CodexAppServerTransporting {
     private var lines: [String]
+    private var initialLinesRemaining: Int
     private var interruptCompletionLines: [String]
     private var recordedSentLines: [String] = []
     private var terminated = false
+    private let onInitialLinesDrained: (@Sendable () -> Void)?
 
-    init(initialLines: [String], interruptCompletionLines: [String]) {
+    init(
+        initialLines: [String],
+        interruptCompletionLines: [String],
+        onInitialLinesDrained: (@Sendable () -> Void)? = nil
+    ) {
         self.lines = initialLines
+        self.initialLinesRemaining = initialLines.count
         self.interruptCompletionLines = interruptCompletionLines
+        self.onInitialLinesDrained = onInitialLinesDrained
     }
 
     var didTerminate: Bool {
@@ -298,7 +317,14 @@ actor InterruptCompletingCodexAppServerTransport: CodexAppServerTransporting {
 
     func nextLine() async throws -> String? {
         if !lines.isEmpty {
-            return lines.removeFirst()
+            let line = lines.removeFirst()
+            if initialLinesRemaining > 0 {
+                initialLinesRemaining -= 1
+                if initialLinesRemaining == 0 {
+                    onInitialLinesDrained?()
+                }
+            }
+            return line
         }
 
         while !terminated && lines.isEmpty {
@@ -310,6 +336,43 @@ actor InterruptCompletingCodexAppServerTransport: CodexAppServerTransporting {
 
     func terminate() async {
         terminated = true
+    }
+}
+
+actor SleepGate {
+    private var continuations: [CheckedContinuation<Void, Error>] = []
+    private var releasedCount = 0
+
+    /// Suspends until `release()` is called for this waiter (FIFO), or the
+    /// task is cancelled.
+    func wait() async throws {
+        if releasedCount > 0 {
+            releasedCount -= 1
+            return
+        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                continuations.append(continuation)
+            }
+        } onCancel: {
+            Task { await self.cancelAll() }
+        }
+    }
+
+    func release() {
+        if continuations.isEmpty {
+            releasedCount += 1
+        } else {
+            continuations.removeFirst().resume()
+        }
+    }
+
+    private func cancelAll() {
+        let waiting = continuations
+        continuations = []
+        for continuation in waiting {
+            continuation.resume(throwing: CancellationError())
+        }
     }
 }
 
