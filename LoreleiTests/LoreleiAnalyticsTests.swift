@@ -22,6 +22,7 @@ struct LoreleiAnalyticsTests {
         #expect(LoreleiAnalyticsEvent.newChatStarted.name == "new_chat_started")
         #expect(LoreleiAnalyticsEvent.onboardingStarted.name == "onboarding_started")
         #expect(LoreleiAnalyticsEvent.onboardingCompleted.name == "onboarding_completed")
+        #expect(LoreleiAnalyticsEvent.updateCheckPerformed(updateAvailable: true).name == "update_check_performed")
     }
 
     @Test func dictationEventCarriesOnlyMetadataNeverContent() async throws {
