@@ -1,5 +1,7 @@
 # Lorelei
 
+![CI](https://github.com/taishikato/lorelei/actions/workflows/ci.yml/badge.svg)
+
 <img width="2560" height="1440" alt="Image" src="https://github.com/user-attachments/assets/5391ce6f-bdfd-4475-b0a9-42ac5d21923f" />
 
 Lorelei is a voice buddy that lives on your macOS desktop and drives your computer through [OpenAI Codex](https://developers.openai.com/codex).
