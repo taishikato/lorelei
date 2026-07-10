@@ -104,6 +104,35 @@ struct AppServerProtocolTests {
         #expect(params["config"] == nil)
     }
 
+    @Test func appServerThreadStartIncludesDeveloperInstructions() throws {
+        let request = CodexAppServerProtocol.threadStartRequest(
+            id: 2,
+            cwd: "/Users/example",
+            developerInstructions: "Use local memory."
+        )
+        let params = try #require(request["params"] as? [String: Any])
+
+        #expect(params["developerInstructions"] as? String == "Use local memory.")
+    }
+
+    @Test func appServerThreadStartOmitsEmptyDeveloperInstructions() throws {
+        let nilRequest = CodexAppServerProtocol.threadStartRequest(
+            id: 2,
+            cwd: "/Users/example",
+            developerInstructions: nil
+        )
+        let emptyRequest = CodexAppServerProtocol.threadStartRequest(
+            id: 3,
+            cwd: "/Users/example",
+            developerInstructions: " \n\t"
+        )
+        let nilParams = try #require(nilRequest["params"] as? [String: Any])
+        let emptyParams = try #require(emptyRequest["params"] as? [String: Any])
+
+        #expect(nilParams["developerInstructions"] == nil)
+        #expect(emptyParams["developerInstructions"] == nil)
+    }
+
     @Test func appServerThreadStartCanRegisterDynamicTools() throws {
         let request = CodexAppServerProtocol.threadStartRequest(
             id: 2,

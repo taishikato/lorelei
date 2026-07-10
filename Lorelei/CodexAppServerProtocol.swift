@@ -183,7 +183,8 @@ enum CodexAppServerProtocol {
     static func threadStartRequest(
         id: Int,
         cwd: String,
-        dynamicTools: [CodexAppServerDynamicToolSpec] = []
+        dynamicTools: [CodexAppServerDynamicToolSpec] = [],
+        developerInstructions: String? = nil
     ) -> [String: Any] {
         var params: [String: Any] = [
             "cwd": cwd,
@@ -196,6 +197,10 @@ enum CodexAppServerProtocol {
         }
         if !dynamicTools.isEmpty {
             params["dynamicTools"] = dynamicTools.map(dynamicToolSpecObject)
+        }
+        if let developerInstructions,
+           !developerInstructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            params["developerInstructions"] = developerInstructions
         }
 
         return [
