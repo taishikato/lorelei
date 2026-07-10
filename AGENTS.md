@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for AI agents working in this repository.
 
@@ -10,9 +10,9 @@ macOS 26+, Swift/SwiftUI.
 
 ## Agent roles
 
-- The main-loop model (Claude, Fable 5) is the planner, manager, and reviewer.
+- The main-loop model is the planner, manager, and reviewer.
   It does not implement substantial code itself.
-- Implementation is delegated to Codex through the codex plugin's official path (the `codex:codex-rescue` subagent or `/codex:rescue`), never raw `codex exec` via Bash.
+- When the main-loop model is running in Cursor, implementation is delegated to Codex through the `codex-rescue` plugin, never raw `codex exec` via Bash.
   The plugin leaves `--model` unset, so the delegated model is whatever `~/.codex/config.toml` pins (currently `gpt-5.6-sol` at high reasoning effort).
 - Execute contract: the reviewer creates an isolated worktree (`git worktree add .claude/worktrees/exec-NNN -b <branch>`) and hands Codex the path.
   Codex edits only inside it and skips commits, builds, and tests (its sandbox blocks .git writes, testmanagerd, and SPM network access).
