@@ -7,6 +7,7 @@
 //  exposes observable voice state for the panel UI.
 //
 
+import AppKit
 import Combine
 import Foundation
 import AVFoundation
@@ -25,6 +26,23 @@ typealias CodexAppServerDesktopActionRunner = @MainActor (
 ) async -> WorkspaceCommandResult
 
 typealias CodexAppServerTransportFactory = @Sendable () async throws -> CodexAppServerTransporting
+
+private final class CodexAppServerMemoryWorkspacePath: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedPath: String?
+
+    var value: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedPath
+    }
+
+    func set(_ path: String) {
+        lock.lock()
+        storedPath = path
+        lock.unlock()
+    }
+}
 
 @MainActor
 final class SpeechOutputClient: SpeechOutputing {
@@ -112,6 +130,7 @@ final class CompanionManager: ObservableObject {
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
+    private let memoryStore: LoreleiMemoryStore
     private let speechOutput: SpeechOutputing
     private let audioFeedback: BuddyAudioFeedbacking
     private let runStatusIdleReturnDelay: Duration
@@ -161,6 +180,7 @@ final class CompanionManager: ObservableObject {
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
+        memoryStore: LoreleiMemoryStore? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         transcribingWatchdogDelay: Duration = .seconds(6),
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
@@ -172,6 +192,7 @@ final class CompanionManager: ObservableObject {
         self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
+        self.memoryStore = memoryStore ?? LoreleiMemoryStore()
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
@@ -193,6 +214,27 @@ final class CompanionManager: ObservableObject {
             return
         }
         recordDebugEvent("Result: \(Self.conciseDebugLine(summary))")
+    }
+
+    func revealMemoryInFinder() {
+        do {
+            try memoryStore.createRootDirectory()
+            NSWorkspace.shared.activateFileViewerSelecting([memoryStore.rootDirectoryURL])
+        } catch {
+            recordDebugEvent("Memory folder could not be opened: \(error.localizedDescription)")
+        }
+    }
+
+    func clearMemory() async {
+        do {
+            try memoryStore.clearAll()
+        } catch {
+            recordDebugEvent("Memory could not be cleared: \(error.localizedDescription)")
+        }
+
+        let executor = sharedCodexAppServerExecutor()
+        await executor.invalidateSession()
+        liveCodexAppServerTransport = nil
     }
 
     func acceptPendingApproval() {
@@ -753,13 +795,43 @@ final class CompanionManager: ObservableObject {
         }
 
         let foregroundTool = CodexAppServerDesktopForegroundTool()
+        let memoryStore = self.memoryStore
+        let memoryWorkspacePath = CodexAppServerMemoryWorkspacePath()
+        let memoryPreamble = """
+        Lorelei has a local two-file memory system. Use lorelei.memory_write when the user reveals a durable preference, habit, or important project fact.
+
+        - Store durable user preferences and habits in profile memory.
+        - Store current project context in volatile memory.
+        - Rewrite the whole selected file and keep it concise, curated Markdown.
+        - Never store secrets, raw transcripts, or screen content verbatim.
+        """
         let dynamicToolSpecsResolver = {
-            [CodexAppServerDesktopForegroundTool.spec] + CodexAppServerDesktopToolSuite.toolSpecs()
+            [CodexAppServerDesktopForegroundTool.spec]
+                + CodexAppServerDesktopToolSuite.toolSpecs()
+                + CodexAppServerMemoryToolSuite.toolSpecs()
+        }
+        let developerInstructionsResolver: @Sendable (String) -> String? = { cwd in
+            memoryWorkspacePath.set(cwd)
+            var sections = [memoryPreamble]
+            if let profile = memoryStore.loadProfile() {
+                sections.append("## PROFILE.md\n\n\(profile)")
+            }
+            if let volatile = memoryStore.loadVolatile(forWorkspacePath: cwd) {
+                sections.append("## VOLATILE.md\n\n\(volatile)")
+            }
+            return sections.joined(separator: "\n\n")
         }
         let dynamicToolHandler: CodexAppServerDynamicToolHandler = { [weak self] request in
             if request.namespace == CodexAppServerDesktopForegroundTool.spec.namespace,
                request.tool == CodexAppServerDesktopForegroundTool.spec.name {
                 return await foregroundTool.handle(request)
+            }
+            if request.namespace == "lorelei", request.tool == "memory_write" {
+                return CodexAppServerMemoryToolSuite.handle(
+                    request,
+                    store: memoryStore,
+                    workspacePath: memoryWorkspacePath.value
+                )
             }
 
             guard let self else {
@@ -802,6 +874,7 @@ final class CompanionManager: ObservableObject {
             executor = CodexAppServerExecutor(
                 makeTransport: codexAppServerTransportFactory,
                 dynamicToolSpecsResolver: dynamicToolSpecsResolver,
+                developerInstructionsResolver: developerInstructionsResolver,
                 dynamicToolHandler: dynamicToolHandler,
                 traceHandler: traceHandler,
                 progressHandler: progressHandler,
@@ -812,6 +885,7 @@ final class CompanionManager: ObservableObject {
         } else {
             executor = CodexAppServerExecutor(
                 dynamicToolSpecsResolver: dynamicToolSpecsResolver,
+                developerInstructionsResolver: developerInstructionsResolver,
                 dynamicToolHandler: dynamicToolHandler,
                 traceHandler: traceHandler,
                 progressHandler: progressHandler,

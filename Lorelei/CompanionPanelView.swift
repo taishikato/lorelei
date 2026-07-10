@@ -43,6 +43,7 @@ struct CompanionPanelView: View {
                 header
                 generalSection
                 workspaceSection
+                memorySection
                 voiceSection
             }
             .padding(12)
@@ -204,7 +205,7 @@ struct CompanionPanelView: View {
 
                 HStack(spacing: 8) {
                     Button {
-                        chooseWorkspace()
+                        deferredAction { chooseWorkspace() }
                     } label: {
                         Label("Choose", systemImage: "folder.badge.plus")
                     }
@@ -212,7 +213,7 @@ struct CompanionPanelView: View {
                     .pointerCursor()
 
                     Button {
-                        openWorkspaceInFinder()
+                        deferredAction { openWorkspaceInFinder() }
                     } label: {
                         Label("Open", systemImage: "arrow.up.forward.app")
                     }
@@ -229,6 +230,34 @@ struct CompanionPanelView: View {
             VStack(spacing: 5) {
                 inputDeviceRow
                 PermissionRowsView(companionManager: companionManager)
+            }
+        }
+    }
+
+    private var memorySection: some View {
+        section("Memory") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Lorelei remembers your preferences in local Markdown files.")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    Button {
+                        deferredAction { companionManager.revealMemoryInFinder() }
+                    } label: {
+                        Label("Open Memory Folder", systemImage: "folder")
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .primary))
+                    .pointerCursor()
+
+                    Button {
+                        deferredAction { Task { await companionManager.clearMemory() } }
+                    } label: {
+                        Label("Clear Memory", systemImage: "trash")
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .secondary))
+                    .pointerCursor()
+                }
             }
         }
     }
@@ -289,7 +318,7 @@ struct CompanionPanelView: View {
 
     private var footer: some View {
         Button {
-            NSApp.terminate(nil)
+            deferredAction { NSApp.terminate(nil) }
         } label: {
             HStack(spacing: 10) {
                 Spacer()

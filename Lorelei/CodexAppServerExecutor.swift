@@ -140,6 +140,7 @@ actor CodexAppServerSessionStore {
     func ensureSession(
         cwd: String,
         dynamicTools: [CodexAppServerDynamicToolSpec],
+        developerInstructionsResolver: @Sendable (String) -> String? = { _ in nil },
         traceBuffer: CodexAppServerTraceBuffer,
         recordTrace: TraceRecorder,
         onTransportReady: @Sendable (CodexAppServerTransporting) -> Void
@@ -149,6 +150,8 @@ actor CodexAppServerSessionStore {
             onLifecycleEvent(.reused)
             return liveSession
         }
+
+        let developerInstructions = developerInstructionsResolver(cwd)
 
         if let currentTransport {
             await currentTransport.terminate()
@@ -196,7 +199,8 @@ actor CodexAppServerSessionStore {
                     CodexAppServerProtocol.threadStartRequest(
                         id: threadStartID,
                         cwd: cwd,
-                        dynamicTools: dynamicTools
+                        dynamicTools: dynamicTools,
+                        developerInstructions: developerInstructions
                     ),
                     to: transport,
                     traceBuffer: traceBuffer,
@@ -350,6 +354,7 @@ final class CodexAppServerExecutor {
     private let sessionStore: CodexAppServerSessionStore
     private let steerRequestTracker = CodexAppServerSteerRequestTracker()
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
+    private let developerInstructionsResolver: @Sendable (String) -> String?
     private let dynamicToolHandler: CodexAppServerDynamicToolHandler
     private let traceHandler: CodexAppServerTraceHandler
     private let progressHandler: CodexAppServerTurnProgressHandler
@@ -366,6 +371,7 @@ final class CodexAppServerExecutor {
             try await CodexAppServerStdioTransport.make()
         },
         dynamicToolSpecsResolver: @escaping () -> [CodexAppServerDynamicToolSpec] = { [] },
+        developerInstructionsResolver: @escaping @Sendable (String) -> String? = { _ in nil },
         dynamicToolHandler: @escaping CodexAppServerDynamicToolHandler = { request in
             CodexAppServerDynamicToolCallResult(
                 success: false,
@@ -386,6 +392,7 @@ final class CodexAppServerExecutor {
             onLifecycleEvent: onSessionLifecycleEvent
         )
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
+        self.developerInstructionsResolver = developerInstructionsResolver
         self.dynamicToolHandler = dynamicToolHandler
         self.traceHandler = traceHandler
         self.progressHandler = progressHandler
@@ -572,6 +579,7 @@ final class CodexAppServerExecutor {
             let session = try await sessionStore.ensureSession(
                 cwd: cwd,
                 dynamicTools: dynamicToolSpecsResolver(),
+                developerInstructionsResolver: developerInstructionsResolver,
                 traceBuffer: traceBuffer,
                 recordTrace: { [traceHandler] event, traceBuffer in
                     traceBuffer.record(event)

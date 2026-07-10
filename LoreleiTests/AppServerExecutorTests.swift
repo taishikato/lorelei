@@ -207,6 +207,37 @@ struct AppServerExecutorTests {
         #expect(turnStarts.map { $0["id"] as? Int } == [3, 4])
     }
 
+    @Test func appServerDeveloperInstructionsResolveOnlyForNewSession() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"First"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Second"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let resolverCallCount = LaunchCounter()
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            developerInstructionsResolver: { cwd in
+                resolverCallCount.increment()
+                return "Remember this workspace: \(cwd)"
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        _ = await executor.runTurn(prompt: "first", cwd: "/Users/example")
+        _ = await executor.runTurn(prompt: "second", cwd: "/Users/example")
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let threadStarts = sentMessages.filter { $0["method"] as? String == "thread/start" }
+        let threadStart = try #require(threadStarts.first)
+        let params = try #require(threadStart["params"] as? [String: Any])
+        #expect(threadStarts.count == 1)
+        #expect(params["developerInstructions"] as? String == "Remember this workspace: /Users/example")
+        #expect(resolverCallCount.value == 1)
+    }
+
     @Test func appServerSessionRespawnsWhenCwdChanges() async throws {
         let firstTransport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
