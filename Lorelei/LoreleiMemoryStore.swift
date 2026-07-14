@@ -98,7 +98,7 @@ final class LoreleiMemoryStore: @unchecked Sendable {
               !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
-        return content
+        return String(decoding: truncatedUTF8Data(content), as: UTF8.self)
     }
 
     private func write(_ content: String, to fileURL: URL) throws {
