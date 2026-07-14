@@ -94,4 +94,32 @@ struct LoreleiMemoryStoreTests {
         #expect(store.loadVolatile(forWorkspacePath: "/Users/example/project") == nil)
         #expect(!FileManager.default.fileExists(atPath: rootDirectoryURL.path))
     }
+
+    @Test func loadCapsOversizedExternallyEditedProfile() throws {
+        let rootDirectoryURL = try makeTemporaryDirectory()
+            .appendingPathComponent("memory", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootDirectoryURL, withIntermediateDirectories: true)
+        let store = LoreleiMemoryStore(rootDirectoryURL: rootDirectoryURL)
+        let oversized = String(repeating: "x", count: 20_000)
+        let profileURL = rootDirectoryURL.appendingPathComponent("PROFILE.md")
+        try Data(oversized.utf8).write(to: profileURL, options: .atomic)
+
+        let loaded = try #require(store.loadProfile())
+        #expect(loaded.utf8.count <= 16_384)
+    }
+
+    @Test func loadCapPreservesUTF8Boundary() throws {
+        let rootDirectoryURL = try makeTemporaryDirectory()
+            .appendingPathComponent("memory", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootDirectoryURL, withIntermediateDirectories: true)
+        let store = LoreleiMemoryStore(rootDirectoryURL: rootDirectoryURL)
+        let content = String(repeating: "a", count: 16_383) + String(repeating: "あ", count: 8)
+        let profileURL = rootDirectoryURL.appendingPathComponent("PROFILE.md")
+        try Data(content.utf8).write(to: profileURL, options: .atomic)
+
+        let loaded = try #require(store.loadProfile())
+        let expected = String(repeating: "a", count: 16_383)
+        #expect(loaded == expected)
+        #expect(!loaded.contains("\u{FFFD}"))
+    }
 }
