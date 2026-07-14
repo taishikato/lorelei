@@ -229,11 +229,17 @@ actor HangingAfterLinesCodexAppServerTransport: CodexAppServerTransporting {
     private var recordedSentLines: [String] = []
     private var terminated = false
     private let onInitialLinesDrained: (@Sendable () -> Void)?
+    private let onSend: (@Sendable (String) -> Void)?
 
-    init(lines: [String], onInitialLinesDrained: (@Sendable () -> Void)? = nil) {
+    init(
+        lines: [String],
+        onInitialLinesDrained: (@Sendable () -> Void)? = nil,
+        onSend: (@Sendable (String) -> Void)? = nil
+    ) {
         self.lines = lines
         self.initialLinesRemaining = lines.count
         self.onInitialLinesDrained = onInitialLinesDrained
+        self.onSend = onSend
     }
 
     func sentJSONMessages() throws -> [[String: Any]] {
@@ -247,7 +253,9 @@ actor HangingAfterLinesCodexAppServerTransport: CodexAppServerTransporting {
     }
 
     func send(line: String) async throws {
-        recordedSentLines.append(line.trimmingCharacters(in: .whitespacesAndNewlines))
+        let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        recordedSentLines.append(trimmedLine)
+        onSend?(trimmedLine)
     }
 
     func nextLine() async throws -> String? {

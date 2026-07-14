@@ -362,16 +362,29 @@ struct AppServerExecutorTests {
     }
 
     @Test func appServerExecutorIncludesProtocolTraceWhenTimeoutHappensAfterThreadStart() async throws {
-        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
-            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
-            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
-        ])
+        let timeoutGate = SleepGate()
+        let transport = HangingAfterLinesCodexAppServerTransport(
+            lines: [
+                #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+                #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#
+            ],
+            onSend: { line in
+                // Release only after turn/start is outbound. Releasing on the
+                // drained setup lines can still race ahead of that request, and
+                // the timeout-shape contract needs it in the protocol trace.
+                // No turn/started arrives here, so the timeout path invalidates
+                // without a second interrupt-grace sleep.
+                guard let data = line.data(using: .utf8),
+                      let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      root["method"] as? String == "turn/start" else {
+                    return
+                }
+                Task { await timeoutGate.release() }
+            }
+        )
         let executor = CodexAppServerExecutor(
-            // Generous, not knife-edge: the timer must lose the race against
-            // consuming the scripted session/turn lines, or the turn never
-            // starts and the timeout-shape contract cannot hold. 1.0s still
-            // flaked on cold first runs of the full suite, so this uses 2.0s.
             turnTimeoutSeconds: 2.0,
+            timeoutSleep: { _ in try await timeoutGate.wait() },
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )

@@ -30,7 +30,11 @@ struct WorkspaceExecutorTests {
 
         let result = await executor.run(.gitStatus, workspacePath: repositoryURL.path)
 
-        #expect(result.summary.contains("##"))
+        #expect(result.status == .succeeded)
+        #expect(
+            result.summary.contains("##"),
+            "expected branch porcelain status, got: \(result.summary)"
+        )
     }
 
     @Test func workspaceExecutorReportsNonGitWorkspaceFailure() async throws {
@@ -253,19 +257,38 @@ struct WorkspaceExecutorTests {
 
     private func makeTemporaryGitRepository() throws -> URL {
         let repositoryURL = try makeTemporaryDirectory()
-        try runGitTestCommand(["init"], in: repositoryURL)
+        // Isolate init from global/template config and skip hooks so parallel
+        // suite runs cannot flake on shared gitconfig locks or template copies.
+        try runGitTestCommand(
+            ["-c", "init.defaultBranch=main", "init", "--template="],
+            in: repositoryURL
+        )
         return repositoryURL
     }
+
     private func runGitTestCommand(_ arguments: [String], in directoryURL: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = arguments
         process.currentDirectoryURL = directoryURL
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        process.environment = [
+            "PATH": "/usr/bin:/bin",
+            "HOME": directoryURL.path,
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null"
+        ]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
         try process.run()
         process.waitUntilExit()
-        #expect(process.terminationStatus == 0)
+        let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        try #require(
+            process.terminationStatus == 0,
+            "git \(arguments.joined(separator: " ")) failed (\(process.terminationStatus)): \(stdoutText)\(stderrText)"
+        )
     }
     private func withTimeout<T: Sendable>(
         seconds: TimeInterval,
