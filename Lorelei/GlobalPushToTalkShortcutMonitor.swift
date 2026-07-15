@@ -13,7 +13,10 @@ import CoreGraphics
 import Foundation
 
 final class GlobalPushToTalkShortcutMonitor: ObservableObject {
-    let shortcutTransitionPublisher = PassthroughSubject<BuddyPushToTalkShortcut.ShortcutTransition, Never>()
+    let taggedShortcutTransitionPublisher = PassthroughSubject<
+        BuddyPushToTalkShortcut.TaggedShortcutTransition,
+        Never
+    >()
 
     private var globalEventTap: CFMachPort?
     private var globalEventTapRunLoopSource: CFRunLoopSource?
@@ -22,6 +25,8 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
     /// `CFRunLoopGetMain()` and therefore always executes on the main thread.
     /// Published so the overlay can hide immediately on key release without
     /// waiting for the async dictation state pipeline to catch up.
+    @Published private(set) var isCommandShortcutPressed = false
+    @Published private(set) var isDictationShortcutPressed = false
     @Published private(set) var isShortcutCurrentlyPressed = false
 
     deinit {
@@ -85,6 +90,8 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
     }
 
     func stop() {
+        isCommandShortcutPressed = false
+        isDictationShortcutPressed = false
         isShortcutCurrentlyPressed = false
         stopReleaseWatchdog()
 
@@ -115,29 +122,58 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         }
 
         let eventKeyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        let shortcutTransition = BuddyPushToTalkShortcut.shortcutTransition(
+        let taggedTransitions = BuddyPushToTalkShortcut.taggedShortcutTransitions(
             for: eventType,
             keyCode: eventKeyCode,
             modifierFlagsRawValue: event.flags.rawValue,
-            wasShortcutPreviouslyPressed: isShortcutCurrentlyPressed
+            wasCommandShortcutPressed: isCommandShortcutPressed,
+            wasDictationShortcutPressed: isDictationShortcutPressed
         )
 
-        switch shortcutTransition {
-        case .none:
-            break
-        case .pressed:
-            LoreleiDiagLog.log("shortcut: pressed")
-            isShortcutCurrentlyPressed = true
-            shortcutTransitionPublisher.send(.pressed)
-            startReleaseWatchdog()
-        case .released:
-            LoreleiDiagLog.log("shortcut: released")
-            isShortcutCurrentlyPressed = false
-            shortcutTransitionPublisher.send(.released)
-            stopReleaseWatchdog()
+        for tagged in taggedTransitions {
+            apply(tagged)
         }
 
         return Unmanaged.passUnretained(event)
+    }
+
+    private func apply(_ tagged: BuddyPushToTalkShortcut.TaggedShortcutTransition) {
+        switch (tagged.kind, tagged.transition) {
+        case (.command, .pressed):
+            LoreleiDiagLog.log("shortcut: command pressed")
+            isCommandShortcutPressed = true
+            refreshCombinedPressedState()
+            taggedShortcutTransitionPublisher.send(tagged)
+            startReleaseWatchdog()
+        case (.command, .released):
+            LoreleiDiagLog.log("shortcut: command released")
+            isCommandShortcutPressed = false
+            refreshCombinedPressedState()
+            taggedShortcutTransitionPublisher.send(tagged)
+            if !isShortcutCurrentlyPressed {
+                stopReleaseWatchdog()
+            }
+        case (.dictation, .pressed):
+            LoreleiDiagLog.log("shortcut: dictation pressed")
+            isDictationShortcutPressed = true
+            refreshCombinedPressedState()
+            taggedShortcutTransitionPublisher.send(tagged)
+            startReleaseWatchdog()
+        case (.dictation, .released):
+            LoreleiDiagLog.log("shortcut: dictation released")
+            isDictationShortcutPressed = false
+            refreshCombinedPressedState()
+            taggedShortcutTransitionPublisher.send(tagged)
+            if !isShortcutCurrentlyPressed {
+                stopReleaseWatchdog()
+            }
+        case (_, .none):
+            break
+        }
+    }
+
+    private func refreshCombinedPressedState() {
+        isShortcutCurrentlyPressed = isCommandShortcutPressed || isDictationShortcutPressed
     }
 
     /// macOS disables the event tap when the main thread stalls past the
@@ -165,14 +201,43 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
             stopReleaseWatchdog()
             return
         }
-        guard !BuddyPushToTalkShortcut.isShortcutStillHeld(modifierFlags: NSEvent.modifierFlags) else {
-            return
+
+        let liveFlags = NSEvent.modifierFlags
+        var didSynthesize = false
+
+        if isCommandShortcutPressed,
+           !BuddyPushToTalkShortcut.isShortcutStillHeld(
+            modifierFlags: liveFlags,
+            option: BuddyPushToTalkShortcut.currentShortcutOption
+           ) {
+            print("⚠️ Global push-to-talk: synthesizing missed command release (event tap dropped the key-up)")
+            LoreleiDiagLog.log("shortcut: synthesizing missed command release")
+            isCommandShortcutPressed = false
+            taggedShortcutTransitionPublisher.send(
+                BuddyPushToTalkShortcut.TaggedShortcutTransition(kind: .command, transition: .released)
+            )
+            didSynthesize = true
         }
 
-        print("⚠️ Global push-to-talk: synthesizing missed release (event tap dropped the key-up)")
-        LoreleiDiagLog.log("shortcut: synthesizing missed release")
-        isShortcutCurrentlyPressed = false
-        shortcutTransitionPublisher.send(.released)
-        stopReleaseWatchdog()
+        if isDictationShortcutPressed,
+           !BuddyPushToTalkShortcut.isShortcutStillHeld(
+            modifierFlags: liveFlags,
+            option: BuddyPushToTalkShortcut.dictationShortcutOption
+           ) {
+            print("⚠️ Global push-to-talk: synthesizing missed dictation release (event tap dropped the key-up)")
+            LoreleiDiagLog.log("shortcut: synthesizing missed dictation release")
+            isDictationShortcutPressed = false
+            taggedShortcutTransitionPublisher.send(
+                BuddyPushToTalkShortcut.TaggedShortcutTransition(kind: .dictation, transition: .released)
+            )
+            didSynthesize = true
+        }
+
+        guard didSynthesize else { return }
+
+        refreshCombinedPressedState()
+        if !isShortcutCurrentlyPressed {
+            stopReleaseWatchdog()
+        }
     }
 }

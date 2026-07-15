@@ -403,15 +403,20 @@ final class CompanionManager: ObservableObject {
 
     private func bindShortcutTransitions() {
         shortcutTransitionCancellable = globalPushToTalkShortcutMonitor
-            .shortcutTransitionPublisher
+            .taggedShortcutTransitionPublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] transition in
-                self?.handleShortcutTransition(transition)
+            .sink { [weak self] tagged in
+                self?.handleShortcutTransition(tagged)
             }
     }
 
-    private func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
-        switch transition {
+    private func handleShortcutTransition(
+        _ tagged: BuddyPushToTalkShortcut.TaggedShortcutTransition
+    ) {
+        // Dictation wiring arrives in a later step; ignore those transitions for now.
+        guard tagged.kind == .command else { return }
+
+        switch tagged.transition {
         case .pressed:
             guard !buddyDictationManager.isDictationInProgress else { return }
             setRunStatusListening()
