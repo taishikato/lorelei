@@ -78,10 +78,12 @@ final class FakeDictationTextInserter: DictationTextInserting {
     var outcome: DictationInsertionOutcome = .inserted
     var insertCallCount = 0
     private(set) var lastInsertedText: String?
+    private(set) var lastTargetProcessID: pid_t?
 
-    func insert(_ text: String) async -> DictationInsertionOutcome {
+    func insert(_ text: String, targetProcessID: pid_t?) async -> DictationInsertionOutcome {
         insertCallCount += 1
         lastInsertedText = text
+        lastTargetProcessID = targetProcessID
         return outcome
     }
 }
@@ -93,7 +95,6 @@ struct SystemDictationControllerTests {
         let formatter = FakeDictationTextFormatter()
         formatter.result = .formatted("Hello world.")
         let inserter = FakeDictationTextInserter()
-        var pasteboardWrites: [String] = []
         var hudMessages: [String] = []
         var overlayVisible = false
         var sessionFinishedCount = 0
@@ -102,11 +103,11 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
-            writeToPasteboard: { pasteboardWrites.append($0) },
             presentHUD: { hudMessages.append($0) },
             showOverlay: { overlayVisible = true },
             hideOverlay: { overlayVisible = false },
-            markSessionFinished: { sessionFinishedCount += 1 }
+            markSessionFinished: { sessionFinishedCount += 1 },
+            frontmostProcessID: { 999 }
         )
 
         controller.handleShortcutTransition(.pressed)
@@ -124,7 +125,7 @@ struct SystemDictationControllerTests {
         }
 
         #expect(inserter.lastInsertedText == "Hello world.")
-        #expect(pasteboardWrites.isEmpty)
+        #expect(inserter.lastTargetProcessID == 999)
         #expect(hudMessages.isEmpty)
         #expect(sessionFinishedCount == 1)
     }
@@ -139,7 +140,6 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
-            writeToPasteboard: { _ in },
             presentHUD: { _ in },
             showOverlay: {},
             hideOverlay: {}
@@ -158,20 +158,18 @@ struct SystemDictationControllerTests {
         #expect(inserter.lastInsertedText == "raw transcript")
     }
 
-    @Test func noEditableTargetCopiesToPasteboardAndShowsHUD() async throws {
+    @Test func pasteFailureShowsClipboardHUD() async throws {
         let listener = FakeSystemDictationListener()
         let formatter = FakeDictationTextFormatter()
         formatter.result = .formatted("Clipboard text")
         let inserter = FakeDictationTextInserter()
-        inserter.outcome = .noEditableTarget
-        var pasteboardWrites: [String] = []
+        inserter.outcome = .leftOnClipboard
         var hudMessages: [String] = []
 
         let controller = SystemDictationController(
             listener: listener,
             formatter: formatter,
             inserter: inserter,
-            writeToPasteboard: { pasteboardWrites.append($0) },
             presentHUD: { hudMessages.append($0) },
             showOverlay: {},
             hideOverlay: {}
@@ -183,11 +181,11 @@ struct SystemDictationControllerTests {
         listener.emitTranscript("say this")
 
         for _ in 0..<50 {
-            if !pasteboardWrites.isEmpty { break }
+            if !hudMessages.isEmpty { break }
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        #expect(pasteboardWrites == ["Clipboard text"])
+        #expect(inserter.insertCallCount == 1)
         #expect(hudMessages == ["Copied to clipboard"])
     }
 
@@ -195,14 +193,12 @@ struct SystemDictationControllerTests {
         let listener = FakeSystemDictationListener()
         let formatter = FakeDictationTextFormatter()
         let inserter = FakeDictationTextInserter()
-        var pasteboardWrites: [String] = []
         var sessionFinishedCount = 0
 
         let controller = SystemDictationController(
             listener: listener,
             formatter: formatter,
             inserter: inserter,
-            writeToPasteboard: { pasteboardWrites.append($0) },
             presentHUD: { _ in },
             showOverlay: {},
             hideOverlay: {},
@@ -221,7 +217,6 @@ struct SystemDictationControllerTests {
 
         #expect(formatter.formatCallCount == 0)
         #expect(inserter.insertCallCount == 0)
-        #expect(pasteboardWrites.isEmpty)
         #expect(sessionFinishedCount == 1)
     }
 
@@ -236,7 +231,6 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
-            writeToPasteboard: { _ in },
             presentHUD: { _ in },
             showOverlay: { overlayShown = true },
             hideOverlay: {}
@@ -261,7 +255,6 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
-            writeToPasteboard: { _ in },
             presentHUD: { _ in },
             showOverlay: { overlayVisible = true },
             hideOverlay: { overlayVisible = false },
@@ -292,7 +285,6 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
-            writeToPasteboard: { _ in },
             presentHUD: { _ in },
             showOverlay: {},
             hideOverlay: {},

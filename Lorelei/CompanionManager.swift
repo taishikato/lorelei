@@ -499,12 +499,7 @@ final class CompanionManager: ObservableObject {
                         ?? FileManager.default.homeDirectoryForCurrentUser.path
                 }
             ),
-            inserter: FocusedElementTextInserter(),
-            writeToPasteboard: { text in
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(text, forType: .string)
-            },
+            inserter: DictationPasteInserter(),
             presentHUD: { [weak self] message in
                 self?.dictationHUD.show(message)
             },

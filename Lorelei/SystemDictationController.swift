@@ -59,38 +59,41 @@ final class SystemDictationController {
     private let listener: any SystemDictationListening
     private let formatter: any DictationTextFormatting
     private let inserter: any DictationTextInserting
-    private let writeToPasteboard: (String) -> Void
     private let presentHUD: (String) -> Void
     private let trackAnalytics: (SystemDictationAnalyticsEvent) -> Void
     private let showOverlay: () -> Void
     private let hideOverlay: () -> Void
     private let markSessionFinished: () -> Void
+    private let frontmostProcessID: () -> pid_t?
 
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var awaitingFinalTranscriptTask: Task<Void, Never>?
     private var didBeginFinalTranscriptHandling = false
     private var isSessionActive = false
+    private var targetProcessID: pid_t?
 
     init(
         listener: any SystemDictationListening,
         formatter: any DictationTextFormatting,
         inserter: any DictationTextInserting,
-        writeToPasteboard: @escaping (String) -> Void,
         presentHUD: @escaping (String) -> Void,
         trackAnalytics: @escaping (SystemDictationAnalyticsEvent) -> Void = { _ in },
         showOverlay: @escaping () -> Void,
         hideOverlay: @escaping () -> Void,
-        markSessionFinished: @escaping () -> Void = {}
+        markSessionFinished: @escaping () -> Void = {},
+        frontmostProcessID: @escaping () -> pid_t? = {
+            NSWorkspace.shared.frontmostApplication?.processIdentifier
+        }
     ) {
         self.listener = listener
         self.formatter = formatter
         self.inserter = inserter
-        self.writeToPasteboard = writeToPasteboard
         self.presentHUD = presentHUD
         self.trackAnalytics = trackAnalytics
         self.showOverlay = showOverlay
         self.hideOverlay = hideOverlay
         self.markSessionFinished = markSessionFinished
+        self.frontmostProcessID = frontmostProcessID
     }
 
     func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
@@ -110,6 +113,8 @@ final class SystemDictationController {
         awaitingFinalTranscriptTask?.cancel()
         awaitingFinalTranscriptTask = nil
         didBeginFinalTranscriptHandling = false
+        // Capture before overlay / prewarm can change frontmost focus.
+        targetProcessID = frontmostProcessID()
 
         showOverlay()
         formatter.prewarm()
@@ -144,6 +149,7 @@ final class SystemDictationController {
 
         if !wasListening {
             // Never started recording (quick tap). Clear processing UI now.
+            targetProcessID = nil
             markSessionFinished()
             return
         }
@@ -161,6 +167,7 @@ final class SystemDictationController {
             guard let self, !Task.isCancelled else { return }
             guard !self.didBeginFinalTranscriptHandling else { return }
             LoreleiDiagLog.log("systemDictation: no final transcript → end session UI")
+            self.targetProcessID = nil
             self.markSessionFinished()
         }
     }
@@ -172,6 +179,7 @@ final class SystemDictationController {
 
         defer {
             LoreleiDiagLog.log("systemDictation: session finished")
+            targetProcessID = nil
             markSessionFinished()
         }
 
@@ -202,21 +210,15 @@ final class SystemDictationController {
         }
 
         LoreleiDiagLog.log(
-            "systemDictation: insert begin chars=\(textToInsert.count) frontmost=\(Self.frontmostAppName())"
+            "systemDictation: insert begin chars=\(textToInsert.count) targetPID=\(targetProcessID.map(String.init) ?? "nil")"
         )
-        let outcome = await inserter.insert(textToInsert)
+        let outcome = await inserter.insert(textToInsert, targetProcessID: targetProcessID)
         switch outcome {
         case .inserted:
             LoreleiDiagLog.log("systemDictation: insert ok")
             trackAnalytics(.inserted(usedFallbackText: usedFallbackText))
-        case .noEditableTarget:
-            LoreleiDiagLog.log("systemDictation: insert noEditableTarget → clipboard")
-            writeToPasteboard(textToInsert)
-            presentHUD("Copied to clipboard")
-            trackAnalytics(.copiedToClipboard)
-        case .axError(let error):
-            LoreleiDiagLog.log("systemDictation: insert axError=\(error.rawValue) → clipboard")
-            writeToPasteboard(textToInsert)
+        case .leftOnClipboard:
+            LoreleiDiagLog.log("systemDictation: paste failed → clipboard HUD")
             presentHUD("Copied to clipboard")
             trackAnalytics(.copiedToClipboard)
         }
