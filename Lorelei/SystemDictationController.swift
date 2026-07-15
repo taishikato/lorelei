@@ -67,6 +67,8 @@ final class SystemDictationController {
     private let markSessionFinished: () -> Void
 
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
+    private var awaitingFinalTranscriptTask: Task<Void, Never>?
+    private var didBeginFinalTranscriptHandling = false
     private var isSessionActive = false
 
     init(
@@ -105,6 +107,10 @@ final class SystemDictationController {
     private func handlePressed() {
         guard !listener.isDictationInProgress else { return }
 
+        awaitingFinalTranscriptTask?.cancel()
+        awaitingFinalTranscriptTask = nil
+        didBeginFinalTranscriptHandling = false
+
         showOverlay()
         formatter.prewarm()
         trackAnalytics(.started)
@@ -130,12 +136,40 @@ final class SystemDictationController {
         // startListening began recording - same race fix as command PTT.
         pendingKeyboardShortcutStartTask?.cancel()
         pendingKeyboardShortcutStartTask = nil
+
+        let wasListening = listener.isDictationInProgress
         listener.stopListening()
         hideOverlay()
         isSessionActive = false
+
+        if !wasListening {
+            // Never started recording (quick tap). Clear processing UI now.
+            markSessionFinished()
+            return
+        }
+
+        // Real STT skips submitDraftText on empty/silence, so finish the UI
+        // if no final transcript arrives within the finalize window.
+        armAwaitingFinalTranscriptFallback()
+    }
+
+    private func armAwaitingFinalTranscriptFallback() {
+        awaitingFinalTranscriptTask?.cancel()
+        awaitingFinalTranscriptTask = Task { @MainActor [weak self] in
+            // SpeechAnalyzer finalize window is ~1.8s; leave margin.
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            guard !self.didBeginFinalTranscriptHandling else { return }
+            LoreleiDiagLog.log("systemDictation: no final transcript → end session UI")
+            self.markSessionFinished()
+        }
     }
 
     private func handleFinalTranscript(_ rawTranscript: String) async {
+        didBeginFinalTranscriptHandling = true
+        awaitingFinalTranscriptTask?.cancel()
+        awaitingFinalTranscriptTask = nil
+
         defer {
             LoreleiDiagLog.log("systemDictation: session finished")
             markSessionFinished()

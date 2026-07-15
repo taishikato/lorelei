@@ -156,6 +156,9 @@ final class CompanionManager: ObservableObject {
     private var transcribingWatchdogTask: Task<Void, Never>?
     private var systemDictationController: SystemDictationController?
     private let dictationHUD = DictationHUD()
+    /// True while system dictation owns the toolbar runStatus (listening or
+    /// post-release processing). Cleared by `endSystemDictationRunStatus`.
+    private var ownsSystemDictationRunStatus = false
 
     /// True when all required permissions are granted. Used by the panel to show
     /// a single "all good" state.
@@ -176,6 +179,12 @@ final class CompanionManager: ObservableObject {
     /// Whether the blue cursor overlay is currently visible on screen.
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
+
+    /// Stop is only meaningful for an in-flight command turn. System dictation
+    /// uses `.working("Dictating…")` for progress UI and must not show Stop.
+    var canStopCurrentRun: Bool {
+        currentResponseTask != nil || pendingCodexAppServerApproval != nil
+    }
 
     init(
         speechOutput: SpeechOutputing? = nil,
@@ -515,7 +524,7 @@ final class CompanionManager: ObservableObject {
                 guard let self else { return }
                 // Mirror command PTT: waveform opacity and the face expression
                 // both key off runStatus == .listening.
-                self.setRunStatusListening()
+                self.beginSystemDictationListening()
                 if !self.isOverlayVisible {
                     self.overlayWindowManager.showOverlay(
                         onScreens: NSScreen.screens,
@@ -526,7 +535,9 @@ final class CompanionManager: ObservableObject {
             },
             hideOverlay: { [weak self] in
                 guard let self else { return }
-                self.setRunStatusTranscribing()
+                // Keep a busy working face through STT finalize + Codex cleanup
+                // + insert. `.transcribing`/`.thinking` looked like failure.
+                self.beginSystemDictationProcessing()
                 self.overlayWindowManager.hideOverlay()
                 self.isOverlayVisible = false
             },
@@ -1035,15 +1046,38 @@ final class CompanionManager: ObservableObject {
         armTranscribingWatchdog()
     }
 
-    /// Clears listening/transcribing UI after system dictation finishes
-    /// (insert, clipboard fallback, or silence). Does not touch `.working`
-    /// or other command-turn statuses.
-    private func endSystemDictationRunStatus() {
+    private func beginSystemDictationListening() {
+        ownsSystemDictationRunStatus = true
+        setRunStatusListening()
+    }
+
+    /// Post-release dictation progress: STT finalize, Codex cleanup, insert.
+    /// Uses `.working` so the face stays clearly busy (not sad-looking).
+    private func beginSystemDictationProcessing() {
+        ownsSystemDictationRunStatus = true
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
         cancelTranscribingWatchdog()
+        let shouldPlayCue = runStatus == .listening
+        currentActivity = "Dictating…"
+        runStatus = .working("Dictating…")
+        if shouldPlayCue {
+            audioFeedback.play(.listeningEnded, spokenSummary: nil)
+        }
+    }
+
+    /// Clears listening/processing UI after system dictation finishes
+    /// (insert, clipboard fallback, silence, or cancelled start). Does not
+    /// clear an unrelated command-turn `.working` status.
+    private func endSystemDictationRunStatus() {
+        guard ownsSystemDictationRunStatus else { return }
+        ownsSystemDictationRunStatus = false
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        cancelTranscribingWatchdog()
+        currentActivity = nil
         switch runStatus {
-        case .listening, .transcribing:
+        case .listening, .transcribing, .working:
             runStatus = .idle
         default:
             break

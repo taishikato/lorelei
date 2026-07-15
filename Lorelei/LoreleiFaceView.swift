@@ -23,7 +23,9 @@ enum LoreleiFaceExpression: Equatable, Sendable {
         case .listening:
             .listening
         case .transcribing:
-            .thinking
+            // Busy eyes looking around - the old .thinking arcs read as sad
+            // at toolbar size and made STT/dictation progress look like failure.
+            .working
         case .working:
             .working
         case .needsApproval:

@@ -399,12 +399,7 @@ struct LoreleiToolbarView: View {
     }
 
     private var showsStopButton: Bool {
-        switch companionManager.runStatus {
-        case .working, .needsApproval:
-            true
-        default:
-            false
-        }
+        companionManager.canStopCurrentRun
     }
 
 }

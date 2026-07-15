@@ -100,7 +100,7 @@ struct PanelPresentationTests {
     @Test func loreleiFaceExpressionMapsRunStatus() async throws {
         #expect(LoreleiFaceExpression.expression(for: .idle) == .neutral)
         #expect(LoreleiFaceExpression.expression(for: .listening) == .listening)
-        #expect(LoreleiFaceExpression.expression(for: .transcribing) == .thinking)
+        #expect(LoreleiFaceExpression.expression(for: .transcribing) == .working)
         #expect(LoreleiFaceExpression.expression(for: .working("lorelei.set_text")) == .working)
         #expect(LoreleiFaceExpression.expression(for: .needsApproval("Run command")) == .questioning)
         #expect(LoreleiFaceExpression.expression(for: .finished(success: true)) == .happy)

@@ -255,6 +255,7 @@ struct SystemDictationControllerTests {
         let formatter = FakeDictationTextFormatter()
         let inserter = FakeDictationTextInserter()
         var overlayVisible = false
+        var sessionFinishedCount = 0
 
         let controller = SystemDictationController(
             listener: listener,
@@ -263,18 +264,52 @@ struct SystemDictationControllerTests {
             writeToPasteboard: { _ in },
             presentHUD: { _ in },
             showOverlay: { overlayVisible = true },
-            hideOverlay: { overlayVisible = false }
+            hideOverlay: { overlayVisible = false },
+            markSessionFinished: { sessionFinishedCount += 1 }
         )
 
         controller.handleShortcutTransition(.pressed)
         #expect(overlayVisible)
         controller.handleShortcutTransition(.released)
         #expect(!overlayVisible)
+        #expect(sessionFinishedCount == 1)
 
         try await Task.sleep(for: .milliseconds(250))
 
         #expect(listener.startCallCount == 1)
         #expect(!listener.isDictationInProgress)
         #expect(listener.stopCallCount == 1)
+        #expect(sessionFinishedCount == 1)
+    }
+
+    @Test func silenceWithoutTranscriptEndsSessionUI() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        let inserter = FakeDictationTextInserter()
+        var sessionFinishedCount = 0
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            writeToPasteboard: { _ in },
+            presentHUD: { _ in },
+            showOverlay: {},
+            hideOverlay: {},
+            markSessionFinished: { sessionFinishedCount += 1 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+
+        for _ in 0..<400 {
+            if sessionFinishedCount > 0 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(formatter.formatCallCount == 0)
+        #expect(inserter.insertCallCount == 0)
+        #expect(sessionFinishedCount == 1)
     }
 }
