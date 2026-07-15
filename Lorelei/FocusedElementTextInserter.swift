@@ -120,7 +120,10 @@ final class FocusedElementTextInserter: DictationTextInserting {
                     LoreleiDiagLog.log("systemDictation: insert via AXValue splice")
                     return .inserted
                 }
-                LoreleiDiagLog.log("systemDictation: AXValue splice unverified")
+                // Chrome often applies the AXValue write while leaving readback
+                // stale. Do not fall through to clipboard after a successful set.
+                LoreleiDiagLog.log("systemDictation: insert via AXValue splice (stale readback)")
+                return .inserted
             } else {
                 return .axError(setError)
             }
