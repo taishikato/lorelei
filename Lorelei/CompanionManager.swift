@@ -538,6 +538,12 @@ final class CompanionManager: ObservableObject {
             },
             markSessionFinished: { [weak self] in
                 self?.endSystemDictationRunStatus()
+            },
+            canStartSession: { [weak self] in
+                guard let self else { return false }
+                // Keep command-turn UI (.working / .needsApproval) intact.
+                return self.currentResponseTask == nil
+                    && self.pendingCodexAppServerApproval == nil
             }
         )
         systemDictationController = controller
@@ -1042,6 +1048,8 @@ final class CompanionManager: ObservableObject {
     }
 
     private func beginSystemDictationListening() {
+        // Defense in depth: never steal an in-flight command turn's status.
+        guard currentResponseTask == nil, pendingCodexAppServerApproval == nil else { return }
         ownsSystemDictationRunStatus = true
         setRunStatusListening()
     }
@@ -1049,7 +1057,7 @@ final class CompanionManager: ObservableObject {
     /// Post-release dictation progress: STT finalize, Codex cleanup, insert.
     /// Uses `.working` so the face stays clearly busy (not sad-looking).
     private func beginSystemDictationProcessing() {
-        ownsSystemDictationRunStatus = true
+        guard ownsSystemDictationRunStatus else { return }
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
         cancelTranscribingWatchdog()
@@ -1072,8 +1080,13 @@ final class CompanionManager: ObservableObject {
         cancelTranscribingWatchdog()
         currentActivity = nil
         switch runStatus {
-        case .listening, .transcribing, .working:
+        case .listening, .transcribing:
             runStatus = .idle
+        case .working(let activity) where activity == "Dictating…":
+            runStatus = .idle
+        case .working:
+            // Another activity string means a command turn took over mid-flight.
+            break
         default:
             break
         }

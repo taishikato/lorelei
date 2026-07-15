@@ -354,4 +354,27 @@ struct SystemDictationControllerTests {
         #expect(inserter.lastTargetProcessID == 1000)
         #expect(formatter.formatCallCount == 1)
     }
+
+    @Test func pressBlockedWhenCommandTurnOwnsUI() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        let inserter = FakeDictationTextInserter()
+        var overlayShown = false
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            presentHUD: { _ in },
+            showOverlay: { overlayShown = true },
+            hideOverlay: {},
+            canStartSession: { false }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+
+        #expect(listener.startCallCount == 0)
+        #expect(formatter.prewarmCallCount == 0)
+        #expect(!overlayShown)
+    }
 }

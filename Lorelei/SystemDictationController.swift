@@ -65,6 +65,9 @@ final class SystemDictationController {
     private let hideOverlay: () -> Void
     private let markSessionFinished: () -> Void
     private let frontmostProcessID: () -> pid_t?
+    /// False while a command turn or approval owns the toolbar - dictation
+    /// must not start and clobber that runStatus.
+    private let canStartSession: () -> Bool
 
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var awaitingFinalTranscriptTask: Task<Void, Never>?
@@ -86,7 +89,8 @@ final class SystemDictationController {
         markSessionFinished: @escaping () -> Void = {},
         frontmostProcessID: @escaping () -> pid_t? = {
             NSWorkspace.shared.frontmostApplication?.processIdentifier
-        }
+        },
+        canStartSession: @escaping () -> Bool = { true }
     ) {
         self.listener = listener
         self.formatter = formatter
@@ -97,6 +101,7 @@ final class SystemDictationController {
         self.hideOverlay = hideOverlay
         self.markSessionFinished = markSessionFinished
         self.frontmostProcessID = frontmostProcessID
+        self.canStartSession = canStartSession
     }
 
     func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
@@ -113,6 +118,7 @@ final class SystemDictationController {
     private func handlePressed() {
         guard !listener.isDictationInProgress else { return }
         guard !isPipelineBusy else { return }
+        guard canStartSession() else { return }
 
         awaitingFinalTranscriptTask?.cancel()
         awaitingFinalTranscriptTask = nil
