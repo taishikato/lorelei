@@ -82,19 +82,27 @@ struct CodexLaunchTransportTests {
         #expect(locator.resolve() == bundledCodexURL)
     }
 
-    @Test func codexExecutableLocatorPrefersChatGPTAcrossApplicationDirectories() async throws {
+    @Test func codexExecutableLocatorChecksEachApplicationDirectoryBeforeTheNext() async throws {
         let directoryURL = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let systemApplicationsURL = directoryURL.appendingPathComponent("SystemApplications", isDirectory: true)
         let userApplicationsURL = directoryURL.appendingPathComponent("UserApplications", isDirectory: true)
-        let codexAppCodexURL = systemApplicationsURL
-            .appendingPathComponent("Codex.app", isDirectory: true)
-            .appendingPathComponent("Contents/Resources/codex")
-        let chatGPTCodexURL = userApplicationsURL
+        let systemChatGPTCodexURL = systemApplicationsURL
             .appendingPathComponent("ChatGPT.app", isDirectory: true)
             .appendingPathComponent("Contents/Resources/codex")
-        try makeExecutable(at: codexAppCodexURL)
-        try makeExecutable(at: chatGPTCodexURL)
+        let systemCodexAppCodexURL = systemApplicationsURL
+            .appendingPathComponent("Codex.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        let userChatGPTCodexURL = userApplicationsURL
+            .appendingPathComponent("ChatGPT.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        let userCodexAppCodexURL = userApplicationsURL
+            .appendingPathComponent("Codex.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        try makeExecutable(at: systemChatGPTCodexURL)
+        try makeExecutable(at: systemCodexAppCodexURL)
+        try makeExecutable(at: userChatGPTCodexURL)
+        try makeExecutable(at: userCodexAppCodexURL)
         let suiteName = "CodexExecutableLocatorCrossDirectoryTests"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -105,7 +113,16 @@ struct CodexLaunchTransportTests {
             applicationDirectories: [systemApplicationsURL, userApplicationsURL]
         )
 
-        #expect(locator.resolve() == chatGPTCodexURL)
+        #expect(locator.resolve() == systemChatGPTCodexURL)
+
+        try FileManager.default.removeItem(at: systemChatGPTCodexURL)
+        #expect(locator.resolve() == systemCodexAppCodexURL)
+
+        try FileManager.default.removeItem(at: systemCodexAppCodexURL)
+        #expect(locator.resolve() == userChatGPTCodexURL)
+
+        try FileManager.default.removeItem(at: userChatGPTCodexURL)
+        #expect(locator.resolve() == userCodexAppCodexURL)
     }
 
     @Test func codexExecutableLocatorFallsBackToCodexAppWithoutChatGPT() async throws {

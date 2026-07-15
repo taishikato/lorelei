@@ -63,8 +63,8 @@ struct CodexExecutableLocator {
 
     private func bundledCodexCandidates() -> [String] {
         let applicationBundleNames = ["ChatGPT.app", "Codex.app"]
-        return applicationBundleNames.flatMap { bundleName in
-            applicationDirectories.map { directoryURL in
+        return applicationDirectories.flatMap { directoryURL in
+            applicationBundleNames.map { bundleName in
                 directoryURL
                     .appendingPathComponent(bundleName, isDirectory: true)
                     .appendingPathComponent("Contents/Resources/codex")
