@@ -131,14 +131,22 @@ final class GlobalPushToTalkShortcutMonitor: ObservableObject {
         )
 
         for tagged in taggedTransitions {
-            apply(tagged)
+            let kind: BuddyPushToTalkShortcut.ShortcutKind = tagged.kind
+            apply(kind: kind, transition: tagged.transition)
         }
 
         return Unmanaged.passUnretained(event)
     }
 
-    private func apply(_ tagged: BuddyPushToTalkShortcut.TaggedShortcutTransition) {
-        switch (tagged.kind, tagged.transition) {
+    private func apply(
+        kind: BuddyPushToTalkShortcut.ShortcutKind,
+        transition: BuddyPushToTalkShortcut.ShortcutTransition
+    ) {
+        let tagged = BuddyPushToTalkShortcut.TaggedShortcutTransition(
+            kind: kind,
+            transition: transition
+        )
+        switch (kind, transition) {
         case (.command, .pressed):
             LoreleiDiagLog.log("shortcut: command pressed")
             isCommandShortcutPressed = true

@@ -415,7 +415,8 @@ final class CompanionManager: ObservableObject {
     private func handleShortcutTransition(
         _ tagged: BuddyPushToTalkShortcut.TaggedShortcutTransition
     ) {
-        switch tagged.kind {
+        let kind: BuddyPushToTalkShortcut.ShortcutKind = tagged.kind
+        switch kind {
         case .command:
             handleCommandShortcutTransition(tagged.transition)
         case .dictation:
