@@ -498,6 +498,18 @@ final class CompanionManager: ObservableObject {
             presentHUD: { [weak self] message in
                 self?.dictationHUD.show(message)
             },
+            trackAnalytics: { event in
+                switch event {
+                case .started:
+                    LoreleiAnalytics.capture(.systemDictationStarted)
+                case .inserted(let usedFallbackText):
+                    LoreleiAnalytics.capture(
+                        .systemDictationInserted(usedFallbackText: usedFallbackText)
+                    )
+                case .copiedToClipboard:
+                    LoreleiAnalytics.capture(.systemDictationCopiedToClipboard)
+                }
+            },
             showOverlay: { [weak self] in
                 guard let self else { return }
                 if !self.isOverlayVisible {
