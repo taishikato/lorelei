@@ -82,6 +82,53 @@ struct CodexLaunchTransportTests {
         #expect(locator.resolve() == bundledCodexURL)
     }
 
+    @Test func codexExecutableLocatorPrefersChatGPTAcrossApplicationDirectories() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let systemApplicationsURL = directoryURL.appendingPathComponent("SystemApplications", isDirectory: true)
+        let userApplicationsURL = directoryURL.appendingPathComponent("UserApplications", isDirectory: true)
+        let codexAppCodexURL = systemApplicationsURL
+            .appendingPathComponent("Codex.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        let chatGPTCodexURL = userApplicationsURL
+            .appendingPathComponent("ChatGPT.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        try makeExecutable(at: codexAppCodexURL)
+        try makeExecutable(at: chatGPTCodexURL)
+        let suiteName = "CodexExecutableLocatorCrossDirectoryTests"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let locator = CodexExecutableLocator(
+            defaults: defaults,
+            environment: [:],
+            applicationDirectories: [systemApplicationsURL, userApplicationsURL]
+        )
+
+        #expect(locator.resolve() == chatGPTCodexURL)
+    }
+
+    @Test func codexExecutableLocatorFallsBackToCodexAppWithoutChatGPT() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let applicationsURL = directoryURL.appendingPathComponent("Applications", isDirectory: true)
+        let bundledCodexURL = applicationsURL
+            .appendingPathComponent("Codex.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        try makeExecutable(at: bundledCodexURL)
+        let suiteName = "CodexExecutableLocatorCodexAppFallbackTests"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let locator = CodexExecutableLocator(
+            defaults: defaults,
+            environment: [:],
+            applicationDirectories: [applicationsURL]
+        )
+
+        #expect(locator.resolve() == bundledCodexURL)
+    }
+
     @Test func codexExecutableLocatorFallsBackToPATHWithoutBundledCLI() async throws {
         let directoryURL = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
