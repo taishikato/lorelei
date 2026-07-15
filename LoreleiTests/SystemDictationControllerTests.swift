@@ -96,6 +96,7 @@ struct SystemDictationControllerTests {
         var pasteboardWrites: [String] = []
         var hudMessages: [String] = []
         var overlayVisible = false
+        var sessionFinishedCount = 0
 
         let controller = SystemDictationController(
             listener: listener,
@@ -104,7 +105,8 @@ struct SystemDictationControllerTests {
             writeToPasteboard: { pasteboardWrites.append($0) },
             presentHUD: { hudMessages.append($0) },
             showOverlay: { overlayVisible = true },
-            hideOverlay: { overlayVisible = false }
+            hideOverlay: { overlayVisible = false },
+            markSessionFinished: { sessionFinishedCount += 1 }
         )
 
         controller.handleShortcutTransition(.pressed)
@@ -124,6 +126,7 @@ struct SystemDictationControllerTests {
         #expect(inserter.lastInsertedText == "Hello world.")
         #expect(pasteboardWrites.isEmpty)
         #expect(hudMessages.isEmpty)
+        #expect(sessionFinishedCount == 1)
     }
 
     @Test func fallbackInsertsRawTranscript() async throws {
@@ -193,6 +196,7 @@ struct SystemDictationControllerTests {
         let formatter = FakeDictationTextFormatter()
         let inserter = FakeDictationTextInserter()
         var pasteboardWrites: [String] = []
+        var sessionFinishedCount = 0
 
         let controller = SystemDictationController(
             listener: listener,
@@ -201,7 +205,8 @@ struct SystemDictationControllerTests {
             writeToPasteboard: { pasteboardWrites.append($0) },
             presentHUD: { _ in },
             showOverlay: {},
-            hideOverlay: {}
+            hideOverlay: {},
+            markSessionFinished: { sessionFinishedCount += 1 }
         )
 
         controller.handleShortcutTransition(.pressed)
@@ -209,11 +214,15 @@ struct SystemDictationControllerTests {
         controller.handleShortcutTransition(.released)
         listener.emitTranscript("   ")
 
-        try await Task.sleep(for: .milliseconds(50))
+        for _ in 0..<50 {
+            if sessionFinishedCount > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         #expect(formatter.formatCallCount == 0)
         #expect(inserter.insertCallCount == 0)
         #expect(pasteboardWrites.isEmpty)
+        #expect(sessionFinishedCount == 1)
     }
 
     @Test func pressWhileCommandPTTActiveIsIgnored() async throws {

@@ -513,6 +513,9 @@ final class CompanionManager: ObservableObject {
             },
             showOverlay: { [weak self] in
                 guard let self else { return }
+                // Mirror command PTT: waveform opacity and the face expression
+                // both key off runStatus == .listening.
+                self.setRunStatusListening()
                 if !self.isOverlayVisible {
                     self.overlayWindowManager.showOverlay(
                         onScreens: NSScreen.screens,
@@ -522,8 +525,13 @@ final class CompanionManager: ObservableObject {
                 }
             },
             hideOverlay: { [weak self] in
-                self?.overlayWindowManager.hideOverlay()
-                self?.isOverlayVisible = false
+                guard let self else { return }
+                self.setRunStatusTranscribing()
+                self.overlayWindowManager.hideOverlay()
+                self.isOverlayVisible = false
+            },
+            markSessionFinished: { [weak self] in
+                self?.endSystemDictationRunStatus()
             }
         )
         systemDictationController = controller
@@ -1025,6 +1033,21 @@ final class CompanionManager: ObservableObject {
             audioFeedback.play(.listeningEnded, spokenSummary: nil)
         }
         armTranscribingWatchdog()
+    }
+
+    /// Clears listening/transcribing UI after system dictation finishes
+    /// (insert, clipboard fallback, or silence). Does not touch `.working`
+    /// or other command-turn statuses.
+    private func endSystemDictationRunStatus() {
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        cancelTranscribingWatchdog()
+        switch runStatus {
+        case .listening, .transcribing:
+            runStatus = .idle
+        default:
+            break
+        }
     }
 
     /// Returns the toolbar to idle when a transcribe never produces a turn -

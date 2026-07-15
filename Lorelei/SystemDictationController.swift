@@ -3,7 +3,8 @@
 //  Lorelei
 //
 //  Owns the Ctrl+Shift system-dictation flow: record, format, insert.
-//  Never writes to the conversation log or command run-status pipeline.
+//  Never writes to the conversation log or command turn pipeline.
+//  Listening UI (face / waveform) is driven by CompanionManager callbacks.
 //
 
 import AppKit
@@ -63,6 +64,7 @@ final class SystemDictationController {
     private let trackAnalytics: (SystemDictationAnalyticsEvent) -> Void
     private let showOverlay: () -> Void
     private let hideOverlay: () -> Void
+    private let markSessionFinished: () -> Void
 
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var isSessionActive = false
@@ -75,7 +77,8 @@ final class SystemDictationController {
         presentHUD: @escaping (String) -> Void,
         trackAnalytics: @escaping (SystemDictationAnalyticsEvent) -> Void = { _ in },
         showOverlay: @escaping () -> Void,
-        hideOverlay: @escaping () -> Void
+        hideOverlay: @escaping () -> Void,
+        markSessionFinished: @escaping () -> Void = {}
     ) {
         self.listener = listener
         self.formatter = formatter
@@ -85,6 +88,7 @@ final class SystemDictationController {
         self.trackAnalytics = trackAnalytics
         self.showOverlay = showOverlay
         self.hideOverlay = hideOverlay
+        self.markSessionFinished = markSessionFinished
     }
 
     func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
@@ -132,6 +136,8 @@ final class SystemDictationController {
     }
 
     private func handleFinalTranscript(_ rawTranscript: String) async {
+        defer { markSessionFinished() }
+
         let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
