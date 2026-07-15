@@ -26,10 +26,13 @@ Example: say 'Open TextEdit and type hello world', and Lorelei foregrounds TextE
 |-------------|---------|
 | macOS | 26 (Tahoe) or later, Apple Silicon |
 | Xcode (to build) | 26 or later |
-| Codex CLI | 0.142.x (`npm install -g @openai/codex`) |
-| Codex auth | `codex login` (ChatGPT account) |
+| Codex runtime | ChatGPT for macOS with its bundled Codex CLI, or Codex CLI 0.142.x or later |
+| Codex auth | Sign in to ChatGPT, or run `codex login` for a standalone CLI |
 
-Lorelei talks to `codex app-server` over stdio, so the Codex CLI must be installed and logged in before Lorelei can run commands.
+Lorelei talks to `codex app-server` over stdio.
+When ChatGPT.app is installed, Lorelei prefers its bundled Codex CLI so both apps use the same OpenAI-distributed runtime.
+An explicitly configured executable remains the highest-priority choice, and PATH, Homebrew, npm, and nvm Codex installations remain supported fallbacks.
+This runtime selection does not by itself enable the official Computer Use plugin; Lorelei continues to use its in-house desktop dynamic tools.
 
 ## Install and run
 
