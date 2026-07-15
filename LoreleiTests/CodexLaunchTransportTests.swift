@@ -35,22 +35,83 @@ struct CodexLaunchTransportTests {
         #expect(launch.arguments.dropFirst().starts(with: ["exec", "--help"]))
     }
 
-    @Test func codexExecutableLocatorUsesDefaultsOverride() async throws {
+    @Test func codexExecutableLocatorUsesDefaultsOverrideBeforeBundledCLI() async throws {
         let directoryURL = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let codexURL = directoryURL.appendingPathComponent("codex")
-        try "#!/bin/sh\n".write(to: codexURL, atomically: true, encoding: .utf8)
+        let overrideCodexURL = directoryURL.appendingPathComponent("override/codex")
+        let applicationsURL = directoryURL.appendingPathComponent("Applications", isDirectory: true)
+        let bundledCodexURL = applicationsURL
+            .appendingPathComponent("ChatGPT.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        try makeExecutable(at: overrideCodexURL)
+        try makeExecutable(at: bundledCodexURL)
+        let suiteName = "CodexExecutableLocatorOverrideTests"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(overrideCodexURL.path, forKey: CodexExecutableLocator.executablePathDefaultsKey)
+
+        let locator = CodexExecutableLocator(
+            defaults: defaults,
+            environment: [:],
+            applicationDirectories: [applicationsURL]
+        )
+
+        #expect(locator.resolve() == overrideCodexURL)
+    }
+
+    @Test func codexExecutableLocatorPrefersChatGPTBundledCLIOverPATH() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let applicationsURL = directoryURL.appendingPathComponent("Applications", isDirectory: true)
+        let bundledCodexURL = applicationsURL
+            .appendingPathComponent("ChatGPT.app", isDirectory: true)
+            .appendingPathComponent("Contents/Resources/codex")
+        let pathDirectoryURL = directoryURL.appendingPathComponent("bin", isDirectory: true)
+        let pathCodexURL = pathDirectoryURL.appendingPathComponent("codex")
+        try makeExecutable(at: bundledCodexURL)
+        try makeExecutable(at: pathCodexURL)
+        let defaults = UserDefaults(suiteName: "CodexExecutableLocatorBundledTests")!
+        defer { defaults.removePersistentDomain(forName: "CodexExecutableLocatorBundledTests") }
+
+        let locator = CodexExecutableLocator(
+            defaults: defaults,
+            environment: ["PATH": pathDirectoryURL.path],
+            applicationDirectories: [applicationsURL]
+        )
+
+        #expect(locator.resolve() == bundledCodexURL)
+    }
+
+    @Test func codexExecutableLocatorFallsBackToPATHWithoutBundledCLI() async throws {
+        let directoryURL = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let emptyApplicationsURL = directoryURL.appendingPathComponent("Applications", isDirectory: true)
+        let pathDirectoryURL = directoryURL.appendingPathComponent("bin", isDirectory: true)
+        let pathCodexURL = pathDirectoryURL.appendingPathComponent("codex")
+        try makeExecutable(at: pathCodexURL)
+        let suiteName = "CodexExecutableLocatorPATHTests"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let locator = CodexExecutableLocator(
+            defaults: defaults,
+            environment: ["PATH": pathDirectoryURL.path],
+            applicationDirectories: [emptyApplicationsURL]
+        )
+
+        #expect(locator.resolve() == pathCodexURL)
+    }
+
+    private func makeExecutable(at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "#!/bin/sh\n".write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
-            ofItemAtPath: codexURL.path
+            ofItemAtPath: url.path
         )
-        let defaults = UserDefaults(suiteName: "CodexExecutableLocatorTests")!
-        defaults.removePersistentDomain(forName: "CodexExecutableLocatorTests")
-        defaults.set(codexURL.path, forKey: CodexExecutableLocator.executablePathDefaultsKey)
-
-        let locator = CodexExecutableLocator(defaults: defaults)
-
-        #expect(locator.resolve() == codexURL)
     }
 
     @Test func appServerLaunchUsesDefaultStdioTransport() async throws {
