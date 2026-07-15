@@ -9,11 +9,12 @@
 //
 
 import AppKit
+import ApplicationServices
 import Foundation
 
 enum DictationInsertionOutcome: Equatable, Sendable {
     case inserted
-    /// Paste event could not be posted. Transcript remains on the pasteboard.
+    /// Paste was skipped or could not be posted. Transcript remains on the pasteboard.
     case leftOnClipboard
 }
 
@@ -54,11 +55,67 @@ enum DictationPasteboardSnapshot {
     }
 }
 
+/// Decides whether Cmd+V is likely to land in an editable surface.
+/// Finder-style roles leave the transcript on the clipboard instead of
+/// posting paste and restoring (which would discard the spoken text).
+enum DictationPasteTargetHeuristic {
+    static let clearlyNonEditableRoles: Set<String> = [
+        "AXApplication",
+        "AXWindow",
+        "AXImage",
+        "AXToolbar",
+        "AXMenuBar",
+        "AXMenu",
+        "AXMenuItem",
+        "AXButton",
+        "AXCheckBox",
+        "AXRadioButton",
+        "AXPopUpButton",
+        "AXSlider",
+        "AXTable",
+        "AXOutline",
+        "AXList",
+        "AXBrowser",
+        "AXGrid",
+        "AXSplitter",
+        "AXTabGroup",
+        "AXProgressIndicator",
+        "AXBusyIndicator",
+        "AXColorWell",
+        "AXDockItem"
+    ]
+
+    static let clearlyEditableRoles: Set<String> = [
+        "AXTextField",
+        "AXTextArea",
+        "AXComboBox",
+        "AXSearchField",
+        "AXWebArea",
+        "AXScrollArea"
+    ]
+
+    static func shouldAttemptPaste(
+        role: String?,
+        selectedTextSettable: Bool,
+        valueSettable: Bool,
+        hasFocusedElement: Bool
+    ) -> Bool {
+        // No AX focus (common for some Electron surfaces) - still paste.
+        guard hasFocusedElement else { return true }
+        if selectedTextSettable || valueSettable { return true }
+        if let role, clearlyEditableRoles.contains(role) { return true }
+        if let role, clearlyNonEditableRoles.contains(role) { return false }
+        // Unknown / AXGroup / custom roles: attempt paste (Cursor, Chrome).
+        return true
+    }
+}
+
 @MainActor
 final class DictationPasteInserter: DictationTextInserting {
     private let pasteboard: NSPasteboard
     private let activateProcess: (pid_t) -> Bool
     private let postCommandV: () -> Bool
+    private let shouldAttemptPaste: () -> Bool
     private let activateSettlingDelay: Duration
     private let pasteSettlingDelay: Duration
 
@@ -71,12 +128,16 @@ final class DictationPasteInserter: DictationTextInserting {
             return app.activate(options: [.activateIgnoringOtherApps])
         },
         postCommandV: (() -> Bool)? = nil,
+        shouldAttemptPaste: (() -> Bool)? = nil,
         activateSettlingDelay: Duration = .milliseconds(80),
         pasteSettlingDelay: Duration = .milliseconds(150)
     ) {
         self.pasteboard = pasteboard
         self.activateProcess = activateProcess
         self.postCommandV = postCommandV ?? { DictationPasteInserter.postCommandVEvent() }
+        self.shouldAttemptPaste = shouldAttemptPaste ?? {
+            DictationPasteInserter.focusedElementLooksPasteable()
+        }
         self.activateSettlingDelay = activateSettlingDelay
         self.pasteSettlingDelay = pasteSettlingDelay
     }
@@ -88,6 +149,11 @@ final class DictationPasteInserter: DictationTextInserting {
         LoreleiDiagLog.log(
             "systemDictation: pasteboard loaded chars=\(text.count) targetPID=\(targetProcessID.map(String.init) ?? "nil")"
         )
+
+        guard shouldAttemptPaste() else {
+            LoreleiDiagLog.log("systemDictation: non-editable focus → leave clipboard")
+            return .leftOnClipboard
+        }
 
         if let targetProcessID {
             let activated = activateProcess(targetProcessID)
@@ -124,5 +190,53 @@ final class DictationPasteInserter: DictationTextInserting {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
         return true
+    }
+
+    private static func focusedElementLooksPasteable() -> Bool {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedObject: AnyObject?
+        let focusedError = AXUIElementCopyAttributeValue(
+            systemWide,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedObject
+        )
+        guard focusedError == .success,
+              let focusedObject,
+              CFGetTypeID(focusedObject) == AXUIElementGetTypeID() else {
+            return DictationPasteTargetHeuristic.shouldAttemptPaste(
+                role: nil,
+                selectedTextSettable: false,
+                valueSettable: false,
+                hasFocusedElement: false
+            )
+        }
+
+        let focusedElement = focusedObject as! AXUIElement
+        let role = stringAttribute(kAXRoleAttribute as CFString, of: focusedElement)
+        return DictationPasteTargetHeuristic.shouldAttemptPaste(
+            role: role,
+            selectedTextSettable: isAttributeSettable(
+                kAXSelectedTextAttribute as CFString,
+                of: focusedElement
+            ),
+            valueSettable: isAttributeSettable(
+                kAXValueAttribute as CFString,
+                of: focusedElement
+            ),
+            hasFocusedElement: true
+        )
+    }
+
+    private static func isAttributeSettable(_ attribute: CFString, of element: AXUIElement) -> Bool {
+        var isSettable: DarwinBoolean = false
+        let error = AXUIElementIsAttributeSettable(element, attribute, &isSettable)
+        return error == .success && isSettable.boolValue
+    }
+
+    private static func stringAttribute(_ attribute: CFString, of element: AXUIElement) -> String? {
+        var object: AnyObject?
+        let error = AXUIElementCopyAttributeValue(element, attribute, &object)
+        guard error == .success, let object else { return nil }
+        return object as? String
     }
 }
