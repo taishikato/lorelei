@@ -154,6 +154,8 @@ final class CompanionManager: ObservableObject {
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var runStatusIdleReturnTask: Task<Void, Never>?
     private var transcribingWatchdogTask: Task<Void, Never>?
+    private var systemDictationController: SystemDictationController?
+    private let dictationHUD = DictationHUD()
 
     /// True when all required permissions are granted. Used by the panel to show
     /// a single "all good" state.
@@ -413,10 +415,18 @@ final class CompanionManager: ObservableObject {
     private func handleShortcutTransition(
         _ tagged: BuddyPushToTalkShortcut.TaggedShortcutTransition
     ) {
-        // Dictation wiring arrives in a later step; ignore those transitions for now.
-        guard tagged.kind == .command else { return }
+        switch tagged.kind {
+        case .command:
+            handleCommandShortcutTransition(tagged.transition)
+        case .dictation:
+            sharedSystemDictationController().handleShortcutTransition(tagged.transition)
+        }
+    }
 
-        switch tagged.transition {
+    private func handleCommandShortcutTransition(
+        _ transition: BuddyPushToTalkShortcut.ShortcutTransition
+    ) {
+        switch transition {
         case .pressed:
             guard !buddyDictationManager.isDictationInProgress else { return }
             setRunStatusListening()
@@ -462,6 +472,49 @@ final class CompanionManager: ObservableObject {
         case .none:
             break
         }
+    }
+
+    private func sharedSystemDictationController() -> SystemDictationController {
+        if let systemDictationController {
+            return systemDictationController
+        }
+
+        let controller = SystemDictationController(
+            listener: BuddyDictationManagerSystemDictationListeningAdapter(
+                manager: buddyDictationManager
+            ),
+            formatter: DictationTextFormatter(
+                workingDirectoryProvider: { [weak self] in
+                    self?.codexAppServerWorkingDirectory()
+                        ?? FileManager.default.homeDirectoryForCurrentUser.path
+                }
+            ),
+            inserter: FocusedElementTextInserter(),
+            writeToPasteboard: { text in
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(text, forType: .string)
+            },
+            presentHUD: { [weak self] message in
+                self?.dictationHUD.show(message)
+            },
+            showOverlay: { [weak self] in
+                guard let self else { return }
+                if !self.isOverlayVisible {
+                    self.overlayWindowManager.showOverlay(
+                        onScreens: NSScreen.screens,
+                        companionManager: self
+                    )
+                    self.isOverlayVisible = true
+                }
+            },
+            hideOverlay: { [weak self] in
+                self?.overlayWindowManager.hideOverlay()
+                self?.isOverlayVisible = false
+            }
+        )
+        systemDictationController = controller
+        return controller
     }
 
     // MARK: - Local Command Routing Pipeline
