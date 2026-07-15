@@ -136,12 +136,26 @@ final class SystemDictationController {
     }
 
     private func handleFinalTranscript(_ rawTranscript: String) async {
-        defer { markSessionFinished() }
+        defer {
+            LoreleiDiagLog.log("systemDictation: session finished")
+            markSessionFinished()
+        }
 
         let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        LoreleiDiagLog.log(
+            "systemDictation: final transcript chars=\(trimmed.count) frontmost=\(Self.frontmostAppName())"
+        )
         guard !trimmed.isEmpty else { return }
 
+        LoreleiDiagLog.log("systemDictation: format begin")
         let formatterResult = await formatter.format(rawTranscript)
+        switch formatterResult {
+        case .formatted(let cleaned):
+            LoreleiDiagLog.log("systemDictation: format ok chars=\(cleaned.count)")
+        case .fallbackToRaw(let reason):
+            LoreleiDiagLog.log("systemDictation: format fallback reason=\(reason)")
+        }
+
         let textToInsert: String
         let usedFallbackText: Bool
         switch formatterResult {
@@ -153,14 +167,28 @@ final class SystemDictationController {
             usedFallbackText = true
         }
 
+        LoreleiDiagLog.log(
+            "systemDictation: insert begin chars=\(textToInsert.count) frontmost=\(Self.frontmostAppName())"
+        )
         let outcome = await inserter.insert(textToInsert)
         switch outcome {
         case .inserted:
+            LoreleiDiagLog.log("systemDictation: insert ok")
             trackAnalytics(.inserted(usedFallbackText: usedFallbackText))
-        case .noEditableTarget, .axError:
+        case .noEditableTarget:
+            LoreleiDiagLog.log("systemDictation: insert noEditableTarget → clipboard")
+            writeToPasteboard(textToInsert)
+            presentHUD("Copied to clipboard")
+            trackAnalytics(.copiedToClipboard)
+        case .axError(let error):
+            LoreleiDiagLog.log("systemDictation: insert axError=\(error.rawValue) → clipboard")
             writeToPasteboard(textToInsert)
             presentHUD("Copied to clipboard")
             trackAnalytics(.copiedToClipboard)
         }
+    }
+
+    private static func frontmostAppName() -> String {
+        NSWorkspace.shared.frontmostApplication?.localizedName ?? "nil"
     }
 }

@@ -50,10 +50,16 @@ final class DictationTextFormatter: DictationTextFormatting {
             return .formatted("")
         }
 
+        LoreleiDiagLog.log("dictationFormatter: runTurn begin chars=\(trimmedInput.count)")
+        let startedAt = Date()
         let result = await sharedExecutor().runTurn(
             prompt: Self.prompt(for: rawTranscript),
             cwd: workingDirectoryProvider(),
             sandboxPolicy: "readOnly"
+        )
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        LoreleiDiagLog.log(
+            "dictationFormatter: runTurn end status=\(result.status) elapsedMs=\(elapsedMs) summaryChars=\(result.summary.count)"
         )
 
         guard result.status == .succeeded else {
