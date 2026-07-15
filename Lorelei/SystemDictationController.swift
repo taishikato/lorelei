@@ -69,7 +69,10 @@ final class SystemDictationController {
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var awaitingFinalTranscriptTask: Task<Void, Never>?
     private var didBeginFinalTranscriptHandling = false
-    private var isSessionActive = false
+    /// True from a successful press until format/insert (or silence) finishes.
+    /// Mic dictation clears earlier on release; this blocks a second press from
+    /// overlapping an in-flight cleanup/paste.
+    private var isPipelineBusy = false
     private var targetProcessID: pid_t?
 
     init(
@@ -109,17 +112,18 @@ final class SystemDictationController {
 
     private func handlePressed() {
         guard !listener.isDictationInProgress else { return }
+        guard !isPipelineBusy else { return }
 
         awaitingFinalTranscriptTask?.cancel()
         awaitingFinalTranscriptTask = nil
         didBeginFinalTranscriptHandling = false
+        isPipelineBusy = true
         // Capture before overlay / prewarm can change frontmost focus.
         targetProcessID = frontmostProcessID()
 
         showOverlay()
         formatter.prewarm()
         trackAnalytics(.started)
-        isSessionActive = true
 
         pendingKeyboardShortcutStartTask?.cancel()
         pendingKeyboardShortcutStartTask = Task {
@@ -145,12 +149,10 @@ final class SystemDictationController {
         let wasListening = listener.isDictationInProgress
         listener.stopListening()
         hideOverlay()
-        isSessionActive = false
 
         if !wasListening {
             // Never started recording (quick tap). Clear processing UI now.
-            targetProcessID = nil
-            markSessionFinished()
+            finishPipeline()
             return
         }
 
@@ -167,8 +169,7 @@ final class SystemDictationController {
             guard let self, !Task.isCancelled else { return }
             guard !self.didBeginFinalTranscriptHandling else { return }
             LoreleiDiagLog.log("systemDictation: no final transcript → end session UI")
-            self.targetProcessID = nil
-            self.markSessionFinished()
+            self.finishPipeline()
         }
     }
 
@@ -179,8 +180,7 @@ final class SystemDictationController {
 
         defer {
             LoreleiDiagLog.log("systemDictation: session finished")
-            targetProcessID = nil
-            markSessionFinished()
+            finishPipeline()
         }
 
         let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -222,6 +222,12 @@ final class SystemDictationController {
             presentHUD("Copied to clipboard")
             trackAnalytics(.copiedToClipboard)
         }
+    }
+
+    private func finishPipeline() {
+        isPipelineBusy = false
+        targetProcessID = nil
+        markSessionFinished()
     }
 
     private static func frontmostAppName() -> String {

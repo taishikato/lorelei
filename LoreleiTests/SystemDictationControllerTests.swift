@@ -60,11 +60,15 @@ final class FakeDictationTextFormatter: DictationTextFormatting {
     var result: DictationFormatterResult = .formatted("cleaned")
     var prewarmCallCount = 0
     var formatCallCount = 0
+    var formatDelayNanoseconds: UInt64 = 0
     private(set) var lastRawTranscript: String?
 
     func format(_ rawTranscript: String) async -> DictationFormatterResult {
         formatCallCount += 1
         lastRawTranscript = rawTranscript
+        if formatDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: formatDelayNanoseconds)
+        }
         return result
     }
 
@@ -303,5 +307,51 @@ struct SystemDictationControllerTests {
         #expect(formatter.formatCallCount == 0)
         #expect(inserter.insertCallCount == 0)
         #expect(sessionFinishedCount == 1)
+    }
+
+    @Test func secondPressDuringFormatIsIgnored() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("first")
+        formatter.formatDelayNanoseconds = 200_000_000
+        let inserter = FakeDictationTextInserter()
+        var overlayShowCount = 0
+        var capturedPIDs: [pid_t] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            presentHUD: { _ in },
+            showOverlay: { overlayShowCount += 1 },
+            hideOverlay: {},
+            frontmostProcessID: {
+                let next = pid_t(1000 + capturedPIDs.count)
+                capturedPIDs.append(next)
+                return next
+            }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("one")
+
+        // While format is still running, mic is idle so a naive guard would
+        // allow another session. Pipeline busy must block it.
+        try await Task.sleep(for: .milliseconds(20))
+        controller.handleShortcutTransition(.pressed)
+
+        for _ in 0..<50 {
+            if inserter.insertCallCount > 0 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(overlayShowCount == 1)
+        #expect(listener.startCallCount == 1)
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "first")
+        #expect(inserter.lastTargetProcessID == 1000)
+        #expect(formatter.formatCallCount == 1)
     }
 }
