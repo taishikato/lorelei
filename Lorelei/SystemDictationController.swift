@@ -12,8 +12,8 @@ import Foundation
 
 enum SystemDictationAnalyticsEvent: Equatable, Sendable {
     case started
-    case inserted(usedFallbackText: Bool, appCategory: String)
-    case copiedToClipboard
+    case inserted(usedFallbackText: Bool, appCategory: String, formatMs: Int, totalMs: Int)
+    case copiedToClipboard(formatMs: Int, totalMs: Int)
 }
 
 @MainActor
@@ -69,6 +69,7 @@ final class SystemDictationController {
     /// False while a command turn or approval owns the toolbar - dictation
     /// must not start and clobber that runStatus.
     private let canStartSession: () -> Bool
+    private let now: () -> ContinuousClock.Instant
 
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var awaitingFinalTranscriptTask: Task<Void, Never>?
@@ -99,7 +100,8 @@ final class SystemDictationController {
                 localizedName: app.localizedName
             )
         },
-        canStartSession: @escaping () -> Bool = { true }
+        canStartSession: @escaping () -> Bool = { true },
+        now: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.listener = listener
         self.formatter = formatter
@@ -112,6 +114,7 @@ final class SystemDictationController {
         self.frontmostProcessID = frontmostProcessID
         self.frontmostAppContext = frontmostAppContext
         self.canStartSession = canStartSession
+        self.now = now
     }
 
     func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
@@ -191,6 +194,7 @@ final class SystemDictationController {
     }
 
     private func handleFinalTranscript(_ rawTranscript: String) async {
+        let totalStart = now()
         didBeginFinalTranscriptHandling = true
         awaitingFinalTranscriptTask?.cancel()
         awaitingFinalTranscriptTask = nil
@@ -207,10 +211,12 @@ final class SystemDictationController {
         guard !trimmed.isEmpty else { return }
 
         LoreleiDiagLog.log("systemDictation: format begin")
+        let formatStart = now()
         let formatterResult = await formatter.format(
             rawTranscript,
             appContext: targetAppContext
         )
+        let formatMs = Self.milliseconds(from: formatStart, to: now())
         switch formatterResult {
         case .formatted(let cleaned):
             LoreleiDiagLog.log("systemDictation: format ok chars=\(cleaned.count)")
@@ -233,17 +239,22 @@ final class SystemDictationController {
             "systemDictation: insert begin chars=\(textToInsert.count) targetPID=\(targetProcessID.map(String.init) ?? "nil")"
         )
         let outcome = await inserter.insert(textToInsert, targetProcessID: targetProcessID)
+        let totalMs = Self.milliseconds(from: totalStart, to: now())
         switch outcome {
         case .inserted:
-            LoreleiDiagLog.log("systemDictation: insert ok")
+            LoreleiDiagLog.log("systemDictation: insert ok formatMs=\(formatMs) totalMs=\(totalMs)")
             trackAnalytics(.inserted(
                 usedFallbackText: usedFallbackText,
-                appCategory: (targetAppContext?.category ?? .unknown).rawValue
+                appCategory: (targetAppContext?.category ?? .unknown).rawValue,
+                formatMs: formatMs,
+                totalMs: totalMs
             ))
         case .leftOnClipboard:
-            LoreleiDiagLog.log("systemDictation: paste failed → clipboard HUD")
+            LoreleiDiagLog.log(
+                "systemDictation: paste failed → clipboard HUD formatMs=\(formatMs) totalMs=\(totalMs)"
+            )
             presentHUD("Copied to clipboard")
-            trackAnalytics(.copiedToClipboard)
+            trackAnalytics(.copiedToClipboard(formatMs: formatMs, totalMs: totalMs))
         }
     }
 
@@ -256,5 +267,14 @@ final class SystemDictationController {
 
     private static func frontmostAppName() -> String {
         NSWorkspace.shared.frontmostApplication?.localizedName ?? "nil"
+    }
+
+    private static func milliseconds(
+        from start: ContinuousClock.Instant,
+        to end: ContinuousClock.Instant
+    ) -> Int {
+        let duration = end - start
+        let (seconds, attoseconds) = duration.components
+        return Int(seconds) * 1000 + Int(attoseconds / 1_000_000_000_000_000)
     }
 }

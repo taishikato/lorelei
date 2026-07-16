@@ -412,16 +412,68 @@ struct SystemDictationControllerTests {
         controller.handleShortcutTransition(.released)
         listener.emitTranscript("hello team")
 
-        let insertedEvent = SystemDictationAnalyticsEvent.inserted(
-            usedFallbackText: false,
-            appCategory: "chat"
-        )
         for _ in 0..<50 {
-            if trackedEvents.contains(insertedEvent) { break }
+            if trackedEvents.contains(where: { event in
+                if case .inserted(_, "chat", _, _) = event {
+                    return true
+                }
+                return false
+            }) { break }
             try await Task.sleep(for: .milliseconds(10))
         }
 
         #expect(formatter.lastAppContext == slack)
-        #expect(trackedEvents.contains(insertedEvent))
+        #expect(trackedEvents.contains(where: { event in
+            if case .inserted(false, "chat", _, _) = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func insertedEventCarriesMeasuredDurations() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("Hello.")
+        let inserter = FakeDictationTextInserter()
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        // Deterministic fake clock: each call advances 100ms.
+        var tick = 0
+        let base = ContinuousClock.now
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            now: {
+                defer { tick += 1 }
+                return base.advanced(by: .milliseconds(100 * tick))
+            }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("hello")
+
+        for _ in 0..<50 {
+            if inserter.insertCallCount > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        let inserted = trackedEvents.compactMap { event -> (Int, Int)? in
+            if case .inserted(_, _, let formatMs, let totalMs) = event {
+                return (formatMs, totalMs)
+            }
+            return nil
+        }.first
+        let unwrapped = try #require(inserted)
+        // now() call order: totalStart, formatStart, formatEnd, insertEnd.
+        #expect(unwrapped.0 == 100)
+        #expect(unwrapped.1 == 300)
     }
 }
