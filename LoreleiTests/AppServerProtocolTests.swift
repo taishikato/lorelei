@@ -77,6 +77,24 @@ struct AppServerProtocolTests {
         #expect(input[1]["path"] as? String == "/tmp/lorelei-screen.jpg")
     }
 
+    @Test func turnStartRequestEncodesSkillInput() throws {
+        let request = CodexAppServerProtocol.turnStartRequest(
+            id: 7,
+            threadID: "thread-1",
+            prompt: "open TextEdit",
+            cwd: "/tmp",
+            sandboxPolicy: "readOnly",
+            extraInput: [.skill(name: "computer-use", path: "/plugins/computer-use/skills/computer-use/SKILL.md")]
+        )
+        let params = try #require(request["params"] as? [String: Any])
+        let input = try #require(params["input"] as? [[String: Any]])
+        let skillItem = try #require(input.last)
+
+        #expect(skillItem["type"] as? String == "skill")
+        #expect(skillItem["name"] as? String == "computer-use")
+        #expect(skillItem["path"] as? String == "/plugins/computer-use/skills/computer-use/SKILL.md")
+    }
+
     @Test func appServerTurnSteerRequestEncodesActiveTurnPrecondition() throws {
         let request = CodexAppServerProtocol.turnSteerRequest(
             id: 7,
@@ -99,6 +117,38 @@ struct AppServerProtocolTests {
 
     @Test func appServerThreadStartSendsNoPluginConfig() throws {
         let request = CodexAppServerProtocol.threadStartRequest(id: 2, cwd: "/Users/example")
+        let params = try #require(request["params"] as? [String: Any])
+
+        #expect(params["config"] == nil)
+    }
+
+    @Test func threadStartRequestIncludesConfigOverridesWhenProvided() throws {
+        let overrides: [String: Any] = [
+            "mcp_servers": [
+                "computer-use": [
+                    "command": "/abs/SkyComputerUseClient",
+                    "args": ["mcp"],
+                    "cwd": "/abs/plugin-root",
+                    "enabled": true
+                ]
+            ]
+        ]
+        let request = CodexAppServerProtocol.threadStartRequest(
+            id: 3,
+            cwd: "/tmp",
+            configOverrides: overrides
+        )
+        let params = try #require(request["params"] as? [String: Any])
+        let config = try #require(params["config"] as? [String: Any])
+        let servers = try #require(config["mcp_servers"] as? [String: Any])
+        let computerUse = try #require(servers["computer-use"] as? [String: Any])
+
+        #expect(computerUse["command"] as? String == "/abs/SkyComputerUseClient")
+        #expect(computerUse["enabled"] as? Bool == true)
+    }
+
+    @Test func threadStartRequestOmitsConfigWhenOverridesEmpty() throws {
+        let request = CodexAppServerProtocol.threadStartRequest(id: 3, cwd: "/tmp")
         let params = try #require(request["params"] as? [String: Any])
 
         #expect(params["config"] == nil)

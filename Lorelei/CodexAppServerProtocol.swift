@@ -61,6 +61,7 @@ enum CodexAppServerDynamicToolContentItem: Equatable, Sendable {
 
 enum CodexAppServerTurnInputItem: Equatable, Sendable {
     case localImage(path: String)
+    case skill(name: String, path: String)
 }
 
 struct CodexAppServerDynamicToolCallResult: Equatable, Sendable {
@@ -184,14 +185,14 @@ enum CodexAppServerProtocol {
         id: Int,
         cwd: String,
         dynamicTools: [CodexAppServerDynamicToolSpec] = [],
-        developerInstructions: String? = nil
+        developerInstructions: String? = nil,
+        configOverrides: [String: Any] = [:]
     ) -> [String: Any] {
         var params: [String: Any] = [
             "cwd": cwd,
             "approvalPolicy": granularApprovalPolicy(),
             "approvalsReviewer": "user"
         ]
-        let configOverrides = desktopActionConfigOverrides()
         if !configOverrides.isEmpty {
             params["config"] = configOverrides
         }
@@ -741,6 +742,12 @@ enum CodexAppServerProtocol {
                 "type": "localImage",
                 "path": path
             ]
+        case .skill(let name, let path):
+            return [
+                "type": "skill",
+                "name": name,
+                "path": path
+            ]
         }
     }
 
@@ -754,10 +761,6 @@ enum CodexAppServerProtocol {
                 "mcp_elicitations": true
             ]
         ]
-    }
-
-    private static func desktopActionConfigOverrides() -> [String: Any] {
-        [:]
     }
 
     nonisolated private static func dynamicToolSpecObject(_ spec: CodexAppServerDynamicToolSpec) -> [String: Any] {
