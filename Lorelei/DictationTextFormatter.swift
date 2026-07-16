@@ -15,7 +15,10 @@ enum DictationFormatterResult: Equatable, Sendable {
 }
 
 protocol DictationTextFormatting: AnyObject {
-    func format(_ rawTranscript: String) async -> DictationFormatterResult
+    func format(
+        _ rawTranscript: String,
+        appContext: DictationAppContext?
+    ) async -> DictationFormatterResult
     func prewarm()
 }
 
@@ -44,7 +47,10 @@ final class DictationTextFormatter: DictationTextFormatting {
         _ = sharedExecutor()
     }
 
-    func format(_ rawTranscript: String) async -> DictationFormatterResult {
+    func format(
+        _ rawTranscript: String,
+        appContext: DictationAppContext?
+    ) async -> DictationFormatterResult {
         let trimmedInput = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInput.isEmpty else {
             return .formatted("")
@@ -53,7 +59,7 @@ final class DictationTextFormatter: DictationTextFormatting {
         LoreleiDiagLog.log("dictationFormatter: runTurn begin chars=\(trimmedInput.count)")
         let startedAt = Date()
         let result = await sharedExecutor().runTurn(
-            prompt: Self.prompt(for: rawTranscript),
+            prompt: Self.prompt(for: rawTranscript, appContext: appContext),
             cwd: workingDirectoryProvider(),
             sandboxPolicy: "readOnly"
         )
@@ -85,8 +91,22 @@ final class DictationTextFormatter: DictationTextFormatting {
         return created
     }
 
-    static func prompt(for rawTranscript: String) -> String {
-        """
+    static func prompt(
+        for rawTranscript: String,
+        appContext: DictationAppContext?
+    ) -> String {
+        let styleHintBlock: String
+        if let hint = appContext?.category.styleHint {
+            styleHintBlock = """
+
+            Style hint (style only - never change meaning):
+            \(hint)
+            """
+        } else {
+            styleHintBlock = ""
+        }
+
+        return """
         You are a dictation cleanup helper. Operate on the transcript below.
         Return ONLY the cleaned transcript text with no preamble, quotes, or commentary.
 
@@ -95,7 +115,7 @@ final class DictationTextFormatter: DictationTextFormatting {
         - Fix punctuation and line breaks so the text reads as natural writing.
         - Fix obvious speech-to-text artifacts when the intended word is clear.
         - Never add, remove, or reword meaningful content.
-        - Keep the language of the input unchanged.
+        - Keep the language of the input unchanged.\(styleHintBlock)
 
         Transcript:
         \(rawTranscript)
