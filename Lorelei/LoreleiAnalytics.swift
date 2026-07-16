@@ -24,8 +24,13 @@ enum LoreleiAnalyticsEvent {
     case appLaunched
     case dictationCompleted(transcriptCharacters: Int, viaSteer: Bool)
     case systemDictationStarted
-    case systemDictationInserted(usedFallbackText: Bool, appCategory: String)
-    case systemDictationCopiedToClipboard
+    case systemDictationInserted(
+        usedFallbackText: Bool,
+        appCategory: String,
+        formatMs: Int,
+        totalMs: Int
+    )
+    case systemDictationCopiedToClipboard(formatMs: Int, totalMs: Int)
     case turnStarted(sandboxPolicy: String)
     case turnCompleted(success: Bool, durationSeconds: Double)
     case steerSent
@@ -68,17 +73,29 @@ enum LoreleiAnalyticsEvent {
         case .appLaunched, .steerSent, .steerFailed, .runStopped,
              .approvalRequested, .settingsPanelOpened, .toolbarExpanded,
              .newChatStarted, .onboardingStarted, .onboardingCompleted,
-             .systemDictationStarted, .systemDictationCopiedToClipboard:
+             .systemDictationStarted:
             return [:]
         case .dictationCompleted(let transcriptCharacters, let viaSteer):
             return [
                 "transcript_characters": transcriptCharacters,
                 "via_steer": viaSteer
             ]
-        case .systemDictationInserted(let usedFallbackText, let appCategory):
+        case .systemDictationInserted(
+            let usedFallbackText,
+            let appCategory,
+            let formatMs,
+            let totalMs
+        ):
             return [
                 "used_fallback_text": usedFallbackText,
-                "app_category": appCategory
+                "app_category": appCategory,
+                "format_ms": formatMs,
+                "total_ms": totalMs
+            ]
+        case .systemDictationCopiedToClipboard(let formatMs, let totalMs):
+            return [
+                "format_ms": formatMs,
+                "total_ms": totalMs
             ]
         case .turnStarted(let sandboxPolicy):
             return ["sandbox_policy": sandboxPolicy]

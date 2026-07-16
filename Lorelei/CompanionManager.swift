@@ -507,15 +507,22 @@ final class CompanionManager: ObservableObject {
                 switch event {
                 case .started:
                     LoreleiAnalytics.capture(.systemDictationStarted)
-                case .inserted(let usedFallbackText, let appCategory):
+                case .inserted(let usedFallbackText, let appCategory, let formatMs, let totalMs):
                     LoreleiAnalytics.capture(
                         .systemDictationInserted(
                             usedFallbackText: usedFallbackText,
-                            appCategory: appCategory
+                            appCategory: appCategory,
+                            formatMs: formatMs,
+                            totalMs: totalMs
                         )
                     )
-                case .copiedToClipboard:
-                    LoreleiAnalytics.capture(.systemDictationCopiedToClipboard)
+                case .copiedToClipboard(let formatMs, let totalMs):
+                    LoreleiAnalytics.capture(
+                        .systemDictationCopiedToClipboard(
+                            formatMs: formatMs,
+                            totalMs: totalMs
+                        )
+                    )
                 }
             },
             showOverlay: { [weak self] in
