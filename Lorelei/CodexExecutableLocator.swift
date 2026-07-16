@@ -12,13 +12,22 @@ struct CodexExecutableLocator {
 
     private let fileManager: FileManager
     private let defaults: UserDefaults
+    private let environment: [String: String]
+    private let applicationDirectories: [URL]
 
     init(
         fileManager: FileManager = .default,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        applicationDirectories: [URL]? = nil
     ) {
         self.fileManager = fileManager
         self.defaults = defaults
+        self.environment = environment
+        self.applicationDirectories = applicationDirectories ?? [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications", isDirectory: true)
+        ]
     }
 
     func resolve() -> URL? {
@@ -29,7 +38,7 @@ struct CodexExecutableLocator {
             return url
         }
 
-        let pathCandidates = ProcessInfo.processInfo.environment["PATH", default: ""]
+        let pathCandidates = environment["PATH", default: ""]
             .split(separator: ":")
             .map(String.init)
             .map { URL(fileURLWithPath: $0).appendingPathComponent("codex").path }
@@ -39,13 +48,29 @@ struct CodexExecutableLocator {
             "/usr/local/bin/codex"
         ]
 
-        for candidate in pathCandidates + fixedCandidates + nvmCodexCandidates() {
+        let candidates = bundledCodexCandidates()
+            + pathCandidates
+            + fixedCandidates
+            + nvmCodexCandidates()
+        for candidate in candidates {
             if let url = executableURLIfValid(path: candidate) {
                 return url
             }
         }
 
         return nil
+    }
+
+    private func bundledCodexCandidates() -> [String] {
+        let applicationBundleNames = ["ChatGPT.app", "Codex.app"]
+        return applicationDirectories.flatMap { directoryURL in
+            applicationBundleNames.map { bundleName in
+                directoryURL
+                    .appendingPathComponent(bundleName, isDirectory: true)
+                    .appendingPathComponent("Contents/Resources/codex")
+                    .path
+            }
+        }
     }
 
     private func executableURLIfValid(path: String) -> URL? {
