@@ -23,6 +23,9 @@ enum LoreleiAnalyticsConfiguration {
 enum LoreleiAnalyticsEvent {
     case appLaunched
     case dictationCompleted(transcriptCharacters: Int, viaSteer: Bool)
+    case systemDictationStarted
+    case systemDictationInserted(usedFallbackText: Bool)
+    case systemDictationCopiedToClipboard
     case turnStarted(sandboxPolicy: String)
     case turnCompleted(success: Bool, durationSeconds: Double)
     case steerSent
@@ -41,6 +44,9 @@ enum LoreleiAnalyticsEvent {
         switch self {
         case .appLaunched: "app_launched"
         case .dictationCompleted: "dictation_completed"
+        case .systemDictationStarted: "system_dictation_started"
+        case .systemDictationInserted: "system_dictation_inserted"
+        case .systemDictationCopiedToClipboard: "system_dictation_copied_to_clipboard"
         case .turnStarted: "turn_started"
         case .turnCompleted: "turn_completed"
         case .steerSent: "steer_sent"
@@ -61,13 +67,16 @@ enum LoreleiAnalyticsEvent {
         switch self {
         case .appLaunched, .steerSent, .steerFailed, .runStopped,
              .approvalRequested, .settingsPanelOpened, .toolbarExpanded,
-             .newChatStarted, .onboardingStarted, .onboardingCompleted:
+             .newChatStarted, .onboardingStarted, .onboardingCompleted,
+             .systemDictationStarted, .systemDictationCopiedToClipboard:
             return [:]
         case .dictationCompleted(let transcriptCharacters, let viaSteer):
             return [
                 "transcript_characters": transcriptCharacters,
                 "via_steer": viaSteer
             ]
+        case .systemDictationInserted(let usedFallbackText):
+            return ["used_fallback_text": usedFallbackText]
         case .turnStarted(let sandboxPolicy):
             return ["sandbox_policy": sandboxPolicy]
         case .turnCompleted(let success, let durationSeconds):

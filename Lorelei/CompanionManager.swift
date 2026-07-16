@@ -154,6 +154,11 @@ final class CompanionManager: ObservableObject {
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     private var runStatusIdleReturnTask: Task<Void, Never>?
     private var transcribingWatchdogTask: Task<Void, Never>?
+    private var systemDictationController: SystemDictationController?
+    private let dictationHUD = DictationHUD()
+    /// True while system dictation owns the toolbar runStatus (listening or
+    /// post-release processing). Cleared by `endSystemDictationRunStatus`.
+    private var ownsSystemDictationRunStatus = false
 
     /// True when all required permissions are granted. Used by the panel to show
     /// a single "all good" state.
@@ -174,6 +179,12 @@ final class CompanionManager: ObservableObject {
     /// Whether the blue cursor overlay is currently visible on screen.
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
+
+    /// Stop is only meaningful for an in-flight command turn. System dictation
+    /// uses `.working("Dictating…")` for progress UI and must not show Stop.
+    var canStopCurrentRun: Bool {
+        currentResponseTask != nil || pendingCodexAppServerApproval != nil
+    }
 
     init(
         speechOutput: SpeechOutputing? = nil,
@@ -403,14 +414,28 @@ final class CompanionManager: ObservableObject {
 
     private func bindShortcutTransitions() {
         shortcutTransitionCancellable = globalPushToTalkShortcutMonitor
-            .shortcutTransitionPublisher
+            .taggedShortcutTransitionPublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] transition in
-                self?.handleShortcutTransition(transition)
+            .sink { [weak self] tagged in
+                self?.handleShortcutTransition(tagged)
             }
     }
 
-    private func handleShortcutTransition(_ transition: BuddyPushToTalkShortcut.ShortcutTransition) {
+    private func handleShortcutTransition(
+        _ tagged: BuddyPushToTalkShortcut.TaggedShortcutTransition
+    ) {
+        let kind: BuddyPushToTalkShortcut.ShortcutKind = tagged.kind
+        switch kind {
+        case .command:
+            handleCommandShortcutTransition(tagged.transition)
+        case .dictation:
+            sharedSystemDictationController().handleShortcutTransition(tagged.transition)
+        }
+    }
+
+    private func handleCommandShortcutTransition(
+        _ transition: BuddyPushToTalkShortcut.ShortcutTransition
+    ) {
         switch transition {
         case .pressed:
             guard !buddyDictationManager.isDictationInProgress else { return }
@@ -457,6 +482,72 @@ final class CompanionManager: ObservableObject {
         case .none:
             break
         }
+    }
+
+    private func sharedSystemDictationController() -> SystemDictationController {
+        if let systemDictationController {
+            return systemDictationController
+        }
+
+        let controller = SystemDictationController(
+            listener: BuddyDictationManagerSystemDictationListeningAdapter(
+                manager: buddyDictationManager
+            ),
+            formatter: DictationTextFormatter(
+                workingDirectoryProvider: { [weak self] in
+                    self?.codexAppServerWorkingDirectory()
+                        ?? FileManager.default.homeDirectoryForCurrentUser.path
+                }
+            ),
+            inserter: DictationPasteInserter(),
+            presentHUD: { [weak self] message in
+                self?.dictationHUD.show(message)
+            },
+            trackAnalytics: { event in
+                switch event {
+                case .started:
+                    LoreleiAnalytics.capture(.systemDictationStarted)
+                case .inserted(let usedFallbackText):
+                    LoreleiAnalytics.capture(
+                        .systemDictationInserted(usedFallbackText: usedFallbackText)
+                    )
+                case .copiedToClipboard:
+                    LoreleiAnalytics.capture(.systemDictationCopiedToClipboard)
+                }
+            },
+            showOverlay: { [weak self] in
+                guard let self else { return }
+                // Mirror command PTT: waveform opacity and the face expression
+                // both key off runStatus == .listening.
+                self.beginSystemDictationListening()
+                if !self.isOverlayVisible {
+                    self.overlayWindowManager.showOverlay(
+                        onScreens: NSScreen.screens,
+                        companionManager: self
+                    )
+                    self.isOverlayVisible = true
+                }
+            },
+            hideOverlay: { [weak self] in
+                guard let self else { return }
+                // Keep a busy working face through STT finalize + Codex cleanup
+                // + insert. `.transcribing`/`.thinking` looked like failure.
+                self.beginSystemDictationProcessing()
+                self.overlayWindowManager.hideOverlay()
+                self.isOverlayVisible = false
+            },
+            markSessionFinished: { [weak self] in
+                self?.endSystemDictationRunStatus()
+            },
+            canStartSession: { [weak self] in
+                guard let self else { return false }
+                // Keep command-turn UI (.working / .needsApproval) intact.
+                return self.currentResponseTask == nil
+                    && self.pendingCodexAppServerApproval == nil
+            }
+        )
+        systemDictationController = controller
+        return controller
     }
 
     // MARK: - Local Command Routing Pipeline
@@ -954,6 +1045,51 @@ final class CompanionManager: ObservableObject {
             audioFeedback.play(.listeningEnded, spokenSummary: nil)
         }
         armTranscribingWatchdog()
+    }
+
+    private func beginSystemDictationListening() {
+        // Defense in depth: never steal an in-flight command turn's status.
+        guard currentResponseTask == nil, pendingCodexAppServerApproval == nil else { return }
+        ownsSystemDictationRunStatus = true
+        setRunStatusListening()
+    }
+
+    /// Post-release dictation progress: STT finalize, Codex cleanup, insert.
+    /// Uses `.working` so the face stays clearly busy (not sad-looking).
+    private func beginSystemDictationProcessing() {
+        guard ownsSystemDictationRunStatus else { return }
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        cancelTranscribingWatchdog()
+        let shouldPlayCue = runStatus == .listening
+        currentActivity = "Dictating…"
+        runStatus = .working("Dictating…")
+        if shouldPlayCue {
+            audioFeedback.play(.listeningEnded, spokenSummary: nil)
+        }
+    }
+
+    /// Clears listening/processing UI after system dictation finishes
+    /// (insert, clipboard fallback, silence, or cancelled start). Does not
+    /// clear an unrelated command-turn `.working` status.
+    private func endSystemDictationRunStatus() {
+        guard ownsSystemDictationRunStatus else { return }
+        ownsSystemDictationRunStatus = false
+        runStatusIdleReturnTask?.cancel()
+        runStatusIdleReturnTask = nil
+        cancelTranscribingWatchdog()
+        currentActivity = nil
+        switch runStatus {
+        case .listening, .transcribing:
+            runStatus = .idle
+        case .working(let activity) where activity == "Dictating…":
+            runStatus = .idle
+        case .working:
+            // Another activity string means a command turn took over mid-flight.
+            break
+        default:
+            break
+        }
     }
 
     /// Returns the toolbar to idle when a transcribe never produces a turn -

@@ -15,7 +15,12 @@ import CoreAudio
 import Foundation
 
 enum BuddyPushToTalkShortcut {
-    enum ShortcutOption {
+    enum ShortcutKind: Equatable {
+        case command
+        case dictation
+    }
+
+    enum ShortcutOption: Equatable {
         case shiftFunction
         case controlOption
         case shiftControl
@@ -81,10 +86,15 @@ enum BuddyPushToTalkShortcut {
         }
     }
 
-    enum ShortcutTransition {
+    enum ShortcutTransition: Equatable {
         case none
         case pressed
         case released
+    }
+
+    struct TaggedShortcutTransition: Equatable {
+        let kind: ShortcutKind
+        let transition: ShortcutTransition
     }
 
     private enum ShortcutEventType {
@@ -94,6 +104,7 @@ enum BuddyPushToTalkShortcut {
     }
 
     static let currentShortcutOption: ShortcutOption = .controlOption
+    static let dictationShortcutOption: ShortcutOption = .shiftControl
     static let pushToTalkKeyCode: UInt16 = 49 // Space
     static let pushToTalkDisplayText = currentShortcutOption.displayText
     static let pushToTalkTooltipText = "push to talk (\(pushToTalkDisplayText))"
@@ -107,9 +118,12 @@ enum BuddyPushToTalkShortcut {
     /// For space-based shortcuts this only reports the modifier half, so a
     /// held modifier keeps this true - the watchdog then simply defers to
     /// the regular key-up event.
-    static func isShortcutStillHeld(modifierFlags: NSEvent.ModifierFlags) -> Bool {
-        let requiredModifierFlags = currentShortcutOption.modifierOnlyFlags
-            ?? currentShortcutOption.spaceShortcutModifierFlags
+    static func isShortcutStillHeld(
+        modifierFlags: NSEvent.ModifierFlags,
+        option: ShortcutOption
+    ) -> Bool {
+        let requiredModifierFlags = option.modifierOnlyFlags
+            ?? option.spaceShortcutModifierFlags
             ?? []
 
         return modifierFlags
@@ -119,7 +133,8 @@ enum BuddyPushToTalkShortcut {
 
     static func shortcutTransition(
         for event: NSEvent,
-        wasShortcutPreviouslyPressed: Bool
+        wasShortcutPreviouslyPressed: Bool,
+        option: ShortcutOption
     ) -> ShortcutTransition {
         guard let shortcutEventType = shortcutEventType(for: event.type) else { return .none }
 
@@ -127,7 +142,8 @@ enum BuddyPushToTalkShortcut {
             for: shortcutEventType,
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags.intersection(.deviceIndependentFlagsMask),
-            wasShortcutPreviouslyPressed: wasShortcutPreviouslyPressed
+            wasShortcutPreviouslyPressed: wasShortcutPreviouslyPressed,
+            option: option
         )
     }
 
@@ -135,7 +151,8 @@ enum BuddyPushToTalkShortcut {
         for eventType: CGEventType,
         keyCode: UInt16,
         modifierFlagsRawValue: UInt64,
-        wasShortcutPreviouslyPressed: Bool
+        wasShortcutPreviouslyPressed: Bool,
+        option: ShortcutOption
     ) -> ShortcutTransition {
         guard let shortcutEventType = shortcutEventType(for: eventType) else { return .none }
 
@@ -144,8 +161,77 @@ enum BuddyPushToTalkShortcut {
             keyCode: keyCode,
             modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(modifierFlagsRawValue))
                 .intersection(.deviceIndependentFlagsMask),
-            wasShortcutPreviouslyPressed: wasShortcutPreviouslyPressed
+            wasShortcutPreviouslyPressed: wasShortcutPreviouslyPressed,
+            option: option
         )
+    }
+
+    /// Resolves command and dictation transitions for one input event.
+    ///
+    /// Disambiguation (evaluated from the pressed state *before* the event):
+    /// - While one kind is pressed, suppress `pressed` for the other kind.
+    /// - If a single event would press both (e.g. Ctrl+Option+Shift), command wins.
+    /// - A kind's `released` fires only when that kind was already pressed
+    ///   (enforced by the per-option transition core).
+    static func taggedShortcutTransitions(
+        for eventType: CGEventType,
+        keyCode: UInt16,
+        modifierFlagsRawValue: UInt64,
+        wasCommandShortcutPressed: Bool,
+        wasDictationShortcutPressed: Bool
+    ) -> [TaggedShortcutTransition] {
+        let commandRaw = shortcutTransition(
+            for: eventType,
+            keyCode: keyCode,
+            modifierFlagsRawValue: modifierFlagsRawValue,
+            wasShortcutPreviouslyPressed: wasCommandShortcutPressed,
+            option: currentShortcutOption
+        )
+        let dictationRaw = shortcutTransition(
+            for: eventType,
+            keyCode: keyCode,
+            modifierFlagsRawValue: modifierFlagsRawValue,
+            wasShortcutPreviouslyPressed: wasDictationShortcutPressed,
+            option: dictationShortcutOption
+        )
+
+        let (command, dictation) = disambiguateTransitions(
+            command: commandRaw,
+            dictation: dictationRaw,
+            wasCommandShortcutPressed: wasCommandShortcutPressed,
+            wasDictationShortcutPressed: wasDictationShortcutPressed
+        )
+
+        var tagged: [TaggedShortcutTransition] = []
+        if command != .none {
+            tagged.append(TaggedShortcutTransition(kind: .command, transition: command))
+        }
+        if dictation != .none {
+            tagged.append(TaggedShortcutTransition(kind: .dictation, transition: dictation))
+        }
+        return tagged
+    }
+
+    static func disambiguateTransitions(
+        command: ShortcutTransition,
+        dictation: ShortcutTransition,
+        wasCommandShortcutPressed: Bool,
+        wasDictationShortcutPressed: Bool
+    ) -> (command: ShortcutTransition, dictation: ShortcutTransition) {
+        var resolvedCommand = command
+        var resolvedDictation = dictation
+
+        if wasCommandShortcutPressed && resolvedDictation == .pressed {
+            resolvedDictation = .none
+        }
+        if wasDictationShortcutPressed && resolvedCommand == .pressed {
+            resolvedCommand = .none
+        }
+        if resolvedCommand == .pressed && resolvedDictation == .pressed {
+            resolvedDictation = .none
+        }
+
+        return (resolvedCommand, resolvedDictation)
     }
 
     private static func shortcutEventType(for eventType: NSEvent.EventType) -> ShortcutEventType? {
@@ -178,9 +264,10 @@ enum BuddyPushToTalkShortcut {
         for shortcutEventType: ShortcutEventType,
         keyCode: UInt16,
         modifierFlags: NSEvent.ModifierFlags,
-        wasShortcutPreviouslyPressed: Bool
+        wasShortcutPreviouslyPressed: Bool,
+        option: ShortcutOption
     ) -> ShortcutTransition {
-        if let modifierOnlyFlags = currentShortcutOption.modifierOnlyFlags {
+        if let modifierOnlyFlags = option.modifierOnlyFlags {
             guard shortcutEventType == .flagsChanged else { return .none }
 
             let isShortcutCurrentlyPressed = modifierFlags.contains(modifierOnlyFlags)
@@ -196,7 +283,7 @@ enum BuddyPushToTalkShortcut {
             return .none
         }
 
-        guard let pushToTalkModifierFlags = currentShortcutOption.spaceShortcutModifierFlags else {
+        guard let pushToTalkModifierFlags = option.spaceShortcutModifierFlags else {
             return .none
         }
 

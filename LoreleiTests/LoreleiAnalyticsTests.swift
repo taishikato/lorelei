@@ -10,6 +10,9 @@ struct LoreleiAnalyticsTests {
     @Test func eventNamesAreStable() async throws {
         #expect(LoreleiAnalyticsEvent.appLaunched.name == "app_launched")
         #expect(LoreleiAnalyticsEvent.dictationCompleted(transcriptCharacters: 5, viaSteer: false).name == "dictation_completed")
+        #expect(LoreleiAnalyticsEvent.systemDictationStarted.name == "system_dictation_started")
+        #expect(LoreleiAnalyticsEvent.systemDictationInserted(usedFallbackText: false).name == "system_dictation_inserted")
+        #expect(LoreleiAnalyticsEvent.systemDictationCopiedToClipboard.name == "system_dictation_copied_to_clipboard")
         #expect(LoreleiAnalyticsEvent.turnStarted(sandboxPolicy: "readOnly").name == "turn_started")
         #expect(LoreleiAnalyticsEvent.turnCompleted(success: true, durationSeconds: 3).name == "turn_completed")
         #expect(LoreleiAnalyticsEvent.steerSent.name == "steer_sent")
@@ -23,6 +26,14 @@ struct LoreleiAnalyticsTests {
         #expect(LoreleiAnalyticsEvent.onboardingStarted.name == "onboarding_started")
         #expect(LoreleiAnalyticsEvent.onboardingCompleted.name == "onboarding_completed")
         #expect(LoreleiAnalyticsEvent.updateCheckPerformed(updateAvailable: true).name == "update_check_performed")
+    }
+
+    @Test func systemDictationInsertedCarriesOnlyFallbackFlag() async throws {
+        let event = LoreleiAnalyticsEvent.systemDictationInserted(usedFallbackText: true)
+        let properties = event.properties
+
+        #expect(properties["used_fallback_text"] as? Bool == true)
+        #expect(properties.count == 1)
     }
 
     @Test func dictationEventCarriesOnlyMetadataNeverContent() async throws {
