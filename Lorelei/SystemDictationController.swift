@@ -12,7 +12,7 @@ import Foundation
 
 enum SystemDictationAnalyticsEvent: Equatable, Sendable {
     case started
-    case inserted(usedFallbackText: Bool)
+    case inserted(usedFallbackText: Bool, appCategory: String)
     case copiedToClipboard
 }
 
@@ -65,6 +65,7 @@ final class SystemDictationController {
     private let hideOverlay: () -> Void
     private let markSessionFinished: () -> Void
     private let frontmostProcessID: () -> pid_t?
+    private let frontmostAppContext: () -> DictationAppContext?
     /// False while a command turn or approval owns the toolbar - dictation
     /// must not start and clobber that runStatus.
     private let canStartSession: () -> Bool
@@ -77,6 +78,7 @@ final class SystemDictationController {
     /// overlapping an in-flight cleanup/paste.
     private var isPipelineBusy = false
     private var targetProcessID: pid_t?
+    private var targetAppContext: DictationAppContext?
 
     init(
         listener: any SystemDictationListening,
@@ -90,6 +92,13 @@ final class SystemDictationController {
         frontmostProcessID: @escaping () -> pid_t? = {
             NSWorkspace.shared.frontmostApplication?.processIdentifier
         },
+        frontmostAppContext: @escaping () -> DictationAppContext? = {
+            guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+            return DictationAppContext(
+                bundleIdentifier: app.bundleIdentifier,
+                localizedName: app.localizedName
+            )
+        },
         canStartSession: @escaping () -> Bool = { true }
     ) {
         self.listener = listener
@@ -101,6 +110,7 @@ final class SystemDictationController {
         self.hideOverlay = hideOverlay
         self.markSessionFinished = markSessionFinished
         self.frontmostProcessID = frontmostProcessID
+        self.frontmostAppContext = frontmostAppContext
         self.canStartSession = canStartSession
     }
 
@@ -126,6 +136,7 @@ final class SystemDictationController {
         isPipelineBusy = true
         // Capture before overlay / prewarm can change frontmost focus.
         targetProcessID = frontmostProcessID()
+        targetAppContext = frontmostAppContext()
 
         showOverlay()
         formatter.prewarm()
@@ -196,7 +207,10 @@ final class SystemDictationController {
         guard !trimmed.isEmpty else { return }
 
         LoreleiDiagLog.log("systemDictation: format begin")
-        let formatterResult = await formatter.format(rawTranscript)
+        let formatterResult = await formatter.format(
+            rawTranscript,
+            appContext: targetAppContext
+        )
         switch formatterResult {
         case .formatted(let cleaned):
             LoreleiDiagLog.log("systemDictation: format ok chars=\(cleaned.count)")
@@ -222,7 +236,10 @@ final class SystemDictationController {
         switch outcome {
         case .inserted:
             LoreleiDiagLog.log("systemDictation: insert ok")
-            trackAnalytics(.inserted(usedFallbackText: usedFallbackText))
+            trackAnalytics(.inserted(
+                usedFallbackText: usedFallbackText,
+                appCategory: (targetAppContext?.category ?? .unknown).rawValue
+            ))
         case .leftOnClipboard:
             LoreleiDiagLog.log("systemDictation: paste failed → clipboard HUD")
             presentHUD("Copied to clipboard")
@@ -233,6 +250,7 @@ final class SystemDictationController {
     private func finishPipeline() {
         isPipelineBusy = false
         targetProcessID = nil
+        targetAppContext = nil
         markSessionFinished()
     }
 

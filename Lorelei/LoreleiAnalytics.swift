@@ -24,7 +24,7 @@ enum LoreleiAnalyticsEvent {
     case appLaunched
     case dictationCompleted(transcriptCharacters: Int, viaSteer: Bool)
     case systemDictationStarted
-    case systemDictationInserted(usedFallbackText: Bool)
+    case systemDictationInserted(usedFallbackText: Bool, appCategory: String)
     case systemDictationCopiedToClipboard
     case turnStarted(sandboxPolicy: String)
     case turnCompleted(success: Bool, durationSeconds: Double)
@@ -75,8 +75,11 @@ enum LoreleiAnalyticsEvent {
                 "transcript_characters": transcriptCharacters,
                 "via_steer": viaSteer
             ]
-        case .systemDictationInserted(let usedFallbackText):
-            return ["used_fallback_text": usedFallbackText]
+        case .systemDictationInserted(let usedFallbackText, let appCategory):
+            return [
+                "used_fallback_text": usedFallbackText,
+                "app_category": appCategory
+            ]
         case .turnStarted(let sandboxPolicy):
             return ["sandbox_policy": sandboxPolicy]
         case .turnCompleted(let success, let durationSeconds):

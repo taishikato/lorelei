@@ -11,7 +11,10 @@ struct LoreleiAnalyticsTests {
         #expect(LoreleiAnalyticsEvent.appLaunched.name == "app_launched")
         #expect(LoreleiAnalyticsEvent.dictationCompleted(transcriptCharacters: 5, viaSteer: false).name == "dictation_completed")
         #expect(LoreleiAnalyticsEvent.systemDictationStarted.name == "system_dictation_started")
-        #expect(LoreleiAnalyticsEvent.systemDictationInserted(usedFallbackText: false).name == "system_dictation_inserted")
+        #expect(LoreleiAnalyticsEvent.systemDictationInserted(
+            usedFallbackText: false,
+            appCategory: "unknown"
+        ).name == "system_dictation_inserted")
         #expect(LoreleiAnalyticsEvent.systemDictationCopiedToClipboard.name == "system_dictation_copied_to_clipboard")
         #expect(LoreleiAnalyticsEvent.turnStarted(sandboxPolicy: "readOnly").name == "turn_started")
         #expect(LoreleiAnalyticsEvent.turnCompleted(success: true, durationSeconds: 3).name == "turn_completed")
@@ -28,12 +31,16 @@ struct LoreleiAnalyticsTests {
         #expect(LoreleiAnalyticsEvent.updateCheckPerformed(updateAvailable: true).name == "update_check_performed")
     }
 
-    @Test func systemDictationInsertedCarriesOnlyFallbackFlag() async throws {
-        let event = LoreleiAnalyticsEvent.systemDictationInserted(usedFallbackText: true)
+    @Test func systemDictationInsertedCarriesFallbackFlagAndAppCategory() async throws {
+        let event = LoreleiAnalyticsEvent.systemDictationInserted(
+            usedFallbackText: true,
+            appCategory: "chat"
+        )
         let properties = event.properties
 
         #expect(properties["used_fallback_text"] as? Bool == true)
-        #expect(properties.count == 1)
+        #expect(properties["app_category"] as? String == "chat")
+        #expect(properties.count == 2)
     }
 
     @Test func dictationEventCarriesOnlyMetadataNeverContent() async throws {

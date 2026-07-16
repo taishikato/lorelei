@@ -25,7 +25,7 @@ struct DictationTextFormatterTests {
             }
         )
 
-        let result = await formatter.format("um hello world")
+        let result = await formatter.format("um hello world", appContext: nil)
 
         #expect(result == .formatted("Hello world."))
         #expect(await transport.sentMethods.contains("turn/start"))
@@ -46,7 +46,7 @@ struct DictationTextFormatterTests {
             }
         )
 
-        let result = await formatter.format("keep this raw")
+        let result = await formatter.format("keep this raw", appContext: nil)
 
         guard case .fallbackToRaw = result else {
             Issue.record("Expected fallbackToRaw, got \(result)")
@@ -81,7 +81,7 @@ struct DictationTextFormatterTests {
             }
         )
 
-        let result = await formatter.format("timeout this")
+        let result = await formatter.format("timeout this", appContext: nil)
 
         guard case .fallbackToRaw = result else {
             Issue.record("Expected fallbackToRaw on timeout, got \(result)")
@@ -105,7 +105,7 @@ struct DictationTextFormatterTests {
             }
         )
 
-        let result = await formatter.format("non empty input")
+        let result = await formatter.format("non empty input", appContext: nil)
 
         #expect(result == .fallbackToRaw(reason: "empty_output"))
     }
@@ -115,5 +115,41 @@ struct DictationTextFormatterTests {
             makeTransport: { FakeCodexAppServerTransport(lines: []) }
         )
         #expect(executor.defaultedTurnTimeoutSecondsForTesting == 10)
+    }
+
+    @Test func promptWithoutContextMatchesLegacyPrompt() {
+        let legacy = DictationTextFormatter.prompt(for: "hello", appContext: nil)
+        #expect(legacy.contains("You are a dictation cleanup helper."))
+        #expect(!legacy.contains("Style hint"))
+    }
+
+    @Test func promptWithUnknownAppMatchesNoContextPrompt() {
+        let unknownApp = DictationAppContext(
+            bundleIdentifier: "com.example.someapp",
+            localizedName: "SomeApp"
+        )
+        let withUnknown = DictationTextFormatter.prompt(for: "hello", appContext: unknownApp)
+        let without = DictationTextFormatter.prompt(for: "hello", appContext: nil)
+        #expect(withUnknown == without)
+    }
+
+    @Test func promptWithEmailContextAppendsEmailHint() {
+        let mail = DictationAppContext(
+            bundleIdentifier: "com.apple.mail",
+            localizedName: "Mail"
+        )
+        let prompt = DictationTextFormatter.prompt(for: "hello", appContext: mail)
+        #expect(prompt.contains("Style hint"))
+        #expect(prompt.contains("email compose field"))
+        #expect(prompt.contains("Never add, remove, or reword meaningful content."))
+    }
+
+    @Test func promptWithCodeContextAppendsVerbatimHint() {
+        let cursor = DictationAppContext(
+            bundleIdentifier: "com.todesktop.230313mzl4w4u92",
+            localizedName: "Cursor"
+        )
+        let prompt = DictationTextFormatter.prompt(for: "hello", appContext: cursor)
+        #expect(prompt.contains("code editor or terminal"))
     }
 }

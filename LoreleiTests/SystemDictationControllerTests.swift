@@ -62,10 +62,15 @@ final class FakeDictationTextFormatter: DictationTextFormatting {
     var formatCallCount = 0
     var formatDelayNanoseconds: UInt64 = 0
     private(set) var lastRawTranscript: String?
+    private(set) var lastAppContext: DictationAppContext?
 
-    func format(_ rawTranscript: String) async -> DictationFormatterResult {
+    func format(
+        _ rawTranscript: String,
+        appContext: DictationAppContext?
+    ) async -> DictationFormatterResult {
         formatCallCount += 1
         lastRawTranscript = rawTranscript
+        lastAppContext = appContext
         if formatDelayNanoseconds > 0 {
             try? await Task.sleep(nanoseconds: formatDelayNanoseconds)
         }
@@ -376,5 +381,47 @@ struct SystemDictationControllerTests {
         #expect(listener.startCallCount == 0)
         #expect(formatter.prewarmCallCount == 0)
         #expect(!overlayShown)
+    }
+
+    @Test func formatReceivesAppContextCapturedAtPress() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        let inserter = FakeDictationTextInserter()
+        let slack = DictationAppContext(
+            bundleIdentifier: "com.tinyspeck.slackmacgap",
+            localizedName: "Slack"
+        )
+        var contextToReturn: DictationAppContext? = slack
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 },
+            frontmostAppContext: { contextToReturn }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        // Frontmost app changes after press must not affect this session.
+        contextToReturn = nil
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("hello team")
+
+        let insertedEvent = SystemDictationAnalyticsEvent.inserted(
+            usedFallbackText: false,
+            appCategory: "chat"
+        )
+        for _ in 0..<50 {
+            if trackedEvents.contains(insertedEvent) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(formatter.lastAppContext == slack)
+        #expect(trackedEvents.contains(insertedEvent))
     }
 }
