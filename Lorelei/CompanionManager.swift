@@ -130,6 +130,7 @@ final class CompanionManager: ObservableObject {
     private let workspaceCommandExecutor = WorkspaceCommandExecutor()
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
+    private let computerUseInstallationOverride: ComputerUsePluginInstallation??
     private let memoryStore: LoreleiMemoryStore
     private let speechOutput: SpeechOutputing
     private let audioFeedback: BuddyAudioFeedbacking
@@ -191,6 +192,7 @@ final class CompanionManager: ObservableObject {
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
+        computerUseInstallationOverride: ComputerUsePluginInstallation?? = nil,
         memoryStore: LoreleiMemoryStore? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         transcribingWatchdogDelay: Duration = .seconds(6),
@@ -203,6 +205,7 @@ final class CompanionManager: ObservableObject {
         self.workspaceSettingsStore = workspaceSettingsStore ?? WorkspaceSettingsStore()
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
+        self.computerUseInstallationOverride = computerUseInstallationOverride
         self.memoryStore = memoryStore ?? LoreleiMemoryStore()
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
@@ -837,12 +840,21 @@ final class CompanionManager: ObservableObject {
     }
 
     private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
-        let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(for: prompt)
+        let installation = resolvedComputerUseInstallation()
+        let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(
+            for: prompt,
+            computerUseAvailable: installation != nil
+        )
         let cwd = codexAppServerWorkingDirectory()
         recordDebugEvent("Codex App Server desktop action started")
         recordDebugEvent("Codex App Server cwd: \(cwd)")
-        LoreleiAnalytics.capture(.turnStarted(sandboxPolicy: "desktopAction"))
+        LoreleiAnalytics.capture(.turnStarted(
+            sandboxPolicy: installation != nil ? "desktopActionComputerUse" : "desktopAction"
+        ))
         let turnStartedAt = Date()
+        let extraInput: [CodexAppServerTurnInputItem] = installation.map {
+            [.skill(name: ComputerUsePluginLocator.skillName, path: $0.skillPath)]
+        } ?? []
 
         let result = await withDesktopActionOverlayHidden {
             if let codexAppServerDesktopActionRunner = self.codexAppServerDesktopActionRunner {
@@ -850,7 +862,11 @@ final class CompanionManager: ObservableObject {
             }
 
             let executor = self.sharedCodexAppServerExecutor()
-            return await executor.runDesktopAction(prompt: appServerPrompt, cwd: cwd)
+            return await executor.runDesktopAction(
+                prompt: appServerPrompt,
+                cwd: cwd,
+                extraInput: extraInput
+            )
         }
 
         LoreleiAnalytics.capture(.turnCompleted(
@@ -924,6 +940,20 @@ final class CompanionManager: ObservableObject {
             }
             return sections.joined(separator: "\n\n")
         }
+        let computerUseInstallation = resolvedComputerUseInstallation()
+        let configOverridesResolver: @Sendable () -> [String: Any] = {
+            guard let computerUseInstallation else { return [:] }
+            return [
+                "mcp_servers": [
+                    "computer-use": [
+                        "command": computerUseInstallation.mcpBinaryPath,
+                        "args": ["mcp"],
+                        "cwd": computerUseInstallation.pluginRootPath,
+                        "enabled": true
+                    ]
+                ]
+            ]
+        }
         let dynamicToolHandler: CodexAppServerDynamicToolHandler = { [weak self] request in
             if request.namespace == CodexAppServerDesktopForegroundTool.spec.namespace,
                request.tool == CodexAppServerDesktopForegroundTool.spec.name {
@@ -978,6 +1008,7 @@ final class CompanionManager: ObservableObject {
                 makeTransport: codexAppServerTransportFactory,
                 dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                 developerInstructionsResolver: developerInstructionsResolver,
+                configOverridesResolver: configOverridesResolver,
                 dynamicToolHandler: dynamicToolHandler,
                 traceHandler: traceHandler,
                 progressHandler: progressHandler,
@@ -989,6 +1020,7 @@ final class CompanionManager: ObservableObject {
             executor = CodexAppServerExecutor(
                 dynamicToolSpecsResolver: dynamicToolSpecsResolver,
                 developerInstructionsResolver: developerInstructionsResolver,
+                configOverridesResolver: configOverridesResolver,
                 dynamicToolHandler: dynamicToolHandler,
                 traceHandler: traceHandler,
                 progressHandler: progressHandler,
@@ -999,6 +1031,18 @@ final class CompanionManager: ObservableObject {
         }
         codexAppServerExecutor = executor
         return executor
+    }
+
+    private func resolvedComputerUseInstallation() -> ComputerUsePluginInstallation? {
+        if let computerUseInstallationOverride {
+            return computerUseInstallationOverride
+        }
+        guard !UserDefaults.standard.bool(forKey: "LoreleiComputerUseDisabled") else {
+            return nil
+        }
+        return ComputerUsePluginLocator.locate(
+            baseDirectory: ComputerUsePluginLocator.defaultBaseDirectory()
+        )
     }
 
     private nonisolated static func fencedMemorySection(file: String, content: String) -> String {

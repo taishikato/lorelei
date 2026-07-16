@@ -39,7 +39,8 @@ struct CompanionManagerCommandTests {
         let manager = CompanionManager(
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
-            codexAppServerDesktopActionRunner: recorder.run
+            codexAppServerDesktopActionRunner: recorder.run,
+            computerUseInstallationOverride: .some(nil)
         )
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
@@ -61,6 +62,110 @@ struct CompanionManagerCommandTests {
         #expect(call.prompt.contains("Call lorelei.foreground_app to bring the target app"))
         #expect(call.cwd == FileManager.default.homeDirectoryForCurrentUser.path)
         #expect(manager.latestResultSummary == "Opened through App Server.")
+    }
+
+    @Test func desktopActionUsesComputerUsePromptOnlyWhenInstallationPresent() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerComputerUsePromptTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerComputerUsePromptTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let installation = ComputerUsePluginInstallation(
+            version: "1.0.10",
+            pluginRootPath: "/plugins/computer-use/1.0.10",
+            mcpBinaryPath: "/plugins/computer-use/1.0.10/SkyComputerUseClient",
+            skillPath: "/plugins/computer-use/1.0.10/skills/computer-use/SKILL.md"
+        )
+        let computerUseRecorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Computer Use turn finished.")
+        )
+        let computerUseManager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: computerUseRecorder.run,
+            computerUseInstallationOverride: installation
+        )
+
+        computerUseManager.handleFinalTranscriptForTesting("open TextEdit")
+        for _ in 0..<20 {
+            if computerUseRecorder.calls.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let computerUseCall = try #require(computerUseRecorder.calls.first)
+        #expect(computerUseCall.prompt.contains("Computer Use"))
+        #expect(computerUseCall.prompt.contains("node_repl"))
+
+        let fallbackRecorder = AppServerDesktopActionRecorder(
+            result: WorkspaceCommandResult(summary: "Fallback turn finished.")
+        )
+        let fallbackManager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerDesktopActionRunner: fallbackRecorder.run,
+            computerUseInstallationOverride: .some(nil)
+        )
+
+        fallbackManager.handleFinalTranscriptForTesting("open TextEdit")
+        for _ in 0..<20 {
+            if fallbackRecorder.calls.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let fallbackCall = try #require(fallbackRecorder.calls.first)
+        #expect(fallbackCall.prompt == CodexPromptBuilder.desktopActionPrompt(for: "open TextEdit"))
+        #expect(!fallbackCall.prompt.contains("Computer Use"))
+    }
+
+    @Test func desktopActionAttachesComputerUseSkillWhenInstallationPresent() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerComputerUseSkillTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerComputerUseSkillTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let installation = ComputerUsePluginInstallation(
+            version: "1.0.10",
+            pluginRootPath: "/plugins/computer-use/1.0.10",
+            mcpBinaryPath: "/plugins/computer-use/1.0.10/SkyComputerUseClient",
+            skillPath: "/plugins/computer-use/1.0.10/skills/computer-use/SKILL.md"
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            computerUseInstallationOverride: installation
+        )
+
+        manager.handleFinalTranscriptForTesting("open TextEdit")
+        for _ in 0..<20 {
+            if manager.latestResultSummary == "Done" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadParams = try #require(threadStart["params"] as? [String: Any])
+        let config = try #require(threadParams["config"] as? [String: Any])
+        let servers = try #require(config["mcp_servers"] as? [String: Any])
+        let computerUse = try #require(servers["computer-use"] as? [String: Any])
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let turnParams = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(turnParams["input"] as? [[String: Any]])
+        let skill = try #require(input.last)
+
+        #expect(computerUse["command"] as? String == installation.mcpBinaryPath)
+        #expect(computerUse["args"] as? [String] == ["mcp"])
+        #expect(computerUse["cwd"] as? String == installation.pluginRootPath)
+        #expect(computerUse["enabled"] as? Bool == true)
+        #expect(skill["type"] as? String == "skill")
+        #expect(skill["name"] as? String == ComputerUsePluginLocator.skillName)
+        #expect(skill["path"] as? String == installation.skillPath)
+        #expect(input.first?["text"] as? String == CodexPromptBuilder.desktopActionPrompt(
+            for: "open TextEdit",
+            computerUseAvailable: true
+        ))
     }
 
     @Test func debugRunURLParsesPromptAndRejectsOthers() async throws {
@@ -339,7 +444,8 @@ struct CompanionManagerCommandTests {
         let manager = CompanionManager(
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
-            codexAppServerDesktopActionRunner: recorder.run
+            codexAppServerDesktopActionRunner: recorder.run,
+            computerUseInstallationOverride: .some(nil)
         )
 
         manager.handleFinalTranscriptForTesting("use computer use to open TextEdit and type hello")
@@ -369,7 +475,8 @@ struct CompanionManagerCommandTests {
         let manager = CompanionManager(
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
-            codexAppServerDesktopActionRunner: recorder.run
+            codexAppServerDesktopActionRunner: recorder.run,
+            computerUseInstallationOverride: .some(nil)
         )
         let transcript = """
         use computer use to open TextEdit and type using the Chrome plugin through Codex App Server. Do not call lorelei.foreground_app for this Chrome-only task.
@@ -454,6 +561,7 @@ struct CompanionManagerCommandTests {
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
             codexAppServerDesktopActionRunner: recorder.run,
+            computerUseInstallationOverride: .some(nil),
             overlayWindowManager: overlayWindowManager
         )
         manager.simulateShortcutTransitionForTesting(.pressed)
@@ -521,7 +629,8 @@ struct CompanionManagerCommandTests {
         let manager = CompanionManager(
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
-            codexAppServerDesktopActionRunner: recorder.run
+            codexAppServerDesktopActionRunner: recorder.run,
+            computerUseInstallationOverride: .some(nil)
         )
 
         manager.handleFinalTranscriptForTesting("Open chatgpt.com in a new tab on chrome browser")
