@@ -83,6 +83,7 @@ You also pick a **workspace folder** in onboarding or settings; Codex uses it as
 
 To restore format-first dictation, run `defaults write dev.taishi.lorelei LoreleiDictationRawInsertFirstDisabled -bool true` and restart Lorelei.
 To disable selection edit mode, run `defaults write dev.taishi.lorelei LoreleiEditModeDisabled -bool true` and restart Lorelei.
+Electron apps (Slack, Claude, ChatGPT, VS Code, ...) keep their accessibility tree dormant by default; Lorelei enables it automatically (via Electron's `AXManualAccessibility`) the first time you dictate into one, so in-place cleanup and edit mode work there too.
 
 ## How it works
 
