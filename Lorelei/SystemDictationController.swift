@@ -294,13 +294,23 @@ final class SystemDictationController {
         var usedFallbackText = false
         let replacement: String
         switch (formatterResult, insertOutcome) {
+        case (.formatted(let cleaned), .inserted) where cleaned == rawTranscript:
+            replacement = DictationReplacementOutcome.keptIdentical.rawValue
         case (.formatted(let cleaned), .inserted):
-            let outcome = await replacer.replaceRawWithCleaned(
+            if await replacer.prepareRawForPaste(
                 rawText: rawTranscript,
                 cleanedText: cleaned,
                 targetProcessID: targetProcessID
-            )
-            replacement = outcome.rawValue
+            ) == .ready {
+                switch await inserter.insert(cleaned, targetProcessID: targetProcessID) {
+                case .inserted:
+                    replacement = DictationReplacementOutcome.replaced.rawValue
+                case .leftOnClipboard:
+                    replacement = DictationReplacementOutcome.keptCheckFailed.rawValue
+                }
+            } else {
+                replacement = DictationReplacementOutcome.keptCheckFailed.rawValue
+            }
         case (.formatted(let cleaned), .leftOnClipboard) where cleaned == rawTranscript:
             replacement = DictationReplacementOutcome.keptIdentical.rawValue
         case (.formatted(let cleaned), .leftOnClipboard):
@@ -364,13 +374,19 @@ final class SystemDictationController {
             presentHUD("No changes")
             outcome = "no_change"
         case .formatted(let edited):
-            switch await selectionEditor.applyEdit(
+            switch await selectionEditor.prepareSelectionForPaste(
                 snapshot: selection,
                 editedText: edited,
                 targetProcessID: targetProcessID
             ) {
-            case .applied:
-                outcome = "applied"
+            case .ready:
+                switch await inserter.insert(edited, targetProcessID: targetProcessID) {
+                case .inserted:
+                    outcome = "applied"
+                case .leftOnClipboard:
+                    presentHUD("Copied to clipboard")
+                    outcome = "copied_to_clipboard"
+                }
             case .checkFailed:
                 copyToClipboard(edited)
                 presentHUD("Copied to clipboard")

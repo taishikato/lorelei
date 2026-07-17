@@ -118,38 +118,38 @@ final class FakeDictationTextInserter: DictationTextInserting {
 
 @MainActor
 final class FakeDictationTextReplacer: DictationTextReplacing {
-    var outcome: DictationReplacementOutcome = .replaced
-    private(set) var calls: [(raw: String, cleaned: String, pid: pid_t?)] = []
+    var prepareOutcome: DictationPastePreparationOutcome = .ready
+    private(set) var prepareCalls: [(raw: String, cleaned: String, pid: pid_t?)] = []
 
-    func replaceRawWithCleaned(
+    func prepareRawForPaste(
         rawText: String,
         cleanedText: String,
         targetProcessID: pid_t?
-    ) async -> DictationReplacementOutcome {
-        calls.append((rawText, cleanedText, targetProcessID))
-        return outcome
+    ) async -> DictationPastePreparationOutcome {
+        prepareCalls.append((rawText, cleanedText, targetProcessID))
+        return prepareOutcome
     }
 }
 
 @MainActor
 final class FakeDictationSelectionEditor: DictationSelectionEditing {
     var snapshotToReturn: DictationSelectionSnapshot?
-    var applyOutcome: DictationEditApplyOutcome = .applied
+    var prepareOutcome: DictationPastePreparationOutcome = .ready
     private(set) var readCallCount = 0
-    private(set) var applyCalls: [(snapshot: DictationSelectionSnapshot, edited: String, pid: pid_t?)] = []
+    private(set) var prepareCalls: [(snapshot: DictationSelectionSnapshot, edited: String, pid: pid_t?)] = []
 
     func readSelection(targetProcessID: pid_t?) -> DictationSelectionSnapshot? {
         readCallCount += 1
         return snapshotToReturn
     }
 
-    func applyEdit(
+    func prepareSelectionForPaste(
         snapshot: DictationSelectionSnapshot,
         editedText: String,
         targetProcessID: pid_t?
-    ) async -> DictationEditApplyOutcome {
-        applyCalls.append((snapshot, editedText, targetProcessID))
-        return applyOutcome
+    ) async -> DictationPastePreparationOutcome {
+        prepareCalls.append((snapshot, editedText, targetProcessID))
+        return prepareOutcome
     }
 }
 
@@ -191,9 +191,15 @@ struct SystemDictationControllerTests {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        #expect(inserter.lastInsertedText == "um hello world")
+        for _ in 0..<50 {
+            if inserter.insertCallCount == 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(inserter.insertCallCount == 2)
+        #expect(inserter.lastInsertedText == "Hello world.")
         #expect(inserter.lastTargetProcessID == 999)
-        #expect(replacer.calls.count == 1)
+        #expect(replacer.prepareCalls.count == 1)
         #expect(hudMessages.isEmpty)
         #expect(sessionFinishedCount == 1)
     }
@@ -230,13 +236,15 @@ struct SystemDictationControllerTests {
         }
         #expect(inserter.insertCallCount == 1)
         #expect(inserter.lastInsertedText == "raw words")
-        #expect(replacer.calls.isEmpty)
+        #expect(replacer.prepareCalls.isEmpty)
 
         for _ in 0..<50 {
             if trackedEvents.count > 1 { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        let call = try #require(replacer.calls.first)
+        #expect(inserter.insertCallCount == 2)
+        #expect(inserter.lastInsertedText == "Clean.")
+        let call = try #require(replacer.prepareCalls.first)
         #expect(call.raw == "raw words")
         #expect(call.cleaned == "Clean.")
         #expect(call.pid == 4242)
@@ -248,13 +256,13 @@ struct SystemDictationControllerTests {
         }))
     }
 
-    @Test func rawFirstKeepsRawWhenReplacerRefuses() async throws {
+    @Test func rawFirstKeepsRawWhenPrepareFails() async throws {
         let listener = FakeSystemDictationListener()
         let formatter = FakeDictationTextFormatter()
         formatter.result = .formatted("Clean.")
         let inserter = FakeDictationTextInserter()
         let replacer = FakeDictationTextReplacer()
-        replacer.outcome = .keptCheckFailed
+        replacer.prepareOutcome = .checkFailed
         var trackedEvents: [SystemDictationAnalyticsEvent] = []
 
         let controller = SystemDictationController(
@@ -280,9 +288,49 @@ struct SystemDictationControllerTests {
 
         #expect(inserter.insertCallCount == 1)
         #expect(inserter.lastInsertedText == "raw words")
-        #expect(replacer.calls.count == 1)
+        #expect(replacer.prepareCalls.count == 1)
         #expect(trackedEvents.contains(where: { event in
             if case .inserted(_, _, _, _, _, "kept_check_failed") = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func rawFirstKeepsIdenticalWithoutPrepare() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("raw words")
+        let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            replacer: replacer,
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {}
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("raw words")
+
+        for _ in 0..<50 {
+            if trackedEvents.count > 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "raw words")
+        #expect(replacer.prepareCalls.isEmpty)
+        #expect(trackedEvents.contains(where: { event in
+            if case .inserted(_, _, _, _, _, "kept_identical") = event {
                 return true
             }
             return false
@@ -319,7 +367,7 @@ struct SystemDictationControllerTests {
         }
 
         #expect(inserter.insertCallCount == 1)
-        #expect(replacer.calls.isEmpty)
+        #expect(replacer.prepareCalls.isEmpty)
         #expect(trackedEvents.contains(where: { event in
             if case .inserted(true, _, _, _, _, "kept_format_fallback") = event {
                 return true
@@ -365,7 +413,7 @@ struct SystemDictationControllerTests {
         }
 
         #expect(hudMessages == ["Copied to clipboard"])
-        #expect(replacer.calls.isEmpty)
+        #expect(replacer.prepareCalls.isEmpty)
         #expect(swaps.count == 1)
         #expect(swaps.first?.raw == "raw words")
         #expect(swaps.first?.cleaned == "Clean.")
@@ -413,7 +461,7 @@ struct SystemDictationControllerTests {
         }
 
         #expect(swapCallCount == 0)
-        #expect(replacer.calls.isEmpty)
+        #expect(replacer.prepareCalls.isEmpty)
         #expect(trackedEvents.contains(where: { event in
             if case .copiedToClipboard(_, _, "kept_identical") = event {
                 return true
@@ -454,7 +502,7 @@ struct SystemDictationControllerTests {
 
         #expect(inserter.insertCallCount == 1)
         #expect(inserter.lastInsertedText == "Clean.")
-        #expect(replacer.calls.isEmpty)
+        #expect(replacer.prepareCalls.isEmpty)
         #expect(trackedEvents.contains(where: { event in
             if case .inserted(false, _, _, _, 0, "legacy_disabled") = event {
                 return true
@@ -675,14 +723,14 @@ struct SystemDictationControllerTests {
         controller.handleShortcutTransition(.pressed)
 
         for _ in 0..<50 {
-            if replacer.calls.count > 0 { break }
+            if replacer.prepareCalls.count > 0 { break }
             try await Task.sleep(for: .milliseconds(20))
         }
 
         #expect(overlayShowCount == 1)
         #expect(listener.startCallCount == 1)
-        #expect(inserter.insertCallCount == 1)
-        #expect(inserter.lastInsertedText == "one")
+        #expect(inserter.insertCallCount == 2)
+        #expect(inserter.lastInsertedText == "first")
         #expect(inserter.lastTargetProcessID == 1000)
         #expect(formatter.formatCallCount == 1)
     }
@@ -810,7 +858,7 @@ struct SystemDictationControllerTests {
         #expect(unwrapped.2 == 100)
     }
 
-    @Test func selectionAtPressRoutesToEditAndSplices() async throws {
+    @Test func selectionAtPressRoutesToEditAndPastes() async throws {
         let listener = FakeSystemDictationListener()
         let formatter = FakeDictationTextFormatter()
         formatter.editResult = .formatted("EDITED")
@@ -843,18 +891,19 @@ struct SystemDictationControllerTests {
         listener.emitTranscript("make this shorter")
 
         for _ in 0..<50 {
-            if selectionEditor.applyCalls.count == 1 { break }
+            if selectionEditor.prepareCalls.count == 1, inserter.insertCallCount == 1 { break }
             try await Task.sleep(for: .milliseconds(10))
         }
 
         #expect(formatter.editCallCount == 1)
         #expect(formatter.lastEditInstruction == "make this shorter")
         #expect(formatter.lastEditSelectedText == "SELECTED")
-        #expect(inserter.insertCallCount == 0)
-        let apply = try #require(selectionEditor.applyCalls.first)
-        #expect(apply.snapshot.text == "SELECTED")
-        #expect(apply.edited == "EDITED")
-        #expect(apply.pid == 4242)
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "EDITED")
+        let prepare = try #require(selectionEditor.prepareCalls.first)
+        #expect(prepare.snapshot.text == "SELECTED")
+        #expect(prepare.edited == "EDITED")
+        #expect(prepare.pid == 4242)
         #expect(hudMessages.contains("Editing…"))
         #expect(clipboardCopies.isEmpty)
         #expect(trackedEvents.contains(where: { event in
@@ -875,7 +924,7 @@ struct SystemDictationControllerTests {
             text: "SELECTED",
             range: NSRange(location: 7, length: 8)
         )
-        selectionEditor.applyOutcome = .checkFailed
+        selectionEditor.prepareOutcome = .checkFailed
         var hudMessages: [String] = []
         var trackedEvents: [SystemDictationAnalyticsEvent] = []
         var clipboardCopies: [String] = []
@@ -909,6 +958,60 @@ struct SystemDictationControllerTests {
         #expect(clipboardCopies == ["EDITED"])
         #expect(hudMessages.contains("Copied to clipboard"))
         #expect(inserter.insertCallCount == 0)
+        #expect(trackedEvents.contains(where: { event in
+            if case .edited(_, _, _, "copied_to_clipboard", _, _) = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func editPasteRefusalLeavesClipboardWithoutCopyFallback() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.editResult = .formatted("EDITED")
+        let inserter = FakeDictationTextInserter()
+        inserter.outcome = .leftOnClipboard
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = DictationSelectionSnapshot(
+            text: "SELECTED",
+            range: NSRange(location: 7, length: 8)
+        )
+        var hudMessages: [String] = []
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+        var clipboardCopies: [String] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            copyToClipboard: { clipboardCopies.append($0) },
+            presentHUD: { hudMessages.append($0) },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("make this shorter")
+
+        for _ in 0..<50 {
+            if trackedEvents.contains(where: {
+                if case .edited = $0 { return true }
+                return false
+            }) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(selectionEditor.prepareCalls.count == 1)
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "EDITED")
+        #expect(clipboardCopies.isEmpty)
+        #expect(hudMessages.contains("Copied to clipboard"))
         #expect(trackedEvents.contains(where: { event in
             if case .edited(_, _, _, "copied_to_clipboard", _, _) = event {
                 return true
@@ -957,7 +1060,7 @@ struct SystemDictationControllerTests {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        #expect(selectionEditor.applyCalls.isEmpty)
+        #expect(selectionEditor.prepareCalls.isEmpty)
         #expect(clipboardCopies.isEmpty)
         #expect(hudMessages.contains("Edit failed"))
         #expect(inserter.insertCallCount == 0)
@@ -1009,7 +1112,7 @@ struct SystemDictationControllerTests {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        #expect(selectionEditor.applyCalls.isEmpty)
+        #expect(selectionEditor.prepareCalls.isEmpty)
         #expect(clipboardCopies.isEmpty)
         #expect(hudMessages.contains("No changes"))
         #expect(inserter.insertCallCount == 0)
@@ -1138,12 +1241,13 @@ struct SystemDictationControllerTests {
         controller.handleShortcutTransition(.pressed)
 
         for _ in 0..<50 {
-            if selectionEditor.applyCalls.count == 1 { break }
+            if selectionEditor.prepareCalls.count == 1 { break }
             try await Task.sleep(for: .milliseconds(20))
         }
 
         #expect(listener.startCallCount == 1)
         #expect(formatter.editCallCount == 1)
-        #expect(inserter.insertCallCount == 0)
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "EDITED")
     }
 }
