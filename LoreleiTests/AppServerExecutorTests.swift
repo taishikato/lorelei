@@ -498,7 +498,14 @@ struct AppServerExecutorTests {
                 #"{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"interrupted"}}}"#
             ],
             onInitialLinesDrained: {
-                Task { await timeoutGate.release() }
+                // Drain fires before the executor parses turn/started and
+                // setActiveTurn. Under parallel-suite load a same-tick
+                // release lets the timeout path observe a nil activeTurn and
+                // invalidate without sending turn/interrupt.
+                Task {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    await timeoutGate.release()
+                }
             }
         )
         let completingExecutor = CodexAppServerExecutor(
@@ -527,6 +534,7 @@ struct AppServerExecutorTests {
             #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#
         ], onInitialLinesDrained: {
             Task {
+                try? await Task.sleep(for: .milliseconds(50))
                 await silentTimeoutGate.release()
                 await silentTimeoutGate.release()
             }
