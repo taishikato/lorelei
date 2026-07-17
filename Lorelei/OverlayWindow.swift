@@ -247,11 +247,13 @@ class OverlayWindowManager: OverlayWindowManaging {
                 )
 
                 let hostingView = NSHostingView(rootView: contentView)
-                // Default sizingOptions on purpose: with [] this full-screen
-                // content stops rendering entirely (owner-reproduced - the
-                // listening waveform vanished). The borderless overlay window
-                // never runs a constraints pass, so the size-extrema crash
-                // path from plan 033 cannot fire here.
+                // No SwiftUI-driven window sizing: the extrema path throws
+                // inside updateConstraints on this OS (plan 033/034 crash
+                // anatomy). An earlier report that [] stopped this view from
+                // rendering was a misdiagnosis - the invisible waveform was
+                // the NSWindow-over-fullscreen-Space issue fixed by the
+                // NSPanel conversion above.
+                hostingView.sizingOptions = []
                 hostingView.frame = screen.frame
                 window.contentView = hostingView
 

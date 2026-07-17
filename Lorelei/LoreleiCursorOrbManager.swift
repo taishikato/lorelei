@@ -95,11 +95,10 @@ final class LoreleiCursorOrbManager: DesktopActionVisualizing {
         let model = LoreleiCursorOrbModel(position: homePoint(for: screen))
         let contentView = LoreleiCursorOrbView(model: model)
         let hostingView = NSHostingView(rootView: contentView)
-        // Default sizingOptions on purpose: with [] full-screen hosting
-        // content stops rendering entirely (owner-reproduced on the overlay
-        // window's waveform). The borderless orb window never runs a
-        // constraints pass, so the size-extrema crash path from plan 033
-        // cannot fire here.
+        // No SwiftUI-driven window sizing (see OverlayWindow - the extrema
+        // path throws inside updateConstraints; the earlier claim that []
+        // breaks full-screen rendering was a misdiagnosis).
+        hostingView.sizingOptions = []
         hostingView.frame = CGRect(origin: .zero, size: screen.frame.size)
 
         let window = LoreleiCursorOrbWindow(
