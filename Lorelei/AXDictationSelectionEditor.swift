@@ -3,28 +3,28 @@
 //  Lorelei
 //
 //  Edit-mode AX layer: reads the focused element's selection at press time and
-//  later splices the Codex-edited text over it, but only when the captured
-//  selection is still byte-identical at its captured range. Trusts a
-//  successful splice without readback verification (Chrome readback lies).
+//  later prepares that range for paste by selecting and verifying the selection
+//  text. Content lands via the controller's paste inserter - AX never writes
+//  text (Electron rich editors report text-set success without applying).
 //
 
 import AppKit
 import ApplicationServices
 import Foundation
 
-enum DictationEditApplyOutcome: String, Equatable, Sendable {
-    case applied
+enum DictationPastePreparationOutcome: String, Equatable, Sendable {
+    case ready
     case checkFailed = "check_failed"
 }
 
 @MainActor
 protocol DictationSelectionEditing: AnyObject {
     func readSelection(targetProcessID: pid_t?) -> DictationSelectionSnapshot?
-    func applyEdit(
+    func prepareSelectionForPaste(
         snapshot: DictationSelectionSnapshot,
         editedText: String,
         targetProcessID: pid_t?
-    ) async -> DictationEditApplyOutcome
+    ) async -> DictationPastePreparationOutcome
 }
 
 @MainActor
@@ -32,9 +32,9 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
     nonisolated init() {}
 
     /// The element readSelection captured, paired with the snapshot it
-    /// produced. applyEdit prefers this element - Chromium focus reads
-    /// flicker to containers (AXWebArea/AXGroup) seconds later, but the
-    /// captured element stays valid. Consumed by the next applyEdit.
+    /// produced. prepareSelectionForPaste prefers this element - Chromium
+    /// focus reads flicker to containers (AXWebArea/AXGroup) seconds later,
+    /// but the captured element stays valid. Consumed by the next prepare.
     private var capturedSelection: (element: AXUIElement, snapshot: DictationSelectionSnapshot)?
 
     func readSelection(targetProcessID: pid_t?) -> DictationSelectionSnapshot? {
@@ -79,11 +79,11 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         return snapshot
     }
 
-    func applyEdit(
+    func prepareSelectionForPaste(
         snapshot: DictationSelectionSnapshot,
         editedText: String,
         targetProcessID: pid_t?
-    ) async -> DictationEditApplyOutcome {
+    ) async -> DictationPastePreparationOutcome {
         guard let targetProcessID else {
             LoreleiDiagLog.log("dictationEdit: no focused element → clipboard fallback")
             return .checkFailed
@@ -104,11 +104,15 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
                     snapshot: snapshot,
                     editedText: editedText
                 ) {
-                if Self.splice(plan: plan, on: captured.element) {
+                if Self.selectAndVerify(
+                    range: plan.range,
+                    expectedText: snapshot.text,
+                    on: captured.element
+                ) {
                     LoreleiDiagLog.log(
-                        "dictationEdit: applied via=captured chars=\(plan.range.length)→\(editedText.count)"
+                        "dictationEdit: ready via=captured selectedChars=\(snapshot.text.count)"
                     )
-                    return .applied
+                    return .ready
                 }
                 LoreleiDiagLog.log("dictationEdit: captured splice rejected → refocus")
             } else {
@@ -149,30 +153,50 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             return .checkFailed
         }
 
-        guard Self.splice(plan: plan, on: element) else {
+        guard Self.selectAndVerify(
+            range: plan.range,
+            expectedText: snapshot.text,
+            on: element
+        ) else {
             LoreleiDiagLog.log("dictationEdit: splice rejected → clipboard fallback")
             return .checkFailed
         }
 
         LoreleiDiagLog.log(
-            "dictationEdit: applied via=refocused chars=\(plan.range.length)→\(editedText.count)"
+            "dictationEdit: ready via=refocused selectedChars=\(snapshot.text.count)"
         )
-        return .applied
+        return .ready
     }
 
-    private static func splice(plan: DictationReplacementPlan, on element: AXUIElement) -> Bool {
-        var selectRange = CFRange(location: plan.range.location, length: plan.range.length)
-        guard let axRange = AXValueCreate(.cfRange, &selectRange),
-              AXUIElementSetAttributeValue(
-                  element,
-                  kAXSelectedTextRangeAttribute as CFString,
-                  axRange
-              ) == .success,
-              AXUIElementSetAttributeValue(
-                  element,
-                  kAXSelectedTextAttribute as CFString,
-                  plan.replacement as CFString
-              ) == .success else {
+    /// Select the plan range, then trust only the SELECTION readback: the
+    /// selection must read back as exactly the text we are about to replace.
+    /// AX text sets lie in Electron rich editors (031 field data); AX
+    /// selection reads are the same primitive readSelection already trusts.
+    /// The set status is deliberately ignored: if the range-set no-ops while
+    /// the user's original selection is still active, the readback still
+    /// matches and the paste lands correctly.
+    private static func selectAndVerify(
+        range: NSRange,
+        expectedText: String,
+        on element: AXUIElement
+    ) -> Bool {
+        var selectRange = CFRange(location: range.location, length: range.length)
+        if let axRange = AXValueCreate(.cfRange, &selectRange) {
+            _ = AXUIElementSetAttributeValue(
+                element,
+                kAXSelectedTextRangeAttribute as CFString,
+                axRange
+            )
+        }
+
+        var selectedObject: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &selectedObject
+        ) == .success,
+            let selectedText = selectedObject as? String,
+            selectedText == expectedText else {
             return false
         }
         return true

@@ -118,7 +118,7 @@ During a Computer Use action, use the plugin's on-screen indicator or Esc, or Lo
 Design notes:
 
 - **Official Computer Use is primary, with an in-house fallback.** Lorelei attaches ChatGPT.app's installed plugin only to desktop-action turns and keeps its own App Server dynamic tools available when the plugin cannot be used.
-- **Text is typed via accessibility values, never simulated keystrokes.** Keystroke simulation corrupts input through IMEs (Japanese in particular).
+- **Text lands via clipboard paste; AX handles selection, never content.** Content keystroke simulation corrupts input through IMEs (Japanese in particular), and Electron rich editors silently drop AX text writes - so Lorelei selects the target range via accessibility and pastes through the app's normal input path.
 - **The protocol layer tracks the installed Codex version.** Run `./scripts/update-appserver-schema.sh` after upgrading the CLI and review the schema diff against `CodexAppServerProtocol.swift`.
 
 ## Development

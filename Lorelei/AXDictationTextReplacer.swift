@@ -3,9 +3,10 @@
 //  Lorelei
 //
 //  Replace-on-arrival executor: verifies via the accessibility API that the
-//  raw dictation paste is still untouched at the caret, then splices in the
-//  cleaned text by setting the selected range and selected text. Trusts a
-//  successful splice without readback verification (Chrome readback lies).
+//  raw dictation paste is still untouched at the caret, then selects that
+//  range for paste. Content lands via the controller's paste inserter - AX
+//  never writes text (Electron rich editors report text-set success without
+//  applying).
 //
 
 import AppKit
@@ -20,31 +21,31 @@ enum DictationReplacementOutcome: String, Equatable, Sendable {
 
 @MainActor
 protocol DictationTextReplacing: AnyObject {
-    func replaceRawWithCleaned(
+    func prepareRawForPaste(
         rawText: String,
         cleanedText: String,
         targetProcessID: pid_t?
-    ) async -> DictationReplacementOutcome
+    ) async -> DictationPastePreparationOutcome
 }
 
 @MainActor
 final class AXDictationTextReplacer: DictationTextReplacing {
     nonisolated init() {}
 
-    func replaceRawWithCleaned(
+    func prepareRawForPaste(
         rawText: String,
         cleanedText: String,
         targetProcessID: pid_t?
-    ) async -> DictationReplacementOutcome {
-        guard cleanedText != rawText else { return .keptIdentical }
-        guard let targetProcessID else { return .keptCheckFailed }
+    ) async -> DictationPastePreparationOutcome {
+        guard cleanedText != rawText else { return .checkFailed }
+        guard let targetProcessID else { return .checkFailed }
 
         let focused = await AXAccessibilityWaker.focusedElementWakingIfNeeded(
             processID: targetProcessID
         )
         guard let element = focused.element else {
             LoreleiDiagLog.log("dictationReplace: no focused element status=\(focused.status.rawValue) → keep raw")
-            return .keptCheckFailed
+            return .checkFailed
         }
         let role = {
             var object: AnyObject?
@@ -60,7 +61,7 @@ final class AXDictationTextReplacer: DictationTextReplacing {
         ) == .success,
             let fieldValue = valueObject as? String else {
             LoreleiDiagLog.log("dictationReplace: unreadable value role=\(role) → keep raw")
-            return .keptCheckFailed
+            return .checkFailed
         }
 
         var rangeObject: AnyObject?
@@ -86,28 +87,55 @@ final class AXDictationTextReplacer: DictationTextReplacing {
             cleanedText: cleanedText
         ) else {
             LoreleiDiagLog.log("dictationReplace: safety check failed role=\(role) valueLength=\((fieldValue as NSString).length) caret=\(caretLocation.map(String.init) ?? "nil") rawLength=\((rawText as NSString).length) → keep raw")
-            return .keptCheckFailed
+            return .checkFailed
         }
 
-        var selectRange = CFRange(location: plan.range.location, length: plan.range.length)
-        guard let axRange = AXValueCreate(.cfRange, &selectRange),
-              AXUIElementSetAttributeValue(
-                  element,
-                  kAXSelectedTextRangeAttribute as CFString,
-                  axRange
-              ) == .success,
-              AXUIElementSetAttributeValue(
-                  element,
-                  kAXSelectedTextAttribute as CFString,
-                  plan.replacement as CFString
-              ) == .success else {
+        guard Self.selectAndVerify(
+            range: plan.range,
+            expectedText: rawText,
+            on: element
+        ) else {
             LoreleiDiagLog.log("dictationReplace: splice rejected → keep raw")
-            return .keptCheckFailed
+            return .checkFailed
         }
 
         LoreleiDiagLog.log(
-            "dictationReplace: replaced chars=\(plan.range.length)→\(cleanedText.count)"
+            "dictationReplace: ready rawLength=\((rawText as NSString).length)"
         )
-        return .replaced
+        return .ready
+    }
+
+    /// Select the plan range, then trust only the SELECTION readback: the
+    /// selection must read back as exactly the text we are about to replace.
+    /// AX text sets lie in Electron rich editors (031 field data); AX
+    /// selection reads are the same primitive readSelection already trusts.
+    /// The set status is deliberately ignored: if the range-set no-ops while
+    /// the user's original selection is still active, the readback still
+    /// matches and the paste lands correctly.
+    private static func selectAndVerify(
+        range: NSRange,
+        expectedText: String,
+        on element: AXUIElement
+    ) -> Bool {
+        var selectRange = CFRange(location: range.location, length: range.length)
+        if let axRange = AXValueCreate(.cfRange, &selectRange) {
+            _ = AXUIElementSetAttributeValue(
+                element,
+                kAXSelectedTextRangeAttribute as CFString,
+                axRange
+            )
+        }
+
+        var selectedObject: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &selectedObject
+        ) == .success,
+            let selectedText = selectedObject as? String,
+            selectedText == expectedText else {
+            return false
+        }
+        return true
     }
 }
