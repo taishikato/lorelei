@@ -16,7 +16,7 @@ import Foundation
 
 @MainActor
 enum AXFocusProbe {
-    static func runAndLog() {
+    static func runAndLog(wake: Bool = false) {
         guard let app = NSWorkspace.shared.frontmostApplication else {
             LoreleiDiagLog.log("axProbe: no frontmost app")
             return
@@ -26,18 +26,27 @@ enum AXFocusProbe {
             "axProbe: app=\(app.localizedName ?? "?") bundle=\(app.bundleIdentifier ?? "?") pid=\(pid)"
         )
 
-        let appElement = AXUIElementCreateApplication(pid)
-        var focusedObject: AnyObject?
-        let focusedStatus = AXUIElementCopyAttributeValue(
-            appElement, kAXFocusedUIElementAttribute as CFString, &focusedObject)
-        guard focusedStatus == .success,
-              let focusedObject,
-              CFGetTypeID(focusedObject) == AXUIElementGetTypeID() else {
-            LoreleiDiagLog.log("axProbe: focusedElement UNREADABLE status=\(focusedStatus.rawValue)")
+        let first = AXAccessibilityWaker.focusedElement(processID: pid)
+        if let element = first.element {
+            reportCapabilities(of: element)
             return
         }
-        let element = focusedObject as! AXUIElement
+        LoreleiDiagLog.log("axProbe: focusedElement UNREADABLE status=\(first.status.rawValue)")
 
+        guard wake, AXAccessibilityWaker.isWakeable(first.status) else { return }
+        LoreleiDiagLog.log("axProbe: waking…")
+        Task { @MainActor in
+            let woken = await AXAccessibilityWaker.focusedElementWakingIfNeeded(processID: pid)
+            if let element = woken.element {
+                LoreleiDiagLog.log("axProbe: post-wake report:")
+                reportCapabilities(of: element)
+            } else {
+                LoreleiDiagLog.log("axProbe: post-wake still UNREADABLE status=\(woken.status.rawValue)")
+            }
+        }
+    }
+
+    private static func reportCapabilities(of element: AXUIElement) {
         LoreleiDiagLog.log("axProbe: role=\(stringAttribute(element, kAXRoleAttribute) ?? "nil") subrole=\(stringAttribute(element, kAXSubroleAttribute) ?? "nil")")
 
         if let value = stringAttribute(element, kAXValueAttribute) {
