@@ -14,6 +14,16 @@ final class DictationHUD {
     private var hideTask: Task<Void, Never>?
 
     func show(_ message: String, durationSeconds: TimeInterval = 1.5) {
+        // Both field crashes fired in the display-cycle observer immediately
+        // after a synchronous show() from controller continuations. One hop
+        // decouples the panel content swap / resize / orderFront from
+        // whatever layout pass the caller sits in.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentNow(message, durationSeconds: durationSeconds)
+        }
+    }
+
+    private func presentNow(_ message: String, durationSeconds: TimeInterval) {
         hideTask?.cancel()
         hideTask = nil
 
