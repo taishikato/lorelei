@@ -4,11 +4,22 @@
 
 <img width="2560" height="1440" alt="Image" src="https://github.com/user-attachments/assets/5391ce6f-bdfd-4475-b0a9-42ac5d21923f" />
 
-Lorelei is a voice buddy that lives on your macOS desktop and drives your computer through [OpenAI Codex](https://developers.openai.com/codex).
-Hold a hotkey, say what you want, and Codex (gpt-5.5) operates your Mac for you: it reads the frontmost app's accessibility tree, clicks buttons, fills in text, and falls back to screenshots when it needs to see the screen.
+Lorelei is an open-source (MIT), local-first voice control layer for your Mac.
+Hold a hotkey, speak, and on-device speech recognition hands the transcript to [OpenAI Codex](https://developers.openai.com/codex) (`codex app-server`, gpt-5.5), which drives the desktop through Lorelei's accessibility tools - using your existing ChatGPT subscription, with no separate API bill and no cloud middleman of Lorelei's own.
 
 Everything happens through a small liquid-glass toolbar at the top of your screen and a waveform capsule next to your cursor.
 There is no chat window to babysit.
+
+## Modes
+
+| Mode | Hotkey | What it does |
+|------|--------|--------------|
+| Desktop actions | Hold `Control + Option`, speak, release | Codex operates the Mac: opens apps, clicks UI, fills text, screenshots when needed |
+| Dictate | Hold `Control + Shift`, speak, release | Raw transcript pastes into the frontmost app, then upgrades in place if still untouched |
+| Edit | Select text, then hold `Control + Shift` and speak an instruction | Rewrites the selection in place (clipboard fallback if the selection moved) |
+| Ask | Hold `Control + Option` and ask a question | Answers about the screen, or about the current selection without a screenshot |
+
+See [Talking to Lorelei](#talking-to-lorelei) for the full reference, Stop / approval behavior, and kill-switch defaults.
 
 ## What it looks like
 
@@ -141,6 +152,11 @@ The three seams to know:
 1. `BuddyTranscriptionProvider` - speech-to-text backends.
 2. `CodexAppServerTransporting` - the JSON-RPC line transport (tests feed scripted frames).
 3. `DesktopActionExecuting` - AX snapshots, element actions, text setting, screenshots.
+
+## Contributing
+
+Contributions are welcome under the [MIT License](LICENSE).
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for build / test expectations and project conventions, and [ARCHITECTURE.md](ARCHITECTURE.md) for the runtime pipeline and extension points.
 
 ## Known limitations
 
