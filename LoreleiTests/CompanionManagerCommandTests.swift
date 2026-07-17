@@ -177,6 +177,12 @@ struct CompanionManagerCommandTests {
         #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://run")!) == nil)
     }
 
+    @Test func axProbeURLIsRecognized() {
+        #expect(LoreleiDebugURLHandler.isAXProbe(url: URL(string: "lorelei://ax-probe")!))
+        #expect(!LoreleiDebugURLHandler.isAXProbe(url: URL(string: "lorelei://run?prompt=x")!))
+        #expect(!LoreleiDebugURLHandler.isAXProbe(url: URL(string: "https://ax-probe")!))
+    }
+
     @Test func companionManagerHandlesDebugPromptLikeTranscript() async throws {
         let defaults = UserDefaults(suiteName: "CompanionManagerDebugPromptTests")!
         defaults.removePersistentDomain(forName: "CompanionManagerDebugPromptTests")
