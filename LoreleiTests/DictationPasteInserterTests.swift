@@ -26,6 +26,38 @@ struct DictationPasteInserterTests {
         #expect(pasteboard.string(forType: .string) == "prior clipboard")
     }
 
+    @Test func swapReplacesPasteboardWhenStillRaw() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("raw words", forType: .string)
+
+        let swapped = DictationPasteboardSwap.swapIfStillRaw(
+            rawText: "raw words",
+            cleanedText: "Clean words.",
+            pasteboard: pasteboard
+        )
+
+        #expect(swapped)
+        #expect(pasteboard.string(forType: .string) == "Clean words.")
+    }
+
+    @Test func swapRefusesWhenPasteboardChanged() {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("user copied something else", forType: .string)
+
+        let swapped = DictationPasteboardSwap.swapIfStillRaw(
+            rawText: "raw words",
+            cleanedText: "Clean words.",
+            pasteboard: pasteboard
+        )
+
+        #expect(!swapped)
+        #expect(pasteboard.string(forType: .string) == "user copied something else")
+    }
+
     @Test func insertPostsPasteAndRestoresClipboard() async {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }

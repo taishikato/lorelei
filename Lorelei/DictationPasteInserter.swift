@@ -55,6 +55,22 @@ enum DictationPasteboardSnapshot {
     }
 }
 
+/// Replace-on-arrival for the clipboard-fallback path: upgrade the pasteboard
+/// to the cleaned text only while it still holds exactly the raw transcript.
+enum DictationPasteboardSwap {
+    @discardableResult
+    static func swapIfStillRaw(
+        rawText: String,
+        cleanedText: String,
+        pasteboard: NSPasteboard = .general
+    ) -> Bool {
+        guard pasteboard.string(forType: .string) == rawText else { return false }
+        pasteboard.clearContents()
+        pasteboard.setString(cleanedText, forType: .string)
+        return true
+    }
+}
+
 /// Decides whether Cmd+V is likely to land in an editable surface.
 /// Finder-style roles leave the transcript on the clipboard instead of
 /// posting paste and restoring (which would discard the spoken text).
@@ -125,7 +141,7 @@ final class DictationPasteInserter: DictationTextInserting {
             guard let app = NSRunningApplication(processIdentifier: pid) else {
                 return false
             }
-            return app.activate(options: [.activateIgnoringOtherApps])
+            return app.activate()
         },
         postCommandV: (() -> Bool)? = nil,
         shouldAttemptPaste: (() -> Bool)? = nil,
