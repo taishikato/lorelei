@@ -132,6 +132,28 @@ final class FakeDictationTextReplacer: DictationTextReplacing {
 }
 
 @MainActor
+final class FakeDictationSelectionEditor: DictationSelectionEditing {
+    var snapshotToReturn: DictationSelectionSnapshot?
+    var applyOutcome: DictationEditApplyOutcome = .applied
+    private(set) var readCallCount = 0
+    private(set) var applyCalls: [(snapshot: DictationSelectionSnapshot, edited: String, pid: pid_t?)] = []
+
+    func readSelection(targetProcessID: pid_t?) -> DictationSelectionSnapshot? {
+        readCallCount += 1
+        return snapshotToReturn
+    }
+
+    func applyEdit(
+        snapshot: DictationSelectionSnapshot,
+        editedText: String,
+        targetProcessID: pid_t?
+    ) async -> DictationEditApplyOutcome {
+        applyCalls.append((snapshot, editedText, targetProcessID))
+        return applyOutcome
+    }
+}
+
+@MainActor
 struct SystemDictationControllerTests {
     @Test func happyPathInsertsRawThenReplaces() async throws {
         let listener = FakeSystemDictationListener()
@@ -786,5 +808,342 @@ struct SystemDictationControllerTests {
         #expect(unwrapped.0 == 100)
         #expect(unwrapped.1 == 400)
         #expect(unwrapped.2 == 100)
+    }
+
+    @Test func selectionAtPressRoutesToEditAndSplices() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.editResult = .formatted("EDITED")
+        let inserter = FakeDictationTextInserter()
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = DictationSelectionSnapshot(
+            text: "SELECTED",
+            range: NSRange(location: 7, length: 8)
+        )
+        var hudMessages: [String] = []
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+        var clipboardCopies: [String] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            copyToClipboard: { clipboardCopies.append($0) },
+            presentHUD: { hudMessages.append($0) },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("make this shorter")
+
+        for _ in 0..<50 {
+            if selectionEditor.applyCalls.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(formatter.editCallCount == 1)
+        #expect(formatter.lastEditInstruction == "make this shorter")
+        #expect(formatter.lastEditSelectedText == "SELECTED")
+        #expect(inserter.insertCallCount == 0)
+        let apply = try #require(selectionEditor.applyCalls.first)
+        #expect(apply.snapshot.text == "SELECTED")
+        #expect(apply.edited == "EDITED")
+        #expect(apply.pid == 4242)
+        #expect(hudMessages.contains("Editing…"))
+        #expect(clipboardCopies.isEmpty)
+        #expect(trackedEvents.contains(where: { event in
+            if case .edited(_, _, _, "applied", 8, 17) = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func editCheckFailureFallsBackToClipboard() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.editResult = .formatted("EDITED")
+        let inserter = FakeDictationTextInserter()
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = DictationSelectionSnapshot(
+            text: "SELECTED",
+            range: NSRange(location: 7, length: 8)
+        )
+        selectionEditor.applyOutcome = .checkFailed
+        var hudMessages: [String] = []
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+        var clipboardCopies: [String] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            copyToClipboard: { clipboardCopies.append($0) },
+            presentHUD: { hudMessages.append($0) },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("make this shorter")
+
+        for _ in 0..<50 {
+            if trackedEvents.contains(where: {
+                if case .edited = $0 { return true }
+                return false
+            }) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(clipboardCopies == ["EDITED"])
+        #expect(hudMessages.contains("Copied to clipboard"))
+        #expect(inserter.insertCallCount == 0)
+        #expect(trackedEvents.contains(where: { event in
+            if case .edited(_, _, _, "copied_to_clipboard", _, _) = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func editFormatFallbackTouchesNothing() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.editResult = .fallbackToRaw(reason: "turn_failed")
+        let inserter = FakeDictationTextInserter()
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = DictationSelectionSnapshot(
+            text: "SELECTED",
+            range: NSRange(location: 7, length: 8)
+        )
+        var hudMessages: [String] = []
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+        var clipboardCopies: [String] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            copyToClipboard: { clipboardCopies.append($0) },
+            presentHUD: { hudMessages.append($0) },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("make this shorter")
+
+        for _ in 0..<50 {
+            if trackedEvents.contains(where: {
+                if case .edited = $0 { return true }
+                return false
+            }) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(selectionEditor.applyCalls.isEmpty)
+        #expect(clipboardCopies.isEmpty)
+        #expect(hudMessages.contains("Edit failed"))
+        #expect(inserter.insertCallCount == 0)
+        #expect(trackedEvents.contains(where: { event in
+            if case .edited(_, _, _, "format_fallback", _, _) = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func editIdenticalOutputIsNoChange() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.editResult = .formatted("SELECTED")
+        let inserter = FakeDictationTextInserter()
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = DictationSelectionSnapshot(
+            text: "SELECTED",
+            range: NSRange(location: 7, length: 8)
+        )
+        var hudMessages: [String] = []
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+        var clipboardCopies: [String] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            copyToClipboard: { clipboardCopies.append($0) },
+            presentHUD: { hudMessages.append($0) },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("make this shorter")
+
+        for _ in 0..<50 {
+            if trackedEvents.contains(where: {
+                if case .edited = $0 { return true }
+                return false
+            }) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(selectionEditor.applyCalls.isEmpty)
+        #expect(clipboardCopies.isEmpty)
+        #expect(hudMessages.contains("No changes"))
+        #expect(inserter.insertCallCount == 0)
+        #expect(trackedEvents.contains(where: { event in
+            if case .edited(_, _, _, "no_change", _, _) = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func noSelectionKeepsDictationPath() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("cleaned")
+        let inserter = FakeDictationTextInserter()
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = nil
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("hello world")
+
+        for _ in 0..<50 {
+            if inserter.insertCallCount == 1, formatter.formatCallCount == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(inserter.insertCallCount == 1)
+        #expect(formatter.formatCallCount == 1)
+        #expect(formatter.editCallCount == 0)
+        #expect(!trackedEvents.contains(where: {
+            if case .edited = $0 { return true }
+            return false
+        }))
+    }
+
+    @Test func killSwitchSkipsSelectionCapture() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("cleaned")
+        let inserter = FakeDictationTextInserter()
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = DictationSelectionSnapshot(
+            text: "SELECTED",
+            range: NSRange(location: 7, length: 8)
+        )
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            editModeEnabled: { false },
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("hello world")
+
+        for _ in 0..<50 {
+            if inserter.insertCallCount == 1, formatter.formatCallCount == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(selectionEditor.readCallCount == 0)
+        #expect(inserter.insertCallCount == 1)
+        #expect(formatter.formatCallCount == 1)
+        #expect(formatter.editCallCount == 0)
+        #expect(!trackedEvents.contains(where: {
+            if case .edited = $0 { return true }
+            return false
+        }))
+    }
+
+    @Test func secondPressBlockedWhileEditInFlight() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.editResult = .formatted("EDITED")
+        formatter.formatDelayNanoseconds = 200_000_000
+        let inserter = FakeDictationTextInserter()
+        let selectionEditor = FakeDictationSelectionEditor()
+        selectionEditor.snapshotToReturn = DictationSelectionSnapshot(
+            text: "SELECTED",
+            range: NSRange(location: 7, length: 8)
+        )
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            selectionEditor: selectionEditor,
+            presentHUD: { _ in },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("make this shorter")
+
+        try await Task.sleep(for: .milliseconds(20))
+        controller.handleShortcutTransition(.pressed)
+
+        for _ in 0..<50 {
+            if selectionEditor.applyCalls.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(listener.startCallCount == 1)
+        #expect(formatter.editCallCount == 1)
+        #expect(inserter.insertCallCount == 0)
     }
 }

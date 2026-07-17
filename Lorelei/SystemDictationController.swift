@@ -21,6 +21,14 @@ enum SystemDictationAnalyticsEvent: Equatable, Sendable {
         replacement: String
     )
     case copiedToClipboard(formatMs: Int, totalMs: Int, replacement: String)
+    case edited(
+        appCategory: String,
+        formatMs: Int,
+        totalMs: Int,
+        outcome: String,
+        selectedCharacters: Int,
+        instructionCharacters: Int
+    )
 }
 
 @MainActor
@@ -67,8 +75,11 @@ final class SystemDictationController {
     private let formatter: any DictationTextFormatting
     private let inserter: any DictationTextInserting
     private let replacer: any DictationTextReplacing
+    private let selectionEditor: any DictationSelectionEditing
     private let swapClipboard: (String, String) -> Bool
+    private let copyToClipboard: (String) -> Void
     private let rawInsertFirstEnabled: () -> Bool
+    private let editModeEnabled: () -> Bool
     private let presentHUD: (String) -> Void
     private let trackAnalytics: (SystemDictationAnalyticsEvent) -> Void
     private let showOverlay: () -> Void
@@ -90,17 +101,26 @@ final class SystemDictationController {
     private var isPipelineBusy = false
     private var targetProcessID: pid_t?
     private var targetAppContext: DictationAppContext?
+    private var targetSelection: DictationSelectionSnapshot?
 
     init(
         listener: any SystemDictationListening,
         formatter: any DictationTextFormatting,
         inserter: any DictationTextInserting,
         replacer: any DictationTextReplacing = AXDictationTextReplacer(),
+        selectionEditor: any DictationSelectionEditing = AXDictationSelectionEditor(),
         swapClipboard: @escaping (String, String) -> Bool = { raw, cleaned in
             DictationPasteboardSwap.swapIfStillRaw(rawText: raw, cleanedText: cleaned)
         },
+        copyToClipboard: @escaping (String) -> Void = { text in
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        },
         rawInsertFirstEnabled: @escaping () -> Bool = {
             !UserDefaults.standard.bool(forKey: "LoreleiDictationRawInsertFirstDisabled")
+        },
+        editModeEnabled: @escaping () -> Bool = {
+            !UserDefaults.standard.bool(forKey: "LoreleiEditModeDisabled")
         },
         presentHUD: @escaping (String) -> Void,
         trackAnalytics: @escaping (SystemDictationAnalyticsEvent) -> Void = { _ in },
@@ -124,8 +144,11 @@ final class SystemDictationController {
         self.formatter = formatter
         self.inserter = inserter
         self.replacer = replacer
+        self.selectionEditor = selectionEditor
         self.swapClipboard = swapClipboard
+        self.copyToClipboard = copyToClipboard
         self.rawInsertFirstEnabled = rawInsertFirstEnabled
+        self.editModeEnabled = editModeEnabled
         self.presentHUD = presentHUD
         self.trackAnalytics = trackAnalytics
         self.showOverlay = showOverlay
@@ -160,6 +183,11 @@ final class SystemDictationController {
         // Capture before overlay / prewarm can change frontmost focus.
         targetProcessID = frontmostProcessID()
         targetAppContext = frontmostAppContext()
+        targetSelection = editModeEnabled()
+            ? DictationEditSplicePlanner.usableSnapshot(
+                selectionEditor.readSelection(targetProcessID: targetProcessID)
+            )
+            : nil
 
         showOverlay()
         formatter.prewarm()
@@ -230,6 +258,15 @@ final class SystemDictationController {
         )
         guard !trimmed.isEmpty else { return }
 
+        if let selection = targetSelection {
+            await runEditFlow(
+                instruction: trimmed,
+                selection: selection,
+                totalStart: totalStart
+            )
+            return
+        }
+
         guard rawInsertFirstEnabled() else {
             await runLegacyFormatThenInsert(rawTranscript, totalStart: totalStart)
             return
@@ -299,6 +336,62 @@ final class SystemDictationController {
         }
     }
 
+    private func runEditFlow(
+        instruction: String,
+        selection: DictationSelectionSnapshot,
+        totalStart: ContinuousClock.Instant
+    ) async {
+        presentHUD("Editing…")
+        LoreleiDiagLog.log(
+            "systemDictation: edit begin instructionChars=\(instruction.count) selectedChars=\(selection.text.count) targetPID=\(targetProcessID.map(String.init) ?? "nil")"
+        )
+
+        let formatStart = now()
+        let formatterResult = await formatter.formatEdit(
+            instruction: instruction,
+            selectedText: selection.text,
+            appContext: targetAppContext
+        )
+        let formatMs = Self.milliseconds(from: formatStart, to: now())
+
+        let outcome: String
+        switch formatterResult {
+        case .fallbackToRaw(let reason):
+            LoreleiDiagLog.log("systemDictation: edit format fallback reason=\(reason)")
+            presentHUD("Edit failed")
+            outcome = "format_fallback"
+        case .formatted(let edited) where edited == selection.text:
+            presentHUD("No changes")
+            outcome = "no_change"
+        case .formatted(let edited):
+            switch await selectionEditor.applyEdit(
+                snapshot: selection,
+                editedText: edited,
+                targetProcessID: targetProcessID
+            ) {
+            case .applied:
+                outcome = "applied"
+            case .checkFailed:
+                copyToClipboard(edited)
+                presentHUD("Copied to clipboard")
+                outcome = "copied_to_clipboard"
+            }
+        }
+
+        let totalMs = Self.milliseconds(from: totalStart, to: now())
+        LoreleiDiagLog.log(
+            "systemDictation: edit done outcome=\(outcome) formatMs=\(formatMs) totalMs=\(totalMs)"
+        )
+        trackAnalytics(.edited(
+            appCategory: (targetAppContext?.category ?? .unknown).rawValue,
+            formatMs: formatMs,
+            totalMs: totalMs,
+            outcome: outcome,
+            selectedCharacters: selection.text.count,
+            instructionCharacters: instruction.count
+        ))
+    }
+
     private func runLegacyFormatThenInsert(
         _ rawTranscript: String,
         totalStart: ContinuousClock.Instant
@@ -363,6 +456,7 @@ final class SystemDictationController {
         isPipelineBusy = false
         targetProcessID = nil
         targetAppContext = nil
+        targetSelection = nil
         markSessionFinished()
     }
 

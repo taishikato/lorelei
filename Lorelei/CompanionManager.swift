@@ -536,6 +536,9 @@ final class CompanionManager: ObservableObject {
                             replacement: replacement
                         )
                     )
+                case .edited:
+                    // Temporary compile passthrough; Task 5 maps to systemDictationEdited.
+                    break
                 }
             },
             showOverlay: { [weak self] in
