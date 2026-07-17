@@ -21,6 +21,13 @@ enum LoreleiDebugURLHandler {
 
         return prompt
     }
+
+    static func isAXProbe(url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return false
+        }
+        return components.scheme == "lorelei" && components.host == "ax-probe"
+    }
 }
 
 @main
@@ -98,6 +105,10 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     /// stays as a fallback for Apple-Event senders.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
+            if LoreleiDebugURLHandler.isAXProbe(url: url) {
+                AXFocusProbe.runAndLog()
+                continue
+            }
             guard let prompt = LoreleiDebugURLHandler.debugPrompt(fromURL: url) else { continue }
             companionManager.handleDebugPrompt(prompt)
         }
@@ -110,9 +121,17 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         withReplyEvent replyEvent: NSAppleEventDescriptor
     ) {
         guard let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
-              let url = URL(string: urlString),
-              let prompt = LoreleiDebugURLHandler.debugPrompt(fromURL: url)
+              let url = URL(string: urlString)
         else {
+            return
+        }
+
+        if LoreleiDebugURLHandler.isAXProbe(url: url) {
+            AXFocusProbe.runAndLog()
+            return
+        }
+
+        guard let prompt = LoreleiDebugURLHandler.debugPrompt(fromURL: url) else {
             return
         }
 
