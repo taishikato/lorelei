@@ -58,11 +58,15 @@ final class FakeSystemDictationListener: SystemDictationListening {
 @MainActor
 final class FakeDictationTextFormatter: DictationTextFormatting {
     var result: DictationFormatterResult = .formatted("cleaned")
+    var editResult: DictationFormatterResult = .formatted("EDITED")
     var prewarmCallCount = 0
     var formatCallCount = 0
+    private(set) var editCallCount = 0
     var formatDelayNanoseconds: UInt64 = 0
     private(set) var lastRawTranscript: String?
     private(set) var lastAppContext: DictationAppContext?
+    private(set) var lastEditInstruction: String?
+    private(set) var lastEditSelectedText: String?
 
     func format(
         _ rawTranscript: String,
@@ -75,6 +79,21 @@ final class FakeDictationTextFormatter: DictationTextFormatting {
             try? await Task.sleep(nanoseconds: formatDelayNanoseconds)
         }
         return result
+    }
+
+    func formatEdit(
+        instruction: String,
+        selectedText: String,
+        appContext: DictationAppContext?
+    ) async -> DictationFormatterResult {
+        editCallCount += 1
+        lastEditInstruction = instruction
+        lastEditSelectedText = selectedText
+        lastAppContext = appContext
+        if formatDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: formatDelayNanoseconds)
+        }
+        return editResult
     }
 
     func prewarm() {

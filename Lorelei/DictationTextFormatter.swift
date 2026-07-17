@@ -19,6 +19,11 @@ protocol DictationTextFormatting: AnyObject {
         _ rawTranscript: String,
         appContext: DictationAppContext?
     ) async -> DictationFormatterResult
+    func formatEdit(
+        instruction: String,
+        selectedText: String,
+        appContext: DictationAppContext?
+    ) async -> DictationFormatterResult
     func prewarm()
 }
 
@@ -82,6 +87,46 @@ final class DictationTextFormatter: DictationTextFormatting {
         return .formatted(cleaned)
     }
 
+    func formatEdit(
+        instruction: String,
+        selectedText: String,
+        appContext: DictationAppContext?
+    ) async -> DictationFormatterResult {
+        let trimmedInstruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstruction.isEmpty else {
+            return .fallbackToRaw(reason: "empty_instruction")
+        }
+
+        LoreleiDiagLog.log(
+            "dictationEditFormatter: runTurn begin instructionChars=\(trimmedInstruction.count) selectedChars=\(selectedText.count)"
+        )
+        let startedAt = Date()
+        let result = await sharedExecutor().runTurn(
+            prompt: Self.editPrompt(
+                instruction: instruction,
+                selectedText: selectedText,
+                appContext: appContext
+            ),
+            cwd: workingDirectoryProvider(),
+            sandboxPolicy: "readOnly"
+        )
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        LoreleiDiagLog.log(
+            "dictationEditFormatter: runTurn end status=\(result.status) elapsedMs=\(elapsedMs) summaryChars=\(result.summary.count)"
+        )
+
+        guard result.status == .succeeded else {
+            return .fallbackToRaw(reason: "turn_\(result.status)")
+        }
+
+        let edited = result.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !edited.isEmpty, edited != "Codex completed." else {
+            return .fallbackToRaw(reason: "empty_output")
+        }
+
+        return .formatted(edited)
+    }
+
     private func sharedExecutor() -> CodexAppServerExecutor {
         if let executor {
             return executor
@@ -119,6 +164,40 @@ final class DictationTextFormatter: DictationTextFormatting {
 
         Transcript:
         \(rawTranscript)
+        """
+    }
+
+    static func editPrompt(
+        instruction: String,
+        selectedText: String,
+        appContext: DictationAppContext?
+    ) -> String {
+        let styleHintBlock: String
+        if let hint = appContext?.category.styleHint {
+            styleHintBlock = """
+
+            Style hint (style only - never change meaning beyond the instruction):
+            \(hint)
+            """
+        } else {
+            styleHintBlock = ""
+        }
+
+        return """
+        You are a text editing helper. Apply the spoken instruction to the text below.
+        Return ONLY the rewritten text with no preamble, quotes, or commentary.
+
+        Rules:
+        - Apply the instruction faithfully; change nothing the instruction does not cover.
+        - Keep the language of the text unchanged unless the instruction says otherwise.
+        - Preserve meaning except where the instruction requires changing it.
+        - If the instruction cannot be applied to this text, return the text unchanged.\(styleHintBlock)
+
+        Instruction (spoken, may contain filler words):
+        \(instruction)
+
+        Text:
+        \(selectedText)
         """
     }
 

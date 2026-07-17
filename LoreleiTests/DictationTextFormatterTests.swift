@@ -152,4 +152,33 @@ struct DictationTextFormatterTests {
         let prompt = DictationTextFormatter.prompt(for: "hello", appContext: cursor)
         #expect(prompt.contains("code editor or terminal"))
     }
+
+    @Test func editPromptContainsInstructionSelectionAndGuardrails() {
+        let prompt = DictationTextFormatter.editPrompt(
+            instruction: "make this shorter",
+            selectedText: "The quick brown fox jumps over the lazy dog.",
+            appContext: nil
+        )
+        #expect(prompt.contains("make this shorter"))
+        #expect(prompt.contains("The quick brown fox"))
+        #expect(prompt.contains("Return ONLY the rewritten text"))
+        #expect(prompt.contains(
+            "Keep the language of the text unchanged unless the instruction says otherwise."
+        ))
+        #expect(!prompt.contains("Style hint"))
+    }
+
+    @Test func editPromptAppendsStyleHintForKnownApp() {
+        let mail = DictationAppContext(
+            bundleIdentifier: "com.apple.mail",
+            localizedName: "Mail"
+        )
+        let prompt = DictationTextFormatter.editPrompt(
+            instruction: "make it formal",
+            selectedText: "hey",
+            appContext: mail
+        )
+        #expect(prompt.contains("Style hint"))
+        #expect(prompt.contains("email compose field"))
+    }
 }
