@@ -9,6 +9,10 @@
 import AppKit
 import SwiftUI
 
+struct AXProbeRequest: Equatable {
+    let wake: Bool
+}
+
 enum LoreleiDebugURLHandler {
     static func debugPrompt(fromURL url: URL) -> String? {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -22,11 +26,14 @@ enum LoreleiDebugURLHandler {
         return prompt
     }
 
-    static func isAXProbe(url: URL) -> Bool {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return false
+    static func axProbeRequest(url: URL) -> AXProbeRequest? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme == "lorelei",
+              components.host == "ax-probe" else {
+            return nil
         }
-        return components.scheme == "lorelei" && components.host == "ax-probe"
+        let wake = components.queryItems?.first(where: { $0.name == "wake" })?.value == "1"
+        return AXProbeRequest(wake: wake)
     }
 }
 
@@ -105,8 +112,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     /// stays as a fallback for Apple-Event senders.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
-            if LoreleiDebugURLHandler.isAXProbe(url: url) {
-                AXFocusProbe.runAndLog()
+            if let request = LoreleiDebugURLHandler.axProbeRequest(url: url) {
+                AXFocusProbe.runAndLog(wake: request.wake)
                 continue
             }
             guard let prompt = LoreleiDebugURLHandler.debugPrompt(fromURL: url) else { continue }
@@ -126,8 +133,8 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        if LoreleiDebugURLHandler.isAXProbe(url: url) {
-            AXFocusProbe.runAndLog()
+        if let request = LoreleiDebugURLHandler.axProbeRequest(url: url) {
+            AXFocusProbe.runAndLog(wake: request.wake)
             return
         }
 

@@ -37,7 +37,9 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             return nil
         }
 
-        let focused = Self.focusedElement(processID: targetProcessID)
+        let focused = AXAccessibilityWaker.focusedElementWakingImmediately(
+            processID: targetProcessID
+        )
         guard let element = focused.element else {
             LoreleiDiagLog.log("dictationEdit: readSelection nil")
             return nil
@@ -75,7 +77,9 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             return .checkFailed
         }
 
-        let focused = Self.focusedElement(processID: targetProcessID)
+        let focused = await AXAccessibilityWaker.focusedElementWakingIfNeeded(
+            processID: targetProcessID
+        )
         guard let element = focused.element else {
             LoreleiDiagLog.log(
                 "dictationEdit: no focused element status=\(focused.status.rawValue) → clipboard fallback"
@@ -126,22 +130,6 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             "dictationEdit: applied chars=\(plan.range.length)→\(editedText.count)"
         )
         return .applied
-    }
-
-    private static func focusedElement(processID: pid_t) -> (element: AXUIElement?, status: AXError) {
-        let appElement = AXUIElementCreateApplication(processID)
-        var focusedObject: AnyObject?
-        let status = AXUIElementCopyAttributeValue(
-            appElement,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedObject
-        )
-        guard status == .success,
-            let focusedObject,
-            CFGetTypeID(focusedObject) == AXUIElementGetTypeID() else {
-            return (nil, status)
-        }
-        return (focusedObject as! AXUIElement, status)
     }
 
     private static func role(of element: AXUIElement) -> String {

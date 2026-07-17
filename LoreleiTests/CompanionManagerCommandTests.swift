@@ -177,10 +177,12 @@ struct CompanionManagerCommandTests {
         #expect(LoreleiDebugURLHandler.debugPrompt(fromURL: URL(string: "lorelei://run")!) == nil)
     }
 
-    @Test func axProbeURLIsRecognized() {
-        #expect(LoreleiDebugURLHandler.isAXProbe(url: URL(string: "lorelei://ax-probe")!))
-        #expect(!LoreleiDebugURLHandler.isAXProbe(url: URL(string: "lorelei://run?prompt=x")!))
-        #expect(!LoreleiDebugURLHandler.isAXProbe(url: URL(string: "https://ax-probe")!))
+    @Test func axProbeURLParsesWakeFlag() {
+        #expect(LoreleiDebugURLHandler.axProbeRequest(url: URL(string: "lorelei://ax-probe")!) == AXProbeRequest(wake: false))
+        #expect(LoreleiDebugURLHandler.axProbeRequest(url: URL(string: "lorelei://ax-probe?wake=1")!) == AXProbeRequest(wake: true))
+        #expect(LoreleiDebugURLHandler.axProbeRequest(url: URL(string: "lorelei://ax-probe?wake=0")!) == AXProbeRequest(wake: false))
+        #expect(LoreleiDebugURLHandler.axProbeRequest(url: URL(string: "lorelei://run?prompt=x")!) == nil)
+        #expect(LoreleiDebugURLHandler.axProbeRequest(url: URL(string: "https://ax-probe")!) == nil)
     }
 
     @Test func companionManagerHandlesDebugPromptLikeTranscript() async throws {
