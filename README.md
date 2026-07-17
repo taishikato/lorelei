@@ -77,6 +77,7 @@ You also pick a **workspace folder** in onboarding or settings; Codex uses it as
   If the selection changed while Codex was rewriting, the result lands on the clipboard instead.
 - Commands like 'open …', 'click …', 'type …' become desktop actions.
 - 'What's on my screen?' style questions capture the screen and answer.
+  With text selected, the question is answered about the selection instead - no screenshot taken.
 - Git and coding requests ('what changed?', 'update the readme') run through Codex against your workspace folder.
 - Press **Stop** in the expanded toolbar to interrupt a run instantly.
 - When Codex flags an action as risky, the toolbar auto-expands with Accept / Decline buttons and announces 'Needs approval'. That approval bridge is the only gate; routine commands run without confirmation.
