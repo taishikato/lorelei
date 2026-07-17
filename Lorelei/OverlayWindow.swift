@@ -244,6 +244,9 @@ class OverlayWindowManager: OverlayWindowManaging {
                 )
 
                 let hostingView = NSHostingView(rootView: contentView)
+                // Manual window sizing: the hosting view must never drive the window
+                // (see plan 033 crash anatomy).
+                hostingView.sizingOptions = []
                 hostingView.frame = screen.frame
                 window.contentView = hostingView
 
