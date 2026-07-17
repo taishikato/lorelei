@@ -73,6 +73,8 @@ You also pick a **workspace folder** in onboarding or settings; Codex uses it as
 - Hold `Control + Option`, speak, release.
 - Hold `Control + Shift`, speak, and release to dictate into the frontmost app.
   The raw transcript appears immediately, then Lorelei upgrades it in place when cleanup finishes only if the text is still untouched.
+- Select text first and Lorelei switches to edit mode: hold `Control + Shift` and speak an instruction ('make this shorter', 'make it formal') and the selection is rewritten in place.
+  If the selection changed while Codex was rewriting, the result lands on the clipboard instead.
 - Commands like 'open …', 'click …', 'type …' become desktop actions.
 - 'What's on my screen?' style questions capture the screen and answer.
 - Git and coding requests ('what changed?', 'update the readme') run through Codex against your workspace folder.
@@ -80,6 +82,7 @@ You also pick a **workspace folder** in onboarding or settings; Codex uses it as
 - When Codex flags an action as risky, the toolbar auto-expands with Accept / Decline buttons and announces 'Needs approval'. That approval bridge is the only gate; routine commands run without confirmation.
 
 To restore format-first dictation, run `defaults write dev.taishi.lorelei LoreleiDictationRawInsertFirstDisabled -bool true` and restart Lorelei.
+To disable selection edit mode, run `defaults write dev.taishi.lorelei LoreleiEditModeDisabled -bool true` and restart Lorelei.
 
 ## How it works
 

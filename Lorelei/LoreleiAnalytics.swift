@@ -37,6 +37,14 @@ enum LoreleiAnalyticsEvent {
         totalMs: Int,
         replacement: String
     )
+    case systemDictationEdited(
+        appCategory: String,
+        formatMs: Int,
+        totalMs: Int,
+        outcome: String,
+        selectedCharacters: Int,
+        instructionCharacters: Int
+    )
     case turnStarted(sandboxPolicy: String)
     case turnCompleted(success: Bool, durationSeconds: Double)
     case steerSent
@@ -58,6 +66,7 @@ enum LoreleiAnalyticsEvent {
         case .systemDictationStarted: "system_dictation_started"
         case .systemDictationInserted: "system_dictation_inserted"
         case .systemDictationCopiedToClipboard: "system_dictation_copied_to_clipboard"
+        case .systemDictationEdited: "system_dictation_edited"
         case .turnStarted: "turn_started"
         case .turnCompleted: "turn_completed"
         case .steerSent: "steer_sent"
@@ -107,6 +116,22 @@ enum LoreleiAnalyticsEvent {
                 "format_ms": formatMs,
                 "total_ms": totalMs,
                 "replacement": replacement
+            ]
+        case .systemDictationEdited(
+            let appCategory,
+            let formatMs,
+            let totalMs,
+            let outcome,
+            let selectedCharacters,
+            let instructionCharacters
+        ):
+            return [
+                "app_category": appCategory,
+                "format_ms": formatMs,
+                "total_ms": totalMs,
+                "outcome": outcome,
+                "selected_characters": selectedCharacters,
+                "instruction_characters": instructionCharacters
             ]
         case .turnStarted(let sandboxPolicy):
             return ["sandbox_policy": sandboxPolicy]
