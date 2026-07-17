@@ -4,6 +4,13 @@
 //
 //  Transient borderless panel for short dictation status messages.
 //
+//  Deliberately pure AppKit: this panel went through the plan 033/034 crash
+//  saga (any SwiftUI-driven sizing option keeps NSHostingView's
+//  updateConstraints extrema machinery live, which throws when a graph update
+//  lands mid-pass) and, with sizing options off, NSHostingView proposed
+//  arbitrary narrow widths to the text. A label plus a layer-backed capsule
+//  has fully deterministic sizing and no constraint machinery at all.
+//
 
 import AppKit
 import SwiftUI
@@ -13,11 +20,14 @@ final class DictationHUD {
     private var panel: NSPanel?
     private var hideTask: Task<Void, Never>?
 
+    private static let capsuleHorizontalPadding = DS.Spacing.md
+    private static let capsuleVerticalPadding = DS.Spacing.sm
+
     func show(_ message: String, durationSeconds: TimeInterval = 1.5) {
-        // Both field crashes fired in the display-cycle observer immediately
-        // after a synchronous show() from controller continuations. One hop
-        // decouples the panel content swap / resize / orderFront from
-        // whatever layout pass the caller sits in.
+        // One runloop hop decouples the panel content swap / resize /
+        // orderFront from whatever layout pass the caller sits in (the
+        // display-cycle observer crashes fired on synchronous shows from
+        // controller continuations).
         DispatchQueue.main.async { [weak self] in
             self?.presentNow(message, durationSeconds: durationSeconds)
         }
@@ -27,20 +37,38 @@ final class DictationHUD {
         hideTask?.cancel()
         hideTask = nil
 
-        let hostingView = NSHostingView(
-            rootView: DictationHUDContent(message: message)
-        )
-        // Manual panel sizing: keep intrinsic measurement for fittingSize but
-        // never let the hosting view drive window size extrema - that path
-        // re-marks constraints during updateConstraints and AppKit throws
-        // (two field crashes; see plan 033).
-        hostingView.sizingOptions = [.intrinsicContentSize]
-        hostingView.frame = NSRect(x: 0, y: 0, width: 280, height: 44)
-
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        panel.contentView = hostingView
-        panel.setContentSize(hostingView.fittingSize)
+
+        let label = NSTextField(labelWithString: message)
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = NSColor(DS.Colors.textPrimary)
+        label.lineBreakMode = .byClipping
+        let textSize = label.intrinsicContentSize
+
+        let capsuleSize = NSSize(
+            width: ceil(textSize.width) + Self.capsuleHorizontalPadding * 2,
+            height: ceil(textSize.height) + Self.capsuleVerticalPadding * 2
+        )
+
+        let capsule = NSView(frame: NSRect(origin: .zero, size: capsuleSize))
+        capsule.wantsLayer = true
+        capsule.layer?.backgroundColor = NSColor(DS.Colors.surface3).cgColor
+        capsule.layer?.cornerRadius = DS.CornerRadius.medium
+        capsule.layer?.cornerCurve = .continuous
+        capsule.layer?.borderWidth = 1
+        capsule.layer?.borderColor = NSColor(DS.Colors.borderSubtle).cgColor
+
+        label.frame = NSRect(
+            x: Self.capsuleHorizontalPadding,
+            y: Self.capsuleVerticalPadding,
+            width: ceil(textSize.width),
+            height: ceil(textSize.height)
+        )
+        capsule.addSubview(label)
+
+        panel.contentView = capsule
+        panel.setContentSize(capsuleSize)
 
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
@@ -82,23 +110,5 @@ final class DictationHUD {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         return panel
-    }
-}
-
-private struct DictationHUDContent: View {
-    let message: String
-
-    var body: some View {
-        Text(message)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(DS.Colors.textPrimary)
-            .padding(.horizontal, DS.Spacing.md)
-            .padding(.vertical, DS.Spacing.sm)
-            .background(DS.Colors.surface3)
-            .clipShape(RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.CornerRadius.medium, style: .continuous)
-                    .stroke(DS.Colors.borderSubtle, lineWidth: 1)
-            )
     }
 }
