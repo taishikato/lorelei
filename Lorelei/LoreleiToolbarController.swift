@@ -132,6 +132,9 @@ final class LoreleiToolbarController {
             }
         )
         let hostingView = NSHostingView(rootView: rootView)
+        // Manual window sizing: the hosting view must never drive the window
+        // (see plan 033 crash anatomy).
+        hostingView.sizingOptions = []
         hostingView.frame = NSRect(origin: .zero, size: size)
         panel.contentView = hostingView
         panel.setContentSize(size)
