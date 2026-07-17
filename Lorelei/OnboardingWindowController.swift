@@ -49,6 +49,9 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                 self?.window?.close()
             }
         )
+        // Content-driven window sizing via preferredContentSize only - same
+        // crash-surface removal as SettingsWindowController (plan 033/034).
+        hostingController.sizingOptions = [.preferredContentSize]
         let onboardingWindow = NSWindow(contentViewController: hostingController)
         onboardingWindow.styleMask = [.titled, .closable, .miniaturizable]
 

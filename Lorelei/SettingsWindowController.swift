@@ -40,6 +40,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let hostingController = NSHostingController(
             rootView: CompanionPanelView(companionManager: companionManager)
         )
+        // Content-driven window sizing via preferredContentSize only. The
+        // default options add min/max window extrema, whose update path
+        // re-marks constraints during the window's own updateConstraints pass
+        // and crashes when the panel content updates mid-display-cycle
+        // (owner-reproduced with this window open during an edit; plan 033/034).
+        hostingController.sizingOptions = [.preferredContentSize]
         let settingsWindow = NSWindow(contentViewController: hostingController)
         settingsWindow.styleMask = [.titled, .closable, .miniaturizable]
 
