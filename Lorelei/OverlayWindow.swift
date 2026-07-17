@@ -244,9 +244,11 @@ class OverlayWindowManager: OverlayWindowManaging {
                 )
 
                 let hostingView = NSHostingView(rootView: contentView)
-                // Manual window sizing: the hosting view must never drive the window
-                // (see plan 033 crash anatomy).
-                hostingView.sizingOptions = []
+                // Default sizingOptions on purpose: with [] this full-screen
+                // content stops rendering entirely (owner-reproduced - the
+                // listening waveform vanished). The borderless overlay window
+                // never runs a constraints pass, so the size-extrema crash
+                // path from plan 033 cannot fire here.
                 hostingView.frame = screen.frame
                 window.contentView = hostingView
 
