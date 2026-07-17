@@ -536,6 +536,24 @@ final class CompanionManager: ObservableObject {
                             replacement: replacement
                         )
                     )
+                case .edited(
+                    let appCategory,
+                    let formatMs,
+                    let totalMs,
+                    let outcome,
+                    let selectedCharacters,
+                    let instructionCharacters
+                ):
+                    LoreleiAnalytics.capture(
+                        .systemDictationEdited(
+                            appCategory: appCategory,
+                            formatMs: formatMs,
+                            totalMs: totalMs,
+                            outcome: outcome,
+                            selectedCharacters: selectedCharacters,
+                            instructionCharacters: instructionCharacters
+                        )
+                    )
                 }
             },
             showOverlay: { [weak self] in

@@ -25,6 +25,14 @@ struct LoreleiAnalyticsTests {
             totalMs: 1400,
             replacement: "kept_check_failed"
         ).name == "system_dictation_copied_to_clipboard")
+        #expect(LoreleiAnalyticsEvent.systemDictationEdited(
+            appCategory: "unknown",
+            formatMs: 3000,
+            totalMs: 3300,
+            outcome: "applied",
+            selectedCharacters: 42,
+            instructionCharacters: 17
+        ).name == "system_dictation_edited")
         #expect(LoreleiAnalyticsEvent.turnStarted(sandboxPolicy: "readOnly").name == "turn_started")
         #expect(LoreleiAnalyticsEvent.turnCompleted(success: true, durationSeconds: 3).name == "turn_completed")
         #expect(LoreleiAnalyticsEvent.steerSent.name == "steer_sent")
@@ -112,6 +120,25 @@ struct LoreleiAnalyticsTests {
         )
         #expect(event.properties["replacement"] as? String == "kept_check_failed")
         #expect(event.properties.count == 3)
+    }
+
+    @Test func systemDictationEditedCarriesCoarseMetadataOnly() async throws {
+        let event = LoreleiAnalyticsEvent.systemDictationEdited(
+            appCategory: "email",
+            formatMs: 2900,
+            totalMs: 3200,
+            outcome: "copied_to_clipboard",
+            selectedCharacters: 120,
+            instructionCharacters: 25
+        )
+        let properties = event.properties
+        #expect(properties["app_category"] as? String == "email")
+        #expect(properties["format_ms"] as? Int == 2900)
+        #expect(properties["total_ms"] as? Int == 3200)
+        #expect(properties["outcome"] as? String == "copied_to_clipboard")
+        #expect(properties["selected_characters"] as? Int == 120)
+        #expect(properties["instruction_characters"] as? Int == 25)
+        #expect(properties.count == 6)
     }
 
     @Test func dictationEventCarriesOnlyMetadataNeverContent() async throws {
