@@ -131,6 +131,9 @@ final class CompanionManager: ObservableObject {
     private let codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner?
     private let codexAppServerTransportFactory: CodexAppServerTransportFactory?
     private let computerUseInstallationOverride: ComputerUsePluginInstallation??
+    private let askSelectionEditor: any DictationSelectionEditing = AXDictationSelectionEditor()
+    private let askSelectionProvider: (() -> (snapshot: DictationSelectionSnapshot?, appName: String?))?
+    private let codexScreenRequestOverride: ((String) async -> WorkspaceCommandResult)?
     private let memoryStore: LoreleiMemoryStore
     private let speechOutput: SpeechOutputing
     private let audioFeedback: BuddyAudioFeedbacking
@@ -193,6 +196,8 @@ final class CompanionManager: ObservableObject {
         codexAppServerDesktopActionRunner: CodexAppServerDesktopActionRunner? = nil,
         codexAppServerTransportFactory: CodexAppServerTransportFactory? = nil,
         computerUseInstallationOverride: ComputerUsePluginInstallation?? = nil,
+        askSelectionProvider: (() -> (snapshot: DictationSelectionSnapshot?, appName: String?))? = nil,
+        codexScreenRequestOverride: ((String) async -> WorkspaceCommandResult)? = nil,
         memoryStore: LoreleiMemoryStore? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         transcribingWatchdogDelay: Duration = .seconds(6),
@@ -206,6 +211,8 @@ final class CompanionManager: ObservableObject {
         self.codexAppServerDesktopActionRunner = codexAppServerDesktopActionRunner
         self.codexAppServerTransportFactory = codexAppServerTransportFactory
         self.computerUseInstallationOverride = computerUseInstallationOverride
+        self.askSelectionProvider = askSelectionProvider
+        self.codexScreenRequestOverride = codexScreenRequestOverride
         self.memoryStore = memoryStore ?? LoreleiMemoryStore()
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
@@ -786,7 +793,20 @@ final class CompanionManager: ObservableObject {
                 finishRun(with: result)
                 return
             case .codexScreen(let prompt):
-                let result = await runCodexScreenRequest(prompt)
+                let ask = currentAskSelection()
+                let result: WorkspaceCommandResult
+                if let selection = DictationEditSplicePlanner.usableSnapshot(ask.snapshot) {
+                    recordDebugEvent("Selection question (\(selection.text.count) chars)")
+                    result = await runCodexSelectionQuestion(
+                        question: prompt,
+                        selection: selection,
+                        appName: ask.appName
+                    )
+                } else if let codexScreenRequestOverride {
+                    result = await codexScreenRequestOverride(prompt)
+                } else {
+                    result = await runCodexScreenRequest(prompt)
+                }
                 guard !Task.isCancelled else { return }
 
                 finishRun(with: result)
@@ -1297,6 +1317,35 @@ final class CompanionManager: ObservableObject {
         liveCodexAppServerTransport = nil
         activeTurn = nil
         outstandingSteerTranscripts.removeAll()
+    }
+
+    private func currentAskSelection() -> (snapshot: DictationSelectionSnapshot?, appName: String?) {
+        if let askSelectionProvider {
+            return askSelectionProvider()
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication else { return (nil, nil) }
+        return (
+            askSelectionEditor.readSelection(targetProcessID: app.processIdentifier),
+            app.localizedName
+        )
+    }
+
+    private func runCodexSelectionQuestion(
+        question: String,
+        selection: DictationSelectionSnapshot,
+        appName: String?
+    ) async -> WorkspaceCommandResult {
+        LoreleiDiagLog.log(
+            "askSelection: turn begin questionChars=\(question.count) selectedChars=\(selection.text.count)"
+        )
+        return await runCodexAppServerTurn(
+            prompt: CodexPromptBuilder.selectionQuestionPrompt(
+                question: question,
+                selectedText: selection.text,
+                appName: appName
+            ),
+            sandboxPolicy: "readOnly"
+        )
     }
 
     private func runCodexScreenRequest(_ prompt: String) async -> WorkspaceCommandResult {

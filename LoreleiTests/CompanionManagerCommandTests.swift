@@ -686,4 +686,101 @@ struct CompanionManagerCommandTests {
                 == LoginItemRowPresentation(isOn: false, statusText: "Unavailable")
         )
     }
+
+    @Test func screenQuestionWithSelectionRunsTextTurnWithoutImage() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAskSelectionTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAskSelectionTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"It means unity."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let snapshot = DictationSelectionSnapshot(
+            text: "E pluribus unum",
+            range: NSRange(location: 0, length: 15)
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            computerUseInstallationOverride: .some(nil),
+            askSelectionProvider: { (snapshot, "Safari") }
+        )
+
+        manager.handleFinalTranscriptForTesting("what's on my screen?")
+        for _ in 0..<50 {
+            if await transport.sentMethods.contains("turn/start") { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sent = try await transport.sentJSONMessages()
+        let turnStart = try #require(sent.first { $0["method"] as? String == "turn/start" })
+        let params = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(params["input"] as? [[String: Any]])
+        let types = input.compactMap { $0["type"] as? String }
+        let text = try #require(input.first?["text"] as? String)
+        let sandbox = try #require(params["sandboxPolicy"] as? [String: Any])
+
+        #expect(!types.contains("localImage"))
+        #expect(text.contains("<selected_text>\nE pluribus unum\n</selected_text>"))
+        #expect(text.contains("what's on my screen?"))
+        #expect(sandbox["type"] as? String == "readOnly")
+    }
+
+    @Test func screenQuestionWithoutSelectionFallsBackToCapture() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAskFallbackTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAskFallbackTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        var capturedPrompts: [String] = []
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            computerUseInstallationOverride: .some(nil),
+            askSelectionProvider: { (nil, nil) },
+            codexScreenRequestOverride: { prompt in
+                capturedPrompts.append(prompt)
+                return WorkspaceCommandResult(summary: "screen path ran.")
+            }
+        )
+
+        manager.handleFinalTranscriptForTesting("what's on my screen?")
+        for _ in 0..<50 {
+            if !capturedPrompts.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(capturedPrompts == ["what's on my screen?"])
+    }
+
+    @Test func screenQuestionWithOversizedSelectionFallsBackToCapture() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerAskOversizedSelectionTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerAskOversizedSelectionTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        var capturedPrompts: [String] = []
+        let oversized = String(repeating: "a", count: 8001)
+        let snapshot = DictationSelectionSnapshot(
+            text: oversized,
+            range: NSRange(location: 0, length: oversized.utf16.count)
+        )
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            computerUseInstallationOverride: .some(nil),
+            askSelectionProvider: { (snapshot, "Safari") },
+            codexScreenRequestOverride: { prompt in
+                capturedPrompts.append(prompt)
+                return WorkspaceCommandResult(summary: "screen path ran.")
+            }
+        )
+
+        manager.handleFinalTranscriptForTesting("what's on my screen?")
+        for _ in 0..<50 {
+            if !capturedPrompts.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(capturedPrompts == ["what's on my screen?"])
+    }
 }
