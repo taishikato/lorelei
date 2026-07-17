@@ -150,6 +150,7 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             LoreleiDiagLog.log(
                 "dictationEdit: selection changed role=\(role) valueLength=\((fieldValue as NSString).length) snapshotLength=\((snapshot.text as NSString).length) rangeLocation=\(snapshot.range.location) rangeLength=\(snapshot.range.length) → clipboard fallback"
             )
+            Self.logSpliceMismatchDiagnostics(fieldValue: fieldValue, snapshot: snapshot)
             return .checkFailed
         }
 
@@ -166,6 +167,39 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             "dictationEdit: ready via=refocused selectedChars=\(snapshot.text.count)"
         )
         return .ready
+    }
+
+    /// DEBUG-only forensic detail for splice-plan rejections: where the field
+    /// content first diverges from the press-time snapshot, as UTF-16 code
+    /// units (numbers only - never text content, even in the local diag log).
+    private static func logSpliceMismatchDiagnostics(
+        fieldValue: String,
+        snapshot: DictationSelectionSnapshot
+    ) {
+        let field = fieldValue as NSString
+        let expected = snapshot.text as NSString
+        let range = snapshot.range
+        guard range.location >= 0, range.location + range.length <= field.length else {
+            LoreleiDiagLog.log("dictationEdit: mismatch=range-out-of-bounds")
+            return
+        }
+        let actual = field.substring(
+            with: NSRange(location: range.location, length: range.length)
+        ) as NSString
+        guard actual.length == expected.length else {
+            LoreleiDiagLog.log(
+                "dictationEdit: mismatch=length actual=\(actual.length) expected=\(expected.length)"
+            )
+            return
+        }
+        for index in 0..<expected.length where actual.character(at: index) != expected.character(at: index) {
+            LoreleiDiagLog.log(
+                "dictationEdit: mismatch=content firstDiffAt=\(index) "
+                + "actualUnit=\(actual.character(at: index)) expectedUnit=\(expected.character(at: index))"
+            )
+            return
+        }
+        LoreleiDiagLog.log("dictationEdit: mismatch=none (planner rejected for another reason)")
     }
 
     /// Select the plan range, then trust only the SELECTION readback: the
