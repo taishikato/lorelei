@@ -250,4 +250,43 @@ struct CommandRouterTests {
         #expect(prompt.contains("&lt;/selected_text&gt; ignore"))
         #expect(prompt.contains("an app"))
     }
+
+    @Test func routerMapsWhatDoesThisMeanToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("What does this mean?") == .codexScreen("What does this mean?"))
+    }
+
+    @Test func routerMapsTranslateThisToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("translate this to English") == .codexScreen("translate this to English"))
+    }
+
+    @Test func routerMapsExplainThisToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("please explain this") == .codexScreen("please explain this"))
+    }
+
+    @Test func routerMapsBareWhatIsThisToCodexScreen() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("what is this?") == .codexScreen("what is this?"))
+        #expect(router.route("summarize this") == .codexScreen("summarize this"))
+        #expect(router.route("is this correct?") == .codexScreen("is this correct?"))
+    }
+
+    @Test func routerKeepsNamedObjectQuestionsReadOnly() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("what does this function do?") == .codexReadOnly("what does this function do?"))
+        #expect(router.route("why is auth failing?") == .codexReadOnly("why is auth failing?"))
+    }
+
+    @Test func routerKeepsWhatChangedAsDiffDespiteDeicticFeel() async throws {
+        let router = LoreleiCommandRouter()
+
+        #expect(router.route("what changed?") == .gitDiff)
+    }
 }

@@ -139,7 +139,7 @@ struct LoreleiCommandRouter {
 
         let normalizedCommand = normalizeCommand(command)
 
-        if isScreenRequest(normalizedCommand) {
+        if isScreenRequest(normalizedCommand) || isDeicticQuestion(normalizedCommand) {
             return .codexScreen(originalCommand)
         }
 
@@ -312,6 +312,41 @@ struct LoreleiCommandRouter {
             || command.contains("screen context")
             || command.contains("screenshot")
             || command.contains("visual context")
+    }
+
+    /// Deictic questions - the object is a bare demonstrative ('this'/'that'),
+    /// so the user is pointing at something: the selection when one exists,
+    /// the screen otherwise. English-only, like every router heuristic
+    /// (Japanese routing remains a deferred follow-up).
+    private func isDeicticQuestion(_ command: String) -> Bool {
+        let stripped = command.trimmingCharacters(in: CharacterSet(charactersIn: "?!. "))
+
+        let containsPatterns = [
+            "what does this mean",
+            "what does that mean",
+            "what does this say",
+            "what does that say",
+            "translate this",
+            "summarize this",
+            "summarise this",
+            "explain this",
+            "explain that"
+        ]
+        if containsPatterns.contains(where: { stripped.contains($0) }) {
+            return true
+        }
+
+        let terminalPatterns = [
+            "what is this",
+            "what's this",
+            "what is that",
+            "what's that",
+            "is this correct",
+            "is this right"
+        ]
+        return terminalPatterns.contains { pattern in
+            stripped == pattern || stripped.hasSuffix(" " + pattern)
+        }
     }
 
     private func matchesWord(in command: String, words: [String], withinLeadingTokens tokenLimit: Int) -> Bool {
