@@ -41,17 +41,23 @@ final class AXDictationTextReplacer: DictationTextReplacing {
 
         let appElement = AXUIElementCreateApplication(targetProcessID)
         var focusedObject: AnyObject?
-        guard AXUIElementCopyAttributeValue(
+        let focusedStatus = AXUIElementCopyAttributeValue(
             appElement,
             kAXFocusedUIElementAttribute as CFString,
             &focusedObject
-        ) == .success,
+        )
+        guard focusedStatus == .success,
             let focusedObject,
             CFGetTypeID(focusedObject) == AXUIElementGetTypeID() else {
-            LoreleiDiagLog.log("dictationReplace: no focused element → keep raw")
+            LoreleiDiagLog.log("dictationReplace: no focused element status=\(focusedStatus.rawValue) → keep raw")
             return .keptCheckFailed
         }
         let element = focusedObject as! AXUIElement
+        let role = {
+            var object: AnyObject?
+            AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &object)
+            return object as? String
+        }() ?? "nil"
 
         var valueObject: AnyObject?
         guard AXUIElementCopyAttributeValue(
@@ -60,7 +66,7 @@ final class AXDictationTextReplacer: DictationTextReplacing {
             &valueObject
         ) == .success,
             let fieldValue = valueObject as? String else {
-            LoreleiDiagLog.log("dictationReplace: unreadable value → keep raw")
+            LoreleiDiagLog.log("dictationReplace: unreadable value role=\(role) → keep raw")
             return .keptCheckFailed
         }
 
@@ -86,7 +92,7 @@ final class AXDictationTextReplacer: DictationTextReplacing {
             rawText: rawText,
             cleanedText: cleanedText
         ) else {
-            LoreleiDiagLog.log("dictationReplace: safety check failed → keep raw")
+            LoreleiDiagLog.log("dictationReplace: safety check failed role=\(role) valueLength=\((fieldValue as NSString).length) caret=\(caretLocation.map(String.init) ?? "nil") rawLength=\((rawText as NSString).length) → keep raw")
             return .keptCheckFailed
         }
 

@@ -32,10 +32,17 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
     nonisolated init() {}
 
     func readSelection(targetProcessID: pid_t?) -> DictationSelectionSnapshot? {
-        guard let targetProcessID,
-              let element = Self.focusedElement(processID: targetProcessID) else {
+        guard let targetProcessID else {
+            LoreleiDiagLog.log("dictationEdit: readSelection nil")
             return nil
         }
+
+        let focused = Self.focusedElement(processID: targetProcessID)
+        guard let element = focused.element else {
+            LoreleiDiagLog.log("dictationEdit: readSelection nil")
+            return nil
+        }
+        let role = Self.role(of: element)
 
         var selectedObject: AnyObject?
         guard AXUIElementCopyAttributeValue(
@@ -45,11 +52,13 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         ) == .success,
             let selectedText = selectedObject as? String,
             !selectedText.isEmpty else {
+            LoreleiDiagLog.log("dictationEdit: readSelection nil role=\(role)")
             return nil
         }
 
         guard let range = Self.selectedRange(of: element),
               range.length == (selectedText as NSString).length else {
+            LoreleiDiagLog.log("dictationEdit: readSelection nil role=\(role)")
             return nil
         }
 
@@ -61,11 +70,19 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         editedText: String,
         targetProcessID: pid_t?
     ) async -> DictationEditApplyOutcome {
-        guard let targetProcessID,
-              let element = Self.focusedElement(processID: targetProcessID) else {
+        guard let targetProcessID else {
             LoreleiDiagLog.log("dictationEdit: no focused element → clipboard fallback")
             return .checkFailed
         }
+
+        let focused = Self.focusedElement(processID: targetProcessID)
+        guard let element = focused.element else {
+            LoreleiDiagLog.log(
+                "dictationEdit: no focused element status=\(focused.status.rawValue) → clipboard fallback"
+            )
+            return .checkFailed
+        }
+        let role = Self.role(of: element)
 
         var valueObject: AnyObject?
         guard AXUIElementCopyAttributeValue(
@@ -74,7 +91,7 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             &valueObject
         ) == .success,
             let fieldValue = valueObject as? String else {
-            LoreleiDiagLog.log("dictationEdit: unreadable value → clipboard fallback")
+            LoreleiDiagLog.log("dictationEdit: unreadable value role=\(role) → clipboard fallback")
             return .checkFailed
         }
 
@@ -83,7 +100,9 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             snapshot: snapshot,
             editedText: editedText
         ) else {
-            LoreleiDiagLog.log("dictationEdit: selection changed → clipboard fallback")
+            LoreleiDiagLog.log(
+                "dictationEdit: selection changed role=\(role) valueLength=\((fieldValue as NSString).length) snapshotLength=\((snapshot.text as NSString).length) rangeLocation=\(snapshot.range.location) rangeLength=\(snapshot.range.length) → clipboard fallback"
+            )
             return .checkFailed
         }
 
@@ -109,19 +128,26 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         return .applied
     }
 
-    private static func focusedElement(processID: pid_t) -> AXUIElement? {
+    private static func focusedElement(processID: pid_t) -> (element: AXUIElement?, status: AXError) {
         let appElement = AXUIElementCreateApplication(processID)
         var focusedObject: AnyObject?
-        guard AXUIElementCopyAttributeValue(
+        let status = AXUIElementCopyAttributeValue(
             appElement,
             kAXFocusedUIElementAttribute as CFString,
             &focusedObject
-        ) == .success,
+        )
+        guard status == .success,
             let focusedObject,
             CFGetTypeID(focusedObject) == AXUIElementGetTypeID() else {
-            return nil
+            return (nil, status)
         }
-        return (focusedObject as! AXUIElement)
+        return (focusedObject as! AXUIElement, status)
+    }
+
+    private static func role(of element: AXUIElement) -> String {
+        var object: AnyObject?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &object)
+        return (object as? String) ?? "nil"
     }
 
     private static func selectedRange(of element: AXUIElement) -> NSRange? {
