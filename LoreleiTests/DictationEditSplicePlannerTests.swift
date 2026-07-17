@@ -71,3 +71,46 @@ struct DictationEditSplicePlannerTests {
         #expect(DictationEditSplicePlanner.usableSnapshot(ok) == ok)
     }
 }
+
+@Suite("Intact selection shortcut")
+struct IntactSelectionShortcutTests {
+    private let snapshot = DictationSelectionSnapshot(
+        text: "SELECTED",
+        range: NSRange(location: 7, length: 8)
+    )
+
+    @Test func exactMatchIsIntact() {
+        #expect(AXDictationSelectionEditor.selectionIsIntact(
+            currentSelectedText: "SELECTED",
+            snapshot: snapshot
+        ))
+    }
+
+    @Test func differentTextIsNotIntact() {
+        #expect(!AXDictationSelectionEditor.selectionIsIntact(
+            currentSelectedText: "CHANGED!",
+            snapshot: snapshot
+        ))
+    }
+
+    @Test func nilSelectedTextIsNotIntact() {
+        #expect(!AXDictationSelectionEditor.selectionIsIntact(
+            currentSelectedText: nil,
+            snapshot: snapshot
+        ))
+    }
+
+    @Test func emptySelectedTextIsNotIntact() {
+        #expect(!AXDictationSelectionEditor.selectionIsIntact(
+            currentSelectedText: "",
+            snapshot: snapshot
+        ))
+    }
+
+    @Test func trailingNewlineDifferenceIsNotIntact() {
+        #expect(!AXDictationSelectionEditor.selectionIsIntact(
+            currentSelectedText: "SELECTED\n",
+            snapshot: snapshot
+        ))
+    }
+}
