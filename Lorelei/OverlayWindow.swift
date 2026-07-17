@@ -24,12 +24,15 @@ extension OverlayWindowManaging {
     }
 }
 
-class OverlayWindow: NSWindow {
+class OverlayWindow: NSPanel {
     init(screen: NSScreen) {
-        // Create window covering entire screen
+        // A non-activating panel, not a plain window: panels are allowed to
+        // join other apps' fullscreen Spaces, where an NSWindow silently stays
+        // behind the fullscreen app even with canJoinAllSpaces +
+        // fullScreenAuxiliary (owner-reproduced with a fullscreen Claude.app).
         super.init(
             contentRect: screen.frame,
-            styleMask: .borderless,
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
