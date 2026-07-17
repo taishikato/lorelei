@@ -141,6 +141,7 @@ actor CodexAppServerSessionStore {
         cwd: String,
         dynamicTools: [CodexAppServerDynamicToolSpec],
         developerInstructionsResolver: @Sendable (String) -> String? = { _ in nil },
+        configOverrides: [String: Any],
         traceBuffer: CodexAppServerTraceBuffer,
         recordTrace: TraceRecorder,
         onTransportReady: @Sendable (CodexAppServerTransporting) -> Void
@@ -200,7 +201,8 @@ actor CodexAppServerSessionStore {
                         id: threadStartID,
                         cwd: cwd,
                         dynamicTools: dynamicTools,
-                        developerInstructions: developerInstructions
+                        developerInstructions: developerInstructions,
+                        configOverrides: configOverrides
                     ),
                     to: transport,
                     traceBuffer: traceBuffer,
@@ -355,6 +357,7 @@ final class CodexAppServerExecutor {
     private let steerRequestTracker = CodexAppServerSteerRequestTracker()
     private let dynamicToolSpecsResolver: () -> [CodexAppServerDynamicToolSpec]
     private let developerInstructionsResolver: @Sendable (String) -> String?
+    private let configOverridesResolver: @Sendable () -> [String: Any]
     private let dynamicToolHandler: CodexAppServerDynamicToolHandler
     private let traceHandler: CodexAppServerTraceHandler
     private let progressHandler: CodexAppServerTurnProgressHandler
@@ -372,6 +375,7 @@ final class CodexAppServerExecutor {
         },
         dynamicToolSpecsResolver: @escaping () -> [CodexAppServerDynamicToolSpec] = { [] },
         developerInstructionsResolver: @escaping @Sendable (String) -> String? = { _ in nil },
+        configOverridesResolver: @escaping @Sendable () -> [String: Any] = { [:] },
         dynamicToolHandler: @escaping CodexAppServerDynamicToolHandler = { request in
             CodexAppServerDynamicToolCallResult(
                 success: false,
@@ -393,6 +397,7 @@ final class CodexAppServerExecutor {
         )
         self.dynamicToolSpecsResolver = dynamicToolSpecsResolver
         self.developerInstructionsResolver = developerInstructionsResolver
+        self.configOverridesResolver = configOverridesResolver
         self.dynamicToolHandler = dynamicToolHandler
         self.traceHandler = traceHandler
         self.progressHandler = progressHandler
@@ -453,8 +458,12 @@ final class CodexAppServerExecutor {
         return lastFailure ?? WorkspaceCommandResult(summary: "Codex App Server failed.", status: .failed)
     }
 
-    func runDesktopAction(prompt: String, cwd: String) async -> WorkspaceCommandResult {
-        await runTurn(prompt: prompt, cwd: cwd, sandboxPolicy: "readOnly")
+    func runDesktopAction(
+        prompt: String,
+        cwd: String,
+        extraInput: [CodexAppServerTurnInputItem] = []
+    ) async -> WorkspaceCommandResult {
+        await runTurn(prompt: prompt, cwd: cwd, sandboxPolicy: "readOnly", extraInput: extraInput)
     }
 
     func runComputerUse(prompt: String, cwd: String) async -> WorkspaceCommandResult {
@@ -580,6 +589,7 @@ final class CodexAppServerExecutor {
                 cwd: cwd,
                 dynamicTools: dynamicToolSpecsResolver(),
                 developerInstructionsResolver: developerInstructionsResolver,
+                configOverrides: configOverridesResolver(),
                 traceBuffer: traceBuffer,
                 recordTrace: { [traceHandler] event, traceBuffer in
                     traceBuffer.record(event)

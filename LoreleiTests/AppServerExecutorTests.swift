@@ -151,6 +151,48 @@ struct AppServerExecutorTests {
         #expect(await transport.sentMethods == ["initialize", "initialized", "thread/start", "turn/start"])
     }
 
+    @Test func threadStartCarriesResolvedConfigOverrides() async throws {
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            makeTransport: { transport },
+            configOverridesResolver: {
+                [
+                    "mcp_servers": [
+                        "computer-use": ["enabled": true]
+                    ]
+                ]
+            },
+            approvalHandler: { _ in .cancel }
+        )
+
+        _ = await executor.runDesktopAction(
+            prompt: "open TextEdit",
+            cwd: "/tmp",
+            extraInput: [.skill(name: "computer-use", path: "/abs/SKILL.md")]
+        )
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadParams = try #require(threadStart["params"] as? [String: Any])
+        let config = try #require(threadParams["config"] as? [String: Any])
+        let servers = try #require(config["mcp_servers"] as? [String: Any])
+        let computerUse = try #require(servers["computer-use"] as? [String: Any])
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let turnParams = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(turnParams["input"] as? [[String: Any]])
+        let skill = try #require(input.last)
+
+        #expect(computerUse["enabled"] as? Bool == true)
+        #expect(skill["type"] as? String == "skill")
+        #expect(skill["name"] as? String == "computer-use")
+        #expect(skill["path"] as? String == "/abs/SKILL.md")
+    }
+
     @Test func appServerDesktopActionTurnStartUsesReadOnlySandbox() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,

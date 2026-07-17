@@ -32,7 +32,7 @@ Example: say 'Open TextEdit and type hello world', and Lorelei foregrounds TextE
 Lorelei talks to `codex app-server` over stdio.
 When ChatGPT.app is installed, Lorelei prefers its bundled Codex CLI so both apps use the same OpenAI-distributed runtime.
 An explicitly configured executable remains the highest-priority choice, and PATH, Homebrew, npm, and nvm Codex installations remain supported fallbacks.
-This runtime selection does not by itself enable the official Computer Use plugin; Lorelei continues to use its in-house desktop dynamic tools.
+The official Computer Use integration additionally requires the ChatGPT-managed plugin described below.
 
 ## Install and run
 
@@ -98,9 +98,17 @@ Lorelei.app executes in-process:
   lorelei.screenshot         PNG fallback when the AX tree is not enough
 ```
 
+### Computer Use
+
+Lorelei prefers the official Codex Computer Use plugin for desktop actions when ChatGPT.app is installed and Computer Use has been enabled there at least once, so its helper and macOS permissions are available.
+Lorelei never bundles or redistributes the proprietary plugin; it only points Codex at the installation managed by ChatGPT.app.
+If the plugin is absent or unavailable, Lorelei automatically falls back to its in-house `lorelei.*` accessibility tools.
+You can force that fallback with `defaults write dev.taishi.lorelei LoreleiComputerUseDisabled -bool true` and re-enable automatic selection with `defaults delete dev.taishi.lorelei LoreleiComputerUseDisabled`.
+During a Computer Use action, use the plugin's on-screen indicator or Esc, or Lorelei's Stop button, to interrupt the run.
+
 Design notes:
 
-- **Computer use is built in-house.** The official Codex computer-use plugin is desktop-app-only, so Lorelei registers its own desktop tools as App Server dynamic tools on the same JSON-RPC connection. No extra processes, no sockets, and every macOS permission stays attached to the one app bundle.
+- **Official Computer Use is primary, with an in-house fallback.** Lorelei attaches ChatGPT.app's installed plugin only to desktop-action turns and keeps its own App Server dynamic tools available when the plugin cannot be used.
 - **Text is typed via accessibility values, never simulated keystrokes.** Keystroke simulation corrupts input through IMEs (Japanese in particular).
 - **The protocol layer tracks the installed Codex version.** Run `./scripts/update-appserver-schema.sh` after upgrading the CLI and review the schema diff against `CodexAppServerProtocol.swift`.
 
@@ -130,7 +138,7 @@ The three seams to know:
 - **English only for now.** Japanese speech is currently mis-transcribed as English phonetics; ja-JP model installation and locale selection are planned follow-ups.
 - One active turn at a time; no session history UI and no text input in the toolbar (deliberate v1 scope).
 - Apps with poor accessibility support depend on the screenshot fallback, which is slower and less precise.
-- Codex computer use may land officially in the App Server someday ([openai/codex#20851](https://github.com/openai/codex/issues/20851)); Lorelei'd evaluate switching.
+- Official Computer Use availability depends on ChatGPT.app's managed plugin layout; Lorelei falls back automatically if discovery fails after an update.
 
 ## Privacy
 
