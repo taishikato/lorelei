@@ -92,6 +92,15 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         let captured = capturedSelection
         capturedSelection = nil
         if let captured, captured.snapshot == snapshot {
+            if Self.selectionIsIntact(
+                currentSelectedText: readSelectedText(captured.element),
+                snapshot: snapshot
+            ) {
+                LoreleiDiagLog.log(
+                    "dictationEdit: ready via=intact-captured selectedChars=\(snapshot.text.count)"
+                )
+                return .ready
+            }
             var capturedValueObject: AnyObject?
             if AXUIElementCopyAttributeValue(
                 captured.element,
@@ -131,6 +140,16 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         }
         let role = Self.role(of: element)
 
+        if Self.selectionIsIntact(
+            currentSelectedText: readSelectedText(element),
+            snapshot: snapshot
+        ) {
+            LoreleiDiagLog.log(
+                "dictationEdit: ready via=intact-refocused selectedChars=\(snapshot.text.count)"
+            )
+            return .ready
+        }
+
         var valueObject: AnyObject?
         guard AXUIElementCopyAttributeValue(
             element,
@@ -167,6 +186,31 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             "dictationEdit: ready via=refocused selectedChars=\(snapshot.text.count)"
         )
         return .ready
+    }
+
+    /// The live selection still reads exactly as the press-time snapshot -
+    /// paste can replace it directly, no re-selection or value math needed.
+    /// Same-API comparison (kAXSelectedText vs kAXSelectedText) cancels
+    /// Electron's kAXValue newline-normalization differences (plan 035).
+    nonisolated static func selectionIsIntact(
+        currentSelectedText: String?,
+        snapshot: DictationSelectionSnapshot
+    ) -> Bool {
+        guard let currentSelectedText, !currentSelectedText.isEmpty else { return false }
+        return currentSelectedText == snapshot.text
+    }
+
+    /// Read kAXSelectedTextAttribute; nil on any AX failure (falls through).
+    private func readSelectedText(_ element: AXUIElement) -> String? {
+        var selectedObject: AnyObject?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &selectedObject
+        ) == .success else {
+            return nil
+        }
+        return selectedObject as? String
     }
 
     /// DEBUG-only forensic detail for splice-plan rejections: where the field
