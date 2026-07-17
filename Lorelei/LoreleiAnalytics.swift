@@ -28,9 +28,15 @@ enum LoreleiAnalyticsEvent {
         usedFallbackText: Bool,
         appCategory: String,
         formatMs: Int,
-        totalMs: Int
+        totalMs: Int,
+        rawVisibleMs: Int,
+        replacement: String
     )
-    case systemDictationCopiedToClipboard(formatMs: Int, totalMs: Int)
+    case systemDictationCopiedToClipboard(
+        formatMs: Int,
+        totalMs: Int,
+        replacement: String
+    )
     case turnStarted(sandboxPolicy: String)
     case turnCompleted(success: Bool, durationSeconds: Double)
     case steerSent
@@ -84,18 +90,23 @@ enum LoreleiAnalyticsEvent {
             let usedFallbackText,
             let appCategory,
             let formatMs,
-            let totalMs
+            let totalMs,
+            let rawVisibleMs,
+            let replacement
         ):
             return [
                 "used_fallback_text": usedFallbackText,
                 "app_category": appCategory,
                 "format_ms": formatMs,
-                "total_ms": totalMs
+                "total_ms": totalMs,
+                "raw_visible_ms": rawVisibleMs,
+                "replacement": replacement
             ]
-        case .systemDictationCopiedToClipboard(let formatMs, let totalMs):
+        case .systemDictationCopiedToClipboard(let formatMs, let totalMs, let replacement):
             return [
                 "format_ms": formatMs,
-                "total_ms": totalMs
+                "total_ms": totalMs,
+                "replacement": replacement
             ]
         case .turnStarted(let sandboxPolicy):
             return ["sandbox_policy": sandboxPolicy]

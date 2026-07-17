@@ -16,11 +16,14 @@ struct LoreleiAnalyticsTests {
             usedFallbackText: false,
             appCategory: "unknown",
             formatMs: 850,
-            totalMs: 1400
+            totalMs: 1400,
+            rawVisibleMs: 250,
+            replacement: "replaced"
         ).name == "system_dictation_inserted")
         #expect(LoreleiAnalyticsEvent.systemDictationCopiedToClipboard(
             formatMs: 850,
-            totalMs: 1400
+            totalMs: 1400,
+            replacement: "kept_check_failed"
         ).name == "system_dictation_copied_to_clipboard")
         #expect(LoreleiAnalyticsEvent.turnStarted(sandboxPolicy: "readOnly").name == "turn_started")
         #expect(LoreleiAnalyticsEvent.turnCompleted(success: true, durationSeconds: 3).name == "turn_completed")
@@ -42,7 +45,9 @@ struct LoreleiAnalyticsTests {
             usedFallbackText: true,
             appCategory: "chat",
             formatMs: 850,
-            totalMs: 1400
+            totalMs: 1400,
+            rawVisibleMs: 250,
+            replacement: "kept_format_fallback"
         )
         let properties = event.properties
 
@@ -50,7 +55,9 @@ struct LoreleiAnalyticsTests {
         #expect(properties["app_category"] as? String == "chat")
         #expect(properties["format_ms"] as? Int == 850)
         #expect(properties["total_ms"] as? Int == 1400)
-        #expect(properties.count == 4)
+        #expect(properties["raw_visible_ms"] as? Int == 250)
+        #expect(properties["replacement"] as? String == "kept_format_fallback")
+        #expect(properties.count == 6)
     }
 
     @Test func systemDictationInsertedCarriesDurations() async throws {
@@ -58,7 +65,9 @@ struct LoreleiAnalyticsTests {
             usedFallbackText: false,
             appCategory: "other",
             formatMs: 850,
-            totalMs: 1400
+            totalMs: 1400,
+            rawVisibleMs: 250,
+            replacement: "replaced"
         )
         #expect(event.name == "system_dictation_inserted")
         let properties = event.properties
@@ -70,12 +79,39 @@ struct LoreleiAnalyticsTests {
     @Test func systemDictationCopiedToClipboardCarriesDurations() async throws {
         let event = LoreleiAnalyticsEvent.systemDictationCopiedToClipboard(
             formatMs: 850,
-            totalMs: 1400
+            totalMs: 1400,
+            replacement: "kept_check_failed"
         )
         #expect(event.name == "system_dictation_copied_to_clipboard")
         let properties = event.properties
         #expect(properties["format_ms"] as? Int == 850)
         #expect(properties["total_ms"] as? Int == 1400)
+        #expect(properties["replacement"] as? String == "kept_check_failed")
+    }
+
+    @Test func systemDictationInsertedCarriesRawFirstMetadata() async throws {
+        let event = LoreleiAnalyticsEvent.systemDictationInserted(
+            usedFallbackText: false,
+            appCategory: "chat",
+            formatMs: 2900,
+            totalMs: 3200,
+            rawVisibleMs: 260,
+            replacement: "replaced"
+        )
+        let properties = event.properties
+        #expect(properties["raw_visible_ms"] as? Int == 260)
+        #expect(properties["replacement"] as? String == "replaced")
+        #expect(properties.count == 6)
+    }
+
+    @Test func systemDictationCopiedToClipboardCarriesReplacement() async throws {
+        let event = LoreleiAnalyticsEvent.systemDictationCopiedToClipboard(
+            formatMs: 2900,
+            totalMs: 3200,
+            replacement: "kept_check_failed"
+        )
+        #expect(event.properties["replacement"] as? String == "kept_check_failed")
+        #expect(event.properties.count == 3)
     }
 
     @Test func dictationEventCarriesOnlyMetadataNeverContent() async throws {
