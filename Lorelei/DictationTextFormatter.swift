@@ -61,12 +61,16 @@ final class DictationTextFormatter: DictationTextFormatting {
             return .formatted("")
         }
 
-        LoreleiDiagLog.log("dictationFormatter: runTurn begin chars=\(trimmedInput.count)")
+        let turnTimeoutSeconds = Self.scaledTurnTimeoutSeconds(textCharacters: trimmedInput.count)
+        LoreleiDiagLog.log(
+            "dictationFormatter: runTurn begin chars=\(trimmedInput.count) timeoutS=\(turnTimeoutSeconds)"
+        )
         let startedAt = Date()
         let result = await sharedExecutor().runTurn(
             prompt: Self.prompt(for: rawTranscript, appContext: appContext),
             cwd: workingDirectoryProvider(),
-            sandboxPolicy: "readOnly"
+            sandboxPolicy: "readOnly",
+            turnTimeoutOverrideSeconds: turnTimeoutSeconds
         )
         let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
         LoreleiDiagLog.log(
@@ -97,8 +101,9 @@ final class DictationTextFormatter: DictationTextFormatting {
             return .fallbackToRaw(reason: "empty_instruction")
         }
 
+        let turnTimeoutSeconds = Self.scaledTurnTimeoutSeconds(textCharacters: selectedText.count)
         LoreleiDiagLog.log(
-            "dictationEditFormatter: runTurn begin instructionChars=\(trimmedInstruction.count) selectedChars=\(selectedText.count)"
+            "dictationEditFormatter: runTurn begin instructionChars=\(trimmedInstruction.count) selectedChars=\(selectedText.count) timeoutS=\(turnTimeoutSeconds)"
         )
         let startedAt = Date()
         let result = await sharedExecutor().runTurn(
@@ -108,7 +113,8 @@ final class DictationTextFormatter: DictationTextFormatting {
                 appContext: appContext
             ),
             cwd: workingDirectoryProvider(),
-            sandboxPolicy: "readOnly"
+            sandboxPolicy: "readOnly",
+            turnTimeoutOverrideSeconds: turnTimeoutSeconds
         )
         let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
         LoreleiDiagLog.log(
@@ -199,6 +205,13 @@ final class DictationTextFormatter: DictationTextFormatting {
         Text:
         \(selectedText)
         """
+    }
+
+    /// Turn budget for the dedicated formatter executor: fixed model floor
+    /// plus regeneration time proportional to the text codex must rewrite.
+    /// Field data: 17ch/4.0s, 74ch/4.4s, 2338ch killed by the old fixed 10s.
+    nonisolated static func scaledTurnTimeoutSeconds(textCharacters: Int) -> TimeInterval {
+        min(10 + Double(textCharacters) / 100, 60)
     }
 
     /// Mirrors `CompanionManager.codexAppServerWorkingDirectory()`.

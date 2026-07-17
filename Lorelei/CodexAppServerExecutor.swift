@@ -415,6 +415,7 @@ final class CodexAppServerExecutor {
         prompt: String,
         cwd: String,
         sandboxPolicy: String? = nil,
+        turnTimeoutOverrideSeconds: TimeInterval? = nil,
         extraInput: [CodexAppServerTurnInputItem] = [],
         removeLocalImageInputsAfterRun: Bool = false
     ) async -> WorkspaceCommandResult {
@@ -431,7 +432,8 @@ final class CodexAppServerExecutor {
             progressHandler(.turnEnded)
         }
 
-        guard turnTimeoutSeconds > 0 else {
+        let effectiveTurnTimeoutSeconds = turnTimeoutOverrideSeconds ?? turnTimeoutSeconds
+        guard effectiveTurnTimeoutSeconds > 0 else {
             return WorkspaceCommandResult(summary: "Codex App Server command timed out.", status: .failed)
         }
 
@@ -444,6 +446,7 @@ final class CodexAppServerExecutor {
                 cwd: cwd,
                 sandboxPolicy: sandboxPolicy,
                 extraInput: extraInput,
+                turnTimeoutSeconds: effectiveTurnTimeoutSeconds,
                 traceBuffer: traceBuffer,
                 allowDeadSessionRetry: attempt == 0
             )
@@ -530,6 +533,7 @@ final class CodexAppServerExecutor {
         cwd: String,
         sandboxPolicy: String?,
         extraInput: [CodexAppServerTurnInputItem],
+        turnTimeoutSeconds: TimeInterval,
         traceBuffer: CodexAppServerTraceBuffer,
         allowDeadSessionRetry: Bool
     ) async -> CodexAppServerTurnAttemptResult {

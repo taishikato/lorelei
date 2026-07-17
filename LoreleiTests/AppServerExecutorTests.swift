@@ -24,6 +24,63 @@ struct AppServerExecutorTests {
         #expect(executor.defaultedTurnTimeoutSecondsForTesting == 300)
     }
 
+    @Test func appServerExecutorTurnTimeoutOverrideArmsInjectedSleep() async throws {
+        let armed = ArmedTimeoutSecondsBox()
+        let hangGate = SleepGate()
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            turnTimeoutSeconds: 10,
+            timeoutSleep: { seconds in
+                await armed.recordFirst(seconds)
+                try await hangGate.wait()
+            },
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runTurn(
+            prompt: "hello",
+            cwd: "/Users/example",
+            turnTimeoutOverrideSeconds: 42
+        )
+
+        #expect(result.status == .succeeded)
+        #expect(await armed.value == 42)
+    }
+
+    @Test func appServerExecutorNilTurnTimeoutOverrideUsesInstanceTimeout() async throws {
+        let armed = ArmedTimeoutSecondsBox()
+        let hangGate = SleepGate()
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let executor = CodexAppServerExecutor(
+            turnTimeoutSeconds: 10,
+            timeoutSleep: { seconds in
+                await armed.recordFirst(seconds)
+                try await hangGate.wait()
+            },
+            makeTransport: { transport },
+            approvalHandler: { _ in .cancel }
+        )
+
+        let result = await executor.runTurn(
+            prompt: "hello",
+            cwd: "/Users/example"
+        )
+
+        #expect(result.status == .succeeded)
+        #expect(await armed.value == 10)
+    }
+
     @Test func appServerExecutorAnswersMcpElicitationApprovalWithZeroID() async throws {
         let transport = FakeCodexAppServerTransport(lines: [
             #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
@@ -718,5 +775,15 @@ struct AppServerExecutorTests {
             .agentMessageDelta("lo"),
             .turnEnded
         ])
+    }
+}
+
+actor ArmedTimeoutSecondsBox {
+    private(set) var value: TimeInterval?
+
+    func recordFirst(_ seconds: TimeInterval) {
+        if value == nil {
+            value = seconds
+        }
     }
 }

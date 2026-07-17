@@ -117,6 +117,91 @@ struct DictationTextFormatterTests {
         #expect(executor.defaultedTurnTimeoutSecondsForTesting == 10)
     }
 
+    @Test func scaledTurnTimeoutSecondsMatchesFormulaBoundaries() {
+        #expect(DictationTextFormatter.scaledTurnTimeoutSeconds(textCharacters: 0) == 10)
+        #expect(
+            DictationTextFormatter.scaledTurnTimeoutSeconds(textCharacters: 74)
+                == min(10 + Double(74) / 100, 60)
+        )
+        #expect(
+            DictationTextFormatter.scaledTurnTimeoutSeconds(textCharacters: 2338)
+                == min(10 + Double(2338) / 100, 60)
+        )
+        #expect(DictationTextFormatter.scaledTurnTimeoutSeconds(textCharacters: 1_000_000) == 60)
+    }
+
+    @Test func formatArmsScaledTurnTimeoutViaInjectedSleep() async throws {
+        let selectedLength = 2338
+        let expectedTimeout = DictationTextFormatter.scaledTurnTimeoutSeconds(
+            textCharacters: selectedLength
+        )
+        let armed = ArmedTimeoutSecondsBox()
+        let hangGate = SleepGate()
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Cleaned."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let formatter = DictationTextFormatter(
+            workingDirectoryProvider: { "/Users/example" },
+            makeExecutor: {
+                DictationTextFormatter.makeDedicatedExecutor(
+                    turnTimeoutSeconds: 10,
+                    timeoutSleep: { seconds in
+                        await armed.recordFirst(seconds)
+                        try await hangGate.wait()
+                    },
+                    makeTransport: { transport }
+                )
+            }
+        )
+
+        let input = String(repeating: "a", count: selectedLength)
+        let result = await formatter.format(input, appContext: nil)
+
+        #expect(result == .formatted("Cleaned."))
+        #expect(await armed.value == expectedTimeout)
+    }
+
+    @Test func formatEditArmsScaledTurnTimeoutViaInjectedSleep() async throws {
+        let selectedLength = 74
+        let expectedTimeout = DictationTextFormatter.scaledTurnTimeoutSeconds(
+            textCharacters: selectedLength
+        )
+        let armed = ArmedTimeoutSecondsBox()
+        let hangGate = SleepGate()
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Shorter."}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let formatter = DictationTextFormatter(
+            workingDirectoryProvider: { "/Users/example" },
+            makeExecutor: {
+                DictationTextFormatter.makeDedicatedExecutor(
+                    turnTimeoutSeconds: 10,
+                    timeoutSleep: { seconds in
+                        await armed.recordFirst(seconds)
+                        try await hangGate.wait()
+                    },
+                    makeTransport: { transport }
+                )
+            }
+        )
+
+        let selectedText = String(repeating: "b", count: selectedLength)
+        let result = await formatter.formatEdit(
+            instruction: "make this shorter",
+            selectedText: selectedText,
+            appContext: nil
+        )
+
+        #expect(result == .formatted("Shorter."))
+        #expect(await armed.value == expectedTimeout)
+    }
+
     @Test func promptWithoutContextMatchesLegacyPrompt() {
         let legacy = DictationTextFormatter.prompt(for: "hello", appContext: nil)
         #expect(legacy.contains("You are a dictation cleanup helper."))
