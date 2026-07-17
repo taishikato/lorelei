@@ -510,20 +510,30 @@ final class CompanionManager: ObservableObject {
                 switch event {
                 case .started:
                     LoreleiAnalytics.capture(.systemDictationStarted)
-                case .inserted(let usedFallbackText, let appCategory, let formatMs, let totalMs):
+                case .inserted(
+                    let usedFallbackText,
+                    let appCategory,
+                    let formatMs,
+                    let totalMs,
+                    let rawVisibleMs,
+                    let replacement
+                ):
                     LoreleiAnalytics.capture(
                         .systemDictationInserted(
                             usedFallbackText: usedFallbackText,
                             appCategory: appCategory,
                             formatMs: formatMs,
-                            totalMs: totalMs
+                            totalMs: totalMs,
+                            rawVisibleMs: rawVisibleMs,
+                            replacement: replacement
                         )
                     )
-                case .copiedToClipboard(let formatMs, let totalMs):
+                case .copiedToClipboard(let formatMs, let totalMs, let replacement):
                     LoreleiAnalytics.capture(
                         .systemDictationCopiedToClipboard(
                             formatMs: formatMs,
-                            totalMs: totalMs
+                            totalMs: totalMs,
+                            replacement: replacement
                         )
                     )
                 }

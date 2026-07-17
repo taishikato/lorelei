@@ -12,8 +12,15 @@ import Foundation
 
 enum SystemDictationAnalyticsEvent: Equatable, Sendable {
     case started
-    case inserted(usedFallbackText: Bool, appCategory: String, formatMs: Int, totalMs: Int)
-    case copiedToClipboard(formatMs: Int, totalMs: Int)
+    case inserted(
+        usedFallbackText: Bool,
+        appCategory: String,
+        formatMs: Int,
+        totalMs: Int,
+        rawVisibleMs: Int,
+        replacement: String
+    )
+    case copiedToClipboard(formatMs: Int, totalMs: Int, replacement: String)
 }
 
 @MainActor
@@ -59,6 +66,9 @@ final class SystemDictationController {
     private let listener: any SystemDictationListening
     private let formatter: any DictationTextFormatting
     private let inserter: any DictationTextInserting
+    private let replacer: any DictationTextReplacing
+    private let swapClipboard: (String, String) -> Bool
+    private let rawInsertFirstEnabled: () -> Bool
     private let presentHUD: (String) -> Void
     private let trackAnalytics: (SystemDictationAnalyticsEvent) -> Void
     private let showOverlay: () -> Void
@@ -85,6 +95,13 @@ final class SystemDictationController {
         listener: any SystemDictationListening,
         formatter: any DictationTextFormatting,
         inserter: any DictationTextInserting,
+        replacer: any DictationTextReplacing = AXDictationTextReplacer(),
+        swapClipboard: @escaping (String, String) -> Bool = { raw, cleaned in
+            DictationPasteboardSwap.swapIfStillRaw(rawText: raw, cleanedText: cleaned)
+        },
+        rawInsertFirstEnabled: @escaping () -> Bool = {
+            !UserDefaults.standard.bool(forKey: "LoreleiDictationRawInsertFirstDisabled")
+        },
         presentHUD: @escaping (String) -> Void,
         trackAnalytics: @escaping (SystemDictationAnalyticsEvent) -> Void = { _ in },
         showOverlay: @escaping () -> Void,
@@ -106,6 +123,9 @@ final class SystemDictationController {
         self.listener = listener
         self.formatter = formatter
         self.inserter = inserter
+        self.replacer = replacer
+        self.swapClipboard = swapClipboard
+        self.rawInsertFirstEnabled = rawInsertFirstEnabled
         self.presentHUD = presentHUD
         self.trackAnalytics = trackAnalytics
         self.showOverlay = showOverlay
@@ -210,6 +230,79 @@ final class SystemDictationController {
         )
         guard !trimmed.isEmpty else { return }
 
+        guard rawInsertFirstEnabled() else {
+            await runLegacyFormatThenInsert(rawTranscript, totalStart: totalStart)
+            return
+        }
+
+        LoreleiDiagLog.log(
+            "systemDictation: raw insert begin chars=\(rawTranscript.count) targetPID=\(targetProcessID.map(String.init) ?? "nil")"
+        )
+        let insertOutcome = await inserter.insert(
+            rawTranscript,
+            targetProcessID: targetProcessID
+        )
+        let rawVisibleMs = Self.milliseconds(from: totalStart, to: now())
+        if case .leftOnClipboard = insertOutcome {
+            presentHUD("Copied to clipboard")
+        }
+
+        LoreleiDiagLog.log("systemDictation: format begin")
+        let formatStart = now()
+        let formatterResult = await formatter.format(
+            rawTranscript,
+            appContext: targetAppContext
+        )
+        let formatMs = Self.milliseconds(from: formatStart, to: now())
+        var usedFallbackText = false
+        let replacement: String
+        switch (formatterResult, insertOutcome) {
+        case (.formatted(let cleaned), .inserted):
+            let outcome = await replacer.replaceRawWithCleaned(
+                rawText: rawTranscript,
+                cleanedText: cleaned,
+                targetProcessID: targetProcessID
+            )
+            replacement = outcome.rawValue
+        case (.formatted(let cleaned), .leftOnClipboard) where cleaned == rawTranscript:
+            replacement = DictationReplacementOutcome.keptIdentical.rawValue
+        case (.formatted(let cleaned), .leftOnClipboard):
+            replacement = swapClipboard(rawTranscript, cleaned)
+                ? DictationReplacementOutcome.replaced.rawValue
+                : DictationReplacementOutcome.keptCheckFailed.rawValue
+        case (.fallbackToRaw(let reason), _):
+            LoreleiDiagLog.log("systemDictation: format fallback reason=\(reason)")
+            usedFallbackText = true
+            replacement = "kept_format_fallback"
+        }
+
+        let totalMs = Self.milliseconds(from: totalStart, to: now())
+        switch insertOutcome {
+        case .inserted:
+            LoreleiDiagLog.log(
+                "systemDictation: raw-first done replacement=\(replacement) formatMs=\(formatMs) totalMs=\(totalMs) rawVisibleMs=\(rawVisibleMs)"
+            )
+            trackAnalytics(.inserted(
+                usedFallbackText: usedFallbackText,
+                appCategory: (targetAppContext?.category ?? .unknown).rawValue,
+                formatMs: formatMs,
+                totalMs: totalMs,
+                rawVisibleMs: rawVisibleMs,
+                replacement: replacement
+            ))
+        case .leftOnClipboard:
+            trackAnalytics(.copiedToClipboard(
+                formatMs: formatMs,
+                totalMs: totalMs,
+                replacement: replacement
+            ))
+        }
+    }
+
+    private func runLegacyFormatThenInsert(
+        _ rawTranscript: String,
+        totalStart: ContinuousClock.Instant
+    ) async {
         LoreleiDiagLog.log("systemDictation: format begin")
         let formatStart = now()
         let formatterResult = await formatter.format(
@@ -242,19 +335,27 @@ final class SystemDictationController {
         let totalMs = Self.milliseconds(from: totalStart, to: now())
         switch outcome {
         case .inserted:
-            LoreleiDiagLog.log("systemDictation: insert ok formatMs=\(formatMs) totalMs=\(totalMs)")
+            LoreleiDiagLog.log(
+                "systemDictation: insert ok formatMs=\(formatMs) totalMs=\(totalMs)"
+            )
             trackAnalytics(.inserted(
                 usedFallbackText: usedFallbackText,
                 appCategory: (targetAppContext?.category ?? .unknown).rawValue,
                 formatMs: formatMs,
-                totalMs: totalMs
+                totalMs: totalMs,
+                rawVisibleMs: 0,
+                replacement: "legacy_disabled"
             ))
         case .leftOnClipboard:
             LoreleiDiagLog.log(
                 "systemDictation: paste failed → clipboard HUD formatMs=\(formatMs) totalMs=\(totalMs)"
             )
             presentHUD("Copied to clipboard")
-            trackAnalytics(.copiedToClipboard(formatMs: formatMs, totalMs: totalMs))
+            trackAnalytics(.copiedToClipboard(
+                formatMs: formatMs,
+                totalMs: totalMs,
+                replacement: "legacy_disabled"
+            ))
         }
     }
 

@@ -98,12 +98,28 @@ final class FakeDictationTextInserter: DictationTextInserting {
 }
 
 @MainActor
+final class FakeDictationTextReplacer: DictationTextReplacing {
+    var outcome: DictationReplacementOutcome = .replaced
+    private(set) var calls: [(raw: String, cleaned: String, pid: pid_t?)] = []
+
+    func replaceRawWithCleaned(
+        rawText: String,
+        cleanedText: String,
+        targetProcessID: pid_t?
+    ) async -> DictationReplacementOutcome {
+        calls.append((rawText, cleanedText, targetProcessID))
+        return outcome
+    }
+}
+
+@MainActor
 struct SystemDictationControllerTests {
-    @Test func happyPathInsertsFormattedText() async throws {
+    @Test func happyPathInsertsRawThenReplaces() async throws {
         let listener = FakeSystemDictationListener()
         let formatter = FakeDictationTextFormatter()
         formatter.result = .formatted("Hello world.")
         let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
         var hudMessages: [String] = []
         var overlayVisible = false
         var sessionFinishedCount = 0
@@ -112,6 +128,7 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
+            replacer: replacer,
             presentHUD: { hudMessages.append($0) },
             showOverlay: { overlayVisible = true },
             hideOverlay: { overlayVisible = false },
@@ -133,10 +150,276 @@ struct SystemDictationControllerTests {
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        #expect(inserter.lastInsertedText == "Hello world.")
+        #expect(inserter.lastInsertedText == "um hello world")
         #expect(inserter.lastTargetProcessID == 999)
+        #expect(replacer.calls.count == 1)
         #expect(hudMessages.isEmpty)
         #expect(sessionFinishedCount == 1)
+    }
+
+    @Test func rawFirstInsertsRawImmediatelyThenReplaces() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("Clean.")
+        formatter.formatDelayNanoseconds = 200_000_000
+        let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            replacer: replacer,
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {},
+            frontmostProcessID: { 4242 }
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("raw words")
+
+        for _ in 0..<50 {
+            if inserter.insertCallCount == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "raw words")
+        #expect(replacer.calls.isEmpty)
+
+        for _ in 0..<50 {
+            if trackedEvents.count > 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let call = try #require(replacer.calls.first)
+        #expect(call.raw == "raw words")
+        #expect(call.cleaned == "Clean.")
+        #expect(call.pid == 4242)
+        #expect(trackedEvents.contains(where: { event in
+            if case .inserted(_, _, _, _, _, "replaced") = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func rawFirstKeepsRawWhenReplacerRefuses() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("Clean.")
+        let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
+        replacer.outcome = .keptCheckFailed
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            replacer: replacer,
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {}
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("raw words")
+
+        for _ in 0..<50 {
+            if trackedEvents.count > 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "raw words")
+        #expect(replacer.calls.count == 1)
+        #expect(trackedEvents.contains(where: { event in
+            if case .inserted(_, _, _, _, _, "kept_check_failed") = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func rawFirstFormatFallbackSkipsReplacement() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .fallbackToRaw(reason: "x")
+        let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            replacer: replacer,
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {}
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("raw words")
+
+        for _ in 0..<50 {
+            if trackedEvents.count > 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(inserter.insertCallCount == 1)
+        #expect(replacer.calls.isEmpty)
+        #expect(trackedEvents.contains(where: { event in
+            if case .inserted(true, _, _, _, _, "kept_format_fallback") = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func rawFirstClipboardPathSwapsInsteadOfReplacing() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("Clean.")
+        let inserter = FakeDictationTextInserter()
+        inserter.outcome = .leftOnClipboard
+        let replacer = FakeDictationTextReplacer()
+        var swaps: [(raw: String, cleaned: String)] = []
+        var hudMessages: [String] = []
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            replacer: replacer,
+            swapClipboard: { raw, cleaned in
+                swaps.append((raw, cleaned))
+                return true
+            },
+            presentHUD: { hudMessages.append($0) },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {}
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("raw words")
+
+        for _ in 0..<50 {
+            if trackedEvents.count > 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(hudMessages == ["Copied to clipboard"])
+        #expect(replacer.calls.isEmpty)
+        #expect(swaps.count == 1)
+        #expect(swaps.first?.raw == "raw words")
+        #expect(swaps.first?.cleaned == "Clean.")
+        #expect(trackedEvents.contains(where: { event in
+            if case .copiedToClipboard(_, _, "replaced") = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func rawFirstClipboardPathKeepsIdenticalText() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("raw words")
+        let inserter = FakeDictationTextInserter()
+        inserter.outcome = .leftOnClipboard
+        let replacer = FakeDictationTextReplacer()
+        var swapCallCount = 0
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            replacer: replacer,
+            swapClipboard: { _, _ in
+                swapCallCount += 1
+                return true
+            },
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {}
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("raw words")
+
+        for _ in 0..<50 {
+            if trackedEvents.count > 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(swapCallCount == 0)
+        #expect(replacer.calls.isEmpty)
+        #expect(trackedEvents.contains(where: { event in
+            if case .copiedToClipboard(_, _, "kept_identical") = event {
+                return true
+            }
+            return false
+        }))
+    }
+
+    @Test func killSwitchRestoresLegacyOrder() async throws {
+        let listener = FakeSystemDictationListener()
+        let formatter = FakeDictationTextFormatter()
+        formatter.result = .formatted("Clean.")
+        let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
+        var trackedEvents: [SystemDictationAnalyticsEvent] = []
+
+        let controller = SystemDictationController(
+            listener: listener,
+            formatter: formatter,
+            inserter: inserter,
+            replacer: replacer,
+            rawInsertFirstEnabled: { false },
+            presentHUD: { _ in },
+            trackAnalytics: { trackedEvents.append($0) },
+            showOverlay: {},
+            hideOverlay: {}
+        )
+
+        controller.handleShortcutTransition(.pressed)
+        await listener.waitUntilStartBegins()
+        controller.handleShortcutTransition(.released)
+        listener.emitTranscript("raw words")
+
+        for _ in 0..<50 {
+            if trackedEvents.count > 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(inserter.insertCallCount == 1)
+        #expect(inserter.lastInsertedText == "Clean.")
+        #expect(replacer.calls.isEmpty)
+        #expect(trackedEvents.contains(where: { event in
+            if case .inserted(false, _, _, _, 0, "legacy_disabled") = event {
+                return true
+            }
+            return false
+        }))
     }
 
     @Test func fallbackInsertsRawTranscript() async throws {
@@ -179,6 +462,7 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
+            swapClipboard: { _, _ in false },
             presentHUD: { hudMessages.append($0) },
             showOverlay: {},
             hideOverlay: {}
@@ -320,6 +604,7 @@ struct SystemDictationControllerTests {
         formatter.result = .formatted("first")
         formatter.formatDelayNanoseconds = 200_000_000
         let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
         var overlayShowCount = 0
         var capturedPIDs: [pid_t] = []
 
@@ -327,6 +612,7 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
+            replacer: replacer,
             presentHUD: { _ in },
             showOverlay: { overlayShowCount += 1 },
             hideOverlay: {},
@@ -348,14 +634,14 @@ struct SystemDictationControllerTests {
         controller.handleShortcutTransition(.pressed)
 
         for _ in 0..<50 {
-            if inserter.insertCallCount > 0 { break }
+            if replacer.calls.count > 0 { break }
             try await Task.sleep(for: .milliseconds(20))
         }
 
         #expect(overlayShowCount == 1)
         #expect(listener.startCallCount == 1)
         #expect(inserter.insertCallCount == 1)
-        #expect(inserter.lastInsertedText == "first")
+        #expect(inserter.lastInsertedText == "one")
         #expect(inserter.lastTargetProcessID == 1000)
         #expect(formatter.formatCallCount == 1)
     }
@@ -414,7 +700,7 @@ struct SystemDictationControllerTests {
 
         for _ in 0..<50 {
             if trackedEvents.contains(where: { event in
-                if case .inserted(_, "chat", _, _) = event {
+                if case .inserted(_, "chat", _, _, _, _) = event {
                     return true
                 }
                 return false
@@ -424,7 +710,7 @@ struct SystemDictationControllerTests {
 
         #expect(formatter.lastAppContext == slack)
         #expect(trackedEvents.contains(where: { event in
-            if case .inserted(false, "chat", _, _) = event {
+            if case .inserted(false, "chat", _, _, _, _) = event {
                 return true
             }
             return false
@@ -436,6 +722,7 @@ struct SystemDictationControllerTests {
         let formatter = FakeDictationTextFormatter()
         formatter.result = .formatted("Hello.")
         let inserter = FakeDictationTextInserter()
+        let replacer = FakeDictationTextReplacer()
         var trackedEvents: [SystemDictationAnalyticsEvent] = []
 
         // Deterministic fake clock: each call advances 100ms.
@@ -445,6 +732,7 @@ struct SystemDictationControllerTests {
             listener: listener,
             formatter: formatter,
             inserter: inserter,
+            replacer: replacer,
             presentHUD: { _ in },
             trackAnalytics: { trackedEvents.append($0) },
             showOverlay: {},
@@ -461,19 +749,23 @@ struct SystemDictationControllerTests {
         listener.emitTranscript("hello")
 
         for _ in 0..<50 {
-            if inserter.insertCallCount > 0 { break }
+            if trackedEvents.contains(where: { event in
+                if case .inserted(_, _, _, _, _, _) = event { return true }
+                return false
+            }) { break }
             try await Task.sleep(for: .milliseconds(10))
         }
 
-        let inserted = trackedEvents.compactMap { event -> (Int, Int)? in
-            if case .inserted(_, _, let formatMs, let totalMs) = event {
-                return (formatMs, totalMs)
+        let inserted = trackedEvents.compactMap { event -> (Int, Int, Int)? in
+            if case .inserted(_, _, let formatMs, let totalMs, let rawVisibleMs, _) = event {
+                return (formatMs, totalMs, rawVisibleMs)
             }
             return nil
         }.first
         let unwrapped = try #require(inserted)
-        // now() call order: totalStart, formatStart, formatEnd, insertEnd.
+        // now() call order: totalStart, rawInsertEnd, formatStart, formatEnd, totalEnd.
         #expect(unwrapped.0 == 100)
-        #expect(unwrapped.1 == 300)
+        #expect(unwrapped.1 == 400)
+        #expect(unwrapped.2 == 100)
     }
 }
