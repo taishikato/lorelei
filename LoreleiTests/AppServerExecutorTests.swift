@@ -461,20 +461,29 @@ struct AppServerExecutorTests {
     }
 
     @Test func appServerExecutorReportsUndeliveredApprovalRequestOnTimeout() async throws {
-        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
-            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
-            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
-            #"{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}"#
-        ])
-        // Generous, not knife-edge: the scripted lines - including the
-        // waitingOnApproval status the hint depends on - must be consumed
-        // before the timer fires now that the timeout also covers session
-        // establishment. This test needs THREE lines consumed pre-timeout,
-        // making it the most schedule-sensitive of the timeout family: it
-        // flaked at 1.0s and again at 2.0s under parallel-suite load, so it
-        // alone uses 3.0s.
+        // Deterministic, not wall-clock: this test needs THREE scripted lines
+        // - including the waitingOnApproval status the hint depends on -
+        // consumed AND parsed before the timeout fires. It flaked at 1.0s,
+        // 2.0s, and 3.0s real timers under loaded runners, so the timer is
+        // now a SleepGate released only after the transport drains, plus the
+        // same 50ms drained-vs-parsed margin the interrupt test uses.
+        let timeoutGate = SleepGate()
+        let transport = HangingAfterLinesCodexAppServerTransport(
+            lines: [
+                #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+                #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+                #"{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}"#
+            ],
+            onInitialLinesDrained: {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    await timeoutGate.release()
+                }
+            }
+        )
         let executor = CodexAppServerExecutor(
             turnTimeoutSeconds: 3.0,
+            timeoutSleep: { _ in try await timeoutGate.wait() },
             makeTransport: { transport },
             approvalHandler: { _ in .cancel }
         )

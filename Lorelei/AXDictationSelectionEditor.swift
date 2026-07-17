@@ -31,9 +31,16 @@ protocol DictationSelectionEditing: AnyObject {
 final class AXDictationSelectionEditor: DictationSelectionEditing {
     nonisolated init() {}
 
+    /// The element readSelection captured, paired with the snapshot it
+    /// produced. applyEdit prefers this element - Chromium focus reads
+    /// flicker to containers (AXWebArea/AXGroup) seconds later, but the
+    /// captured element stays valid. Consumed by the next applyEdit.
+    private var capturedSelection: (element: AXUIElement, snapshot: DictationSelectionSnapshot)?
+
     func readSelection(targetProcessID: pid_t?) -> DictationSelectionSnapshot? {
         guard let targetProcessID else {
             LoreleiDiagLog.log("dictationEdit: readSelection nil")
+            capturedSelection = nil
             return nil
         }
 
@@ -42,6 +49,7 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         )
         guard let element = focused.element else {
             LoreleiDiagLog.log("dictationEdit: readSelection nil")
+            capturedSelection = nil
             return nil
         }
         let role = Self.role(of: element)
@@ -55,16 +63,20 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             let selectedText = selectedObject as? String,
             !selectedText.isEmpty else {
             LoreleiDiagLog.log("dictationEdit: readSelection nil role=\(role)")
+            capturedSelection = nil
             return nil
         }
 
         guard let range = Self.selectedRange(of: element),
               range.length == (selectedText as NSString).length else {
             LoreleiDiagLog.log("dictationEdit: readSelection nil role=\(role)")
+            capturedSelection = nil
             return nil
         }
 
-        return DictationSelectionSnapshot(text: selectedText, range: range)
+        let snapshot = DictationSelectionSnapshot(text: selectedText, range: range)
+        capturedSelection = (element, snapshot)
+        return snapshot
     }
 
     func applyEdit(
@@ -75,6 +87,33 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
         guard let targetProcessID else {
             LoreleiDiagLog.log("dictationEdit: no focused element → clipboard fallback")
             return .checkFailed
+        }
+
+        let captured = capturedSelection
+        capturedSelection = nil
+        if let captured, captured.snapshot == snapshot {
+            var capturedValueObject: AnyObject?
+            if AXUIElementCopyAttributeValue(
+                captured.element,
+                kAXValueAttribute as CFString,
+                &capturedValueObject
+            ) == .success,
+                let capturedFieldValue = capturedValueObject as? String,
+                let plan = DictationEditSplicePlanner.plan(
+                    fieldValue: capturedFieldValue,
+                    snapshot: snapshot,
+                    editedText: editedText
+                ) {
+                if Self.splice(plan: plan, on: captured.element) {
+                    LoreleiDiagLog.log(
+                        "dictationEdit: applied via=captured chars=\(plan.range.length)→\(editedText.count)"
+                    )
+                    return .applied
+                }
+                LoreleiDiagLog.log("dictationEdit: captured splice rejected → refocus")
+            } else {
+                LoreleiDiagLog.log("dictationEdit: captured element stale → refocus")
+            }
         }
 
         let focused = await AXAccessibilityWaker.focusedElementWakingIfNeeded(
@@ -110,6 +149,18 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             return .checkFailed
         }
 
+        guard Self.splice(plan: plan, on: element) else {
+            LoreleiDiagLog.log("dictationEdit: splice rejected → clipboard fallback")
+            return .checkFailed
+        }
+
+        LoreleiDiagLog.log(
+            "dictationEdit: applied via=refocused chars=\(plan.range.length)→\(editedText.count)"
+        )
+        return .applied
+    }
+
+    private static func splice(plan: DictationReplacementPlan, on element: AXUIElement) -> Bool {
         var selectRange = CFRange(location: plan.range.location, length: plan.range.length)
         guard let axRange = AXValueCreate(.cfRange, &selectRange),
               AXUIElementSetAttributeValue(
@@ -122,14 +173,9 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
                   kAXSelectedTextAttribute as CFString,
                   plan.replacement as CFString
               ) == .success else {
-            LoreleiDiagLog.log("dictationEdit: splice rejected → clipboard fallback")
-            return .checkFailed
+            return false
         }
-
-        LoreleiDiagLog.log(
-            "dictationEdit: applied chars=\(plan.range.length)→\(editedText.count)"
-        )
-        return .applied
+        return true
     }
 
     private static func role(of element: AXUIElement) -> String {
