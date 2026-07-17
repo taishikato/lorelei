@@ -39,20 +39,13 @@ final class AXDictationTextReplacer: DictationTextReplacing {
         guard cleanedText != rawText else { return .keptIdentical }
         guard let targetProcessID else { return .keptCheckFailed }
 
-        let appElement = AXUIElementCreateApplication(targetProcessID)
-        var focusedObject: AnyObject?
-        let focusedStatus = AXUIElementCopyAttributeValue(
-            appElement,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedObject
+        let focused = await AXAccessibilityWaker.focusedElementWakingIfNeeded(
+            processID: targetProcessID
         )
-        guard focusedStatus == .success,
-            let focusedObject,
-            CFGetTypeID(focusedObject) == AXUIElementGetTypeID() else {
-            LoreleiDiagLog.log("dictationReplace: no focused element status=\(focusedStatus.rawValue) → keep raw")
+        guard let element = focused.element else {
+            LoreleiDiagLog.log("dictationReplace: no focused element status=\(focused.status.rawValue) → keep raw")
             return .keptCheckFailed
         }
-        let element = focusedObject as! AXUIElement
         let role = {
             var object: AnyObject?
             AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &object)

@@ -75,7 +75,9 @@ final class AXDictationSelectionEditor: DictationSelectionEditing {
             return .checkFailed
         }
 
-        let focused = Self.focusedElement(processID: targetProcessID)
+        let focused = await AXAccessibilityWaker.focusedElementWakingIfNeeded(
+            processID: targetProcessID
+        )
         guard let element = focused.element else {
             LoreleiDiagLog.log(
                 "dictationEdit: no focused element status=\(focused.status.rawValue) → clipboard fallback"
