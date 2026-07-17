@@ -42,18 +42,22 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        // A hosting controller sizes the window to the SwiftUI content, so the
-        // window fits the onboarding content snugly with no dead space below it.
-        let hostingController = NSHostingController(
+        // Content-fitted window without SwiftUI's built-in window sizing,
+        // which crashes on this OS - see WindowFittingHostingView.
+        let hostingView = WindowFittingHostingView(
             rootView: OnboardingView(companionManager: companionManager) { [weak self] in
                 self?.window?.close()
             }
         )
-        // Content-driven window sizing via preferredContentSize only - same
-        // crash-surface removal as SettingsWindowController (plan 033/034).
-        hostingController.sizingOptions = [.preferredContentSize]
-        let onboardingWindow = NSWindow(contentViewController: hostingController)
-        onboardingWindow.styleMask = [.titled, .closable, .miniaturizable]
+        hostingView.sizingOptions = []
+        let onboardingWindow = NSWindow(
+            contentRect: .zero,
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        onboardingWindow.contentView = hostingView
+        onboardingWindow.setContentSize(hostingView.fittingSize)
 
         onboardingWindow.title = "Welcome to Lorelei"
         onboardingWindow.isReleasedWhenClosed = false

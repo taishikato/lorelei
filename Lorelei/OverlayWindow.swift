@@ -24,12 +24,15 @@ extension OverlayWindowManaging {
     }
 }
 
-class OverlayWindow: NSWindow {
+class OverlayWindow: NSPanel {
     init(screen: NSScreen) {
-        // Create window covering entire screen
+        // A non-activating panel, not a plain window: panels are allowed to
+        // join other apps' fullscreen Spaces, where an NSWindow silently stays
+        // behind the fullscreen app even with canJoinAllSpaces +
+        // fullScreenAuxiliary (owner-reproduced with a fullscreen Claude.app).
         super.init(
             contentRect: screen.frame,
-            styleMask: .borderless,
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -244,9 +247,11 @@ class OverlayWindowManager: OverlayWindowManaging {
                 )
 
                 let hostingView = NSHostingView(rootView: contentView)
-                // Manual window sizing: the hosting view must never drive the window
-                // (see plan 033 crash anatomy).
-                hostingView.sizingOptions = []
+                // Default sizingOptions on purpose: with [] this full-screen
+                // content stops rendering entirely (owner-reproduced - the
+                // listening waveform vanished). The borderless overlay window
+                // never runs a constraints pass, so the size-extrema crash
+                // path from plan 033 cannot fire here.
                 hostingView.frame = screen.frame
                 window.contentView = hostingView
 

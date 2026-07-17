@@ -71,7 +71,11 @@ struct WorkspaceExecutorTests {
         defer { try? FileManager.default.removeItem(at: directoryURL) }
         let runner = WorkspaceProcessRunner()
 
-        let execution = await withTimeout(seconds: 1.0) {
+        // The outer window is only a hang backstop, not the timing under test:
+        // a broken runner timeout still fails via isTimedOut below (the child
+        // exits after 3s with a non-timeout reason). 1.0s flaked on slow CI
+        // runners where process spawn alone can eat the whole margin.
+        let execution = await withTimeout(seconds: 5.0) {
             await runner.run(
                 executableURL: URL(fileURLWithPath: "/bin/sh"),
                 arguments: ["-c", "sleep 3 & wait"],

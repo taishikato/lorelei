@@ -35,19 +35,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        // A hosting controller sizes the window to the SwiftUI content, so the
-        // window fits the settings snugly with no dead space below them.
-        let hostingController = NSHostingController(
+        // Content-fitted window without SwiftUI's built-in window sizing,
+        // which crashes on this OS - see WindowFittingHostingView.
+        let hostingView = WindowFittingHostingView(
             rootView: CompanionPanelView(companionManager: companionManager)
         )
-        // Content-driven window sizing via preferredContentSize only. The
-        // default options add min/max window extrema, whose update path
-        // re-marks constraints during the window's own updateConstraints pass
-        // and crashes when the panel content updates mid-display-cycle
-        // (owner-reproduced with this window open during an edit; plan 033/034).
-        hostingController.sizingOptions = [.preferredContentSize]
-        let settingsWindow = NSWindow(contentViewController: hostingController)
-        settingsWindow.styleMask = [.titled, .closable, .miniaturizable]
+        hostingView.sizingOptions = []
+        let settingsWindow = NSWindow(
+            contentRect: .zero,
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        settingsWindow.contentView = hostingView
+        settingsWindow.setContentSize(hostingView.fittingSize)
 
         settingsWindow.title = "Lorelei Settings"
         settingsWindow.isReleasedWhenClosed = false
