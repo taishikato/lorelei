@@ -630,4 +630,95 @@ struct CompanionManagerTurnTests {
         #expect(manager.latestResultSummary == nil)
         #expect(manager.pendingApprovalTitle == nil)
     }
+
+    @Test func companionManagerRecordsCompletedTurnWhenHistoryEnabled() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerHistoryEnabledTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerHistoryEnabledTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let historyRecorder = HistoryRecordRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            historyRecorder: { role, text in
+                historyRecorder.record(role: role, text: text)
+            },
+            historyEnabled: { true },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<200 {
+            if historyRecorder.roles.count >= 2 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(historyRecorder.roles == ["user", "assistant"])
+        #expect(historyRecorder.texts == [
+            "use computer use to inspect TextEdit",
+            "Hello"
+        ])
+        #expect(historyRecorder.assistantCount == 1)
+        #expect(!historyRecorder.texts.contains("Hel"))
+        #expect(!historyRecorder.texts.contains("lo"))
+    }
+
+    @Test func companionManagerRecordsNothingWhenHistoryDisabled() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerHistoryDisabledTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerHistoryDisabledTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Hel"}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"lo"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let historyRecorder = HistoryRecordRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            historyRecorder: { role, text in
+                historyRecorder.record(role: role, text: text)
+            },
+            historyEnabled: { false },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<200 {
+            if case .finished = manager.runStatus {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(historyRecorder.roles.isEmpty)
+        #expect(manager.streamText == "Hello")
+    }
+}
+
+@MainActor
+private final class HistoryRecordRecorder {
+    private(set) var roles: [String] = []
+    private(set) var texts: [String] = []
+
+    var assistantCount: Int {
+        roles.filter { $0 == "assistant" }.count
+    }
+
+    func record(role: String, text: String) {
+        roles.append(role)
+        texts.append(text)
+    }
 }
