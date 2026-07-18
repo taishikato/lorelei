@@ -16,7 +16,9 @@ struct CompanionPanelView: View {
     @ObservedObject private var audioInputDeviceStore: AudioInputDeviceStore
     @StateObject private var loginItemController: LoginItemSettingsController
     @StateObject private var updateChecker = UpdateChecker()
+    @State private var historyWindowController = HistoryWindowController()
     @AppStorage("LoreleiReadBackFullResponses") private var readBackFullResponses = false
+    @AppStorage("LoreleiPersistentHistoryEnabled") private var persistentHistoryEnabled = false
 
     @MainActor
     init(companionManager: CompanionManager) {
@@ -139,6 +141,36 @@ struct CompanionPanelView: View {
                     Spacer()
 
                     Toggle("", isOn: $readBackFullResponses)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                }
+                .padding(8)
+                .background(rowBackground)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Conversation history")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Text("Save transcripts and answers to a local file")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("View") {
+                        deferredAction { historyWindowController.show() }
+                    }
+                    .buttonStyle(PanelButtonStyle(kind: .small))
+                    .pointerCursor()
+
+                    Toggle("", isOn: $persistentHistoryEnabled)
                         .labelsHidden()
                         .toggleStyle(.switch)
                 }
