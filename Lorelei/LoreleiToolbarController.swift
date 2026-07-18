@@ -12,19 +12,13 @@ import SwiftUI
 @MainActor
 final class LoreleiToolbarExpansionState: ObservableObject {
     @Published var isExpanded = false
-    @Published var showsNotchPeek = false
 }
 
 @MainActor
 final class LoreleiToolbarController {
     private enum Metrics {
-        static let collapsedSize = CGSize(width: 140, height: 40)
         static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
-        static let peekWidth: CGFloat = 104
-        // 22pt resting chin + 8pt of hover lean-out headroom; the view keeps
-        // the extra 8pt as bottom padding until the pointer hovers the head.
-        static let peekChinHeight: CGFloat = 30
     }
 
     private let companionManager: CompanionManager
@@ -73,30 +67,37 @@ final class LoreleiToolbarController {
         )
     }
 
-    /// Frame for the collapsed "peeking from behind the notch" window.
-    ///
-    /// The window spans from the very top of the screen (`screenFrame`, not
-    /// `visibleFrame`) so the head shape runs seamlessly into the camera
-    /// housing: everything inside the notch is physically invisible, and only
-    /// the chin below it shows, which sells the peeking illusion. The notch
-    /// is always centered on the screen, so centering on midX is enough.
-    static func collapsedPeekFrame(
+    /// Top-centered collapsed island window, flush with the screen's top edge.
+    static func collapsedIslandFrame(screenFrame: CGRect, windowSize: CGSize) -> CGRect {
+        CGRect(
+            x: screenFrame.midX - (windowSize.width / 2),
+            y: screenFrame.maxY - windowSize.height,
+            width: windowSize.width,
+            height: windowSize.height
+        )
+    }
+
+    static func collapsedWindowSize(
         screenFrame: CGRect,
         safeAreaTop: CGFloat,
-        width: CGFloat,
-        chinHeight: CGFloat
-    ) -> CGRect {
-        CGRect(
-            x: screenFrame.midX - (width / 2),
-            y: screenFrame.maxY - safeAreaTop - chinHeight,
-            width: width,
-            height: safeAreaTop + chinHeight
+        auxiliaryTopLeftWidth: CGFloat?,
+        auxiliaryTopRightWidth: CGFloat?
+    ) -> CGSize {
+        let notchWidth = IslandGeometry.notchWidth(
+            screenFrame: screenFrame,
+            auxiliaryTopLeftWidth: auxiliaryTopLeftWidth,
+            auxiliaryTopRightWidth: auxiliaryTopRightWidth
         )
+        let islandSize = IslandGeometry.islandSize(
+            notchWidth: notchWidth,
+            safeAreaTop: safeAreaTop
+        )
+        return IslandGeometry.windowSize(islandSize: islandSize)
     }
 
     private func makePanel() -> NSPanel {
         let screen = screenContainingMouse()
-        let size = currentSize
+        let size = currentSize(for: screen)
         let frame = Self.panelFrame(
             screenFrame: screen.visibleFrame,
             size: size,
@@ -142,40 +143,48 @@ final class LoreleiToolbarController {
         return panel
     }
 
-    private var currentSize: CGSize {
-        expansionState.isExpanded ? Metrics.expandedSize : Metrics.collapsedSize
+    private func currentSize(for screen: NSScreen) -> CGSize {
+        if expansionState.isExpanded {
+            return Metrics.expandedSize
+        }
+        return Self.collapsedWindowSize(
+            screenFrame: screen.frame,
+            safeAreaTop: screen.safeAreaInsets.top,
+            auxiliaryTopLeftWidth: Self.auxiliaryWidth(screen.auxiliaryTopLeftArea),
+            auxiliaryTopRightWidth: Self.auxiliaryWidth(screen.auxiliaryTopRightArea)
+        )
+    }
+
+    private static func auxiliaryWidth(_ area: NSRect?) -> CGFloat? {
+        guard let area, area.width > 0 else { return nil }
+        return area.width
     }
 
     private func positionPanel(_ panel: NSPanel, animated: Bool = false) {
         let screen = screenContainingMouse()
-        let usesPeek = !expansionState.isExpanded && screen.safeAreaInsets.top > 0
-        if expansionState.showsNotchPeek != usesPeek {
-            expansionState.showsNotchPeek = usesPeek
-        }
+        let size = currentSize(for: screen)
 
         let frame: CGRect
-        if usesPeek {
-            frame = Self.collapsedPeekFrame(
-                screenFrame: screen.frame,
-                safeAreaTop: screen.safeAreaInsets.top,
-                width: Metrics.peekWidth,
-                chinHeight: Metrics.peekChinHeight
-            )
-        } else {
+        if expansionState.isExpanded {
             frame = Self.panelFrame(
                 screenFrame: screen.visibleFrame,
-                size: currentSize,
+                size: size,
                 topInset: Metrics.topInset
+            )
+        } else {
+            frame = Self.collapsedIslandFrame(
+                screenFrame: screen.frame,
+                windowSize: size
             )
         }
 
-        // The peek window extends into the menu bar region; a window shadow
-        // there would outline the part of the head that is supposed to be
-        // hidden behind the notch and break the illusion.
-        panel.hasShadow = !usesPeek
+        // Island shadow lives on the SwiftUI shape; a window shadow would
+        // outline the notch-matching region and break the merge illusion.
+        panel.hasShadow = expansionState.isExpanded
 
         panel.setFrame(frame, display: true, animate: animated)
         panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
+        panel.setContentSize(frame.size)
     }
 
     private func screenContainingMouse() -> NSScreen {

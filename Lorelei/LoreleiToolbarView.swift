@@ -2,7 +2,7 @@
 //  LoreleiToolbarView.swift
 //  Lorelei
 //
-//  SwiftUI content for the floating glass toolbar.
+//  SwiftUI content for the floating island toolbar.
 //
 
 import SwiftUI
@@ -13,30 +13,28 @@ struct LoreleiToolbarView: View {
     let toggleExpansion: @MainActor @Sendable () -> Void
     let openSettings: @MainActor @Sendable () -> Void
 
-    @State private var isPeekHovered = false
+    @State private var isHeadHovered = false
+    @State private var headSide: IslandSide = .left
+    @State private var sideScheduler = IslandSideScheduler()
+
+    private var activity: IslandActivity {
+        IslandActivity.activity(for: companionManager.runStatus)
+    }
 
     var body: some View {
         Group {
-            if !expansionState.isExpanded && expansionState.showsNotchPeek {
-                notchPeek
-            } else {
+            if expansionState.isExpanded {
                 GlassEffectContainer {
-                    Group {
-                        if expansionState.isExpanded {
-                            expandedPanel
-                        } else {
-                            collapsedCapsule
-                        }
-                    }
-                    .frame(
-                        width: expansionState.isExpanded ? 460 : 140,
-                        height: expansionState.isExpanded ? 430 : 40
-                    )
-                    .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: expansionState.isExpanded ? 18 : 18))
+                    expandedPanel
+                        .frame(width: 460, height: 430)
+                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
                 }
+            } else {
+                islandView
             }
         }
         .animation(.snappy(duration: 0.22), value: expansionState.isExpanded)
+        .animation(.snappy(duration: 0.22), value: activity)
     }
 
     static func statusLabel(for runStatus: LoreleiRunStatus) -> String {
@@ -56,62 +54,174 @@ struct LoreleiToolbarView: View {
         }
     }
 
-    /// Lorelei peeking out from behind the notch: a glass head shape whose
-    /// top runs under the physical camera housing (invisible), leaving only
-    /// the chin with the face visible below the notch edge.
-    ///
-    /// Clickability affordance: the window is a bit taller than the resting
-    /// chin, and on hover the head leans further out (bottom inset animates
-    /// to zero) with a pointing-hand cursor - the motion signals that the
-    /// face is a control, not a decoration.
-    private var notchPeek: some View {
-        GlassEffectContainer {
-            Button(action: { deferredAction { toggleExpansion() } }) {
-                ZStack(alignment: .bottom) {
+    /// Collapsed island: true-black notch bar, side-peeking head while idle /
+    /// finished, and an activity tray that drops while active.
+    private var islandView: some View {
+        Button(action: { deferredAction { toggleExpansion() } }) {
+            GeometryReader { proxy in
+                let flank = IslandGeometry.headRestProtrusion + IslandGeometry.headHoverExtra
+                let islandWidth = max(proxy.size.width - (flank * 2), 1)
+                let islandHeight = max(proxy.size.height - IslandGeometry.trayHeight, 1)
+
+                ZStack(alignment: .top) {
                     Color.clear
 
-                    faceView
-                        .scaleEffect(0.78, anchor: .bottom)
-                        .padding(.bottom, 2)
+                    VStack(spacing: 0) {
+                        ZStack {
+                            islandBody(width: islandWidth, height: islandHeight)
+
+                            if activity.showsHead {
+                                islandHead
+                                    .offset(x: headOffset(islandWidth: islandWidth), y: islandHeight * 0.18)
+                                    .animation(.snappy(duration: 0.2), value: headSide)
+                                    .animation(.snappy(duration: 0.18), value: isHeadHovered)
+                            }
+                        }
+                        .frame(width: islandWidth, height: islandHeight)
+                        .frame(maxWidth: .infinity)
+
+                        ZStack(alignment: .top) {
+                            if activity.showsTray {
+                                islandTray
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                            }
+                        }
+                        .frame(width: IslandGeometry.trayWidth, height: IslandGeometry.trayHeight, alignment: .top)
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(peekHeadShape)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: peekHeadShape)
-            .padding(.bottom, isPeekHovered ? 0 : peekHoverLeanDistance)
-            .animation(.snappy(duration: 0.18), value: isPeekHovered)
-            .onHover { hovering in
-                isPeekHovered = hovering
-            }
-            .pointerCursor()
-            .help(Self.statusLabel(for: companionManager.runStatus))
-            .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
-        }
-    }
-
-    /// Extra chin the peek gains while hovered. Must match the difference
-    /// between the controller's window chin height and the resting look.
-    private let peekHoverLeanDistance: CGFloat = 8
-
-    private var peekHeadShape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            bottomLeadingRadius: 14,
-            bottomTrailingRadius: 14,
-            style: .continuous
-        )
-    }
-
-    private var collapsedCapsule: some View {
-        Button(action: { deferredAction { toggleExpansion() } }) {
-            faceView
-                .padding(.horizontal, 14)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Capsule())
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(Self.statusLabel(for: companionManager.runStatus))
         .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
+        .pointerCursor()
+        .onHover { hovering in
+            isHeadHovered = hovering
+        }
+        .onChange(of: companionManager.runStatus) { oldStatus, newStatus in
+            let wasIdle = IslandActivity.activity(for: oldStatus) == .idlePeek
+            let isIdle = IslandActivity.activity(for: newStatus) == .idlePeek
+            guard isIdle, !wasIdle else { return }
+            var scheduler = sideScheduler
+            headSide = scheduler.sideAfterReturnToIdle(current: headSide)
+            sideScheduler = scheduler
+        }
+        .task(id: activity == .idlePeek) {
+            guard activity == .idlePeek else { return }
+            while !Task.isCancelled {
+                var scheduler = sideScheduler
+                let delay = scheduler.nextSwitchDelay()
+                sideScheduler = scheduler
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                guard IslandActivity.activity(for: companionManager.runStatus) == .idlePeek else {
+                    continue
+                }
+                withAnimation(.snappy(duration: 0.22)) {
+                    headSide = headSide == .left ? .right : .left
+                }
+            }
+        }
+    }
+
+    private func islandBody(width: CGFloat, height: CGFloat) -> some View {
+        UnevenRoundedRectangle(
+            bottomLeadingRadius: IslandGeometry.islandBottomRadius,
+            bottomTrailingRadius: IslandGeometry.islandBottomRadius,
+            style: .continuous
+        )
+        .fill(DS.Colors.islandSurface)
+        .frame(width: width, height: height)
+        .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 4)
+    }
+
+    private var islandHead: some View {
+        ZStack {
+            Capsule(style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [DS.Colors.islandRaised, DS.Colors.islandSurface],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            Capsule(style: .continuous)
+                .stroke(DS.Colors.islandHairline, lineWidth: 0.8)
+                .padding(.top, 0.5)
+
+            faceView
+                .scaleEffect(0.55)
+        }
+        .frame(width: IslandGeometry.headSize.width, height: IslandGeometry.headSize.height)
+        .shadow(color: .black.opacity(0.28), radius: 6, x: 0, y: 2)
+    }
+
+    private func headOffset(islandWidth: CGFloat) -> CGFloat {
+        let protrusion = IslandGeometry.headRestProtrusion
+            + (isHeadHovered ? IslandGeometry.headHoverExtra : 0)
+        let halfIsland = islandWidth / 2
+        let halfHead = IslandGeometry.headSize.width / 2
+        switch headSide {
+        case .left:
+            return -(halfIsland + protrusion - halfHead)
+        case .right:
+            return halfIsland + protrusion - halfHead
+        }
+    }
+
+    private var islandTray: some View {
+        ZStack {
+            UnevenRoundedRectangle(
+                bottomLeadingRadius: IslandGeometry.trayCornerRadius,
+                bottomTrailingRadius: IslandGeometry.trayCornerRadius,
+                style: .continuous
+            )
+            .fill(
+                LinearGradient(
+                    colors: [DS.Colors.islandRaised, DS.Colors.islandSurface],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            UnevenRoundedRectangle(
+                bottomLeadingRadius: IslandGeometry.trayCornerRadius,
+                bottomTrailingRadius: IslandGeometry.trayCornerRadius,
+                style: .continuous
+            )
+            .stroke(DS.Colors.islandHairline, lineWidth: 0.8)
+
+            trayContent
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+        }
+        .frame(width: IslandGeometry.trayWidth, height: IslandGeometry.trayHeight)
+        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 3)
+    }
+
+    @ViewBuilder
+    private var trayContent: some View {
+        switch activity {
+        case .listening:
+            IslandListeningBarsView(audioPowerLevel: companionManager.currentAudioPowerLevel)
+        case .transcribing:
+            IslandListeningBarsView(audioPowerLevel: 0.08, calmShimmer: true)
+        case .working:
+            IslandScanningEyesView()
+        case .needsApproval:
+            IslandScanningEyesView()
+                .opacity(0.55)
+                .modifier(IslandApprovalPulseModifier())
+        case .idlePeek, .finished:
+            EmptyView()
+        }
     }
 
     private var expandedPanel: some View {
@@ -384,24 +494,91 @@ struct LoreleiToolbarView: View {
         }
     }
 
-    private var streamDisplayText: String {
-        if case .finished = companionManager.runStatus,
-           let latestResultSummary = companionManager.latestResultSummary,
-           !latestResultSummary.isEmpty {
-            return latestResultSummary
-        }
-
-        if !companionManager.streamText.isEmpty {
-            return companionManager.streamText
-        }
-
-        return companionManager.latestResultSummary ?? ""
-    }
-
     private var showsStopButton: Bool {
         companionManager.canStopCurrentRun
     }
 
+}
+
+private struct IslandListeningBarsView: View {
+    let audioPowerLevel: CGFloat
+    var calmShimmer: Bool = false
+
+    private let barCount = 5
+    private let listeningBarProfile: [CGFloat] = [0.4, 0.7, 1.0, 0.7, 0.4]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 36.0)) { timelineContext in
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(0..<barCount, id: \.self) { barIndex in
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(Color.white.opacity(calmShimmer ? 0.7 : 0.92))
+                        .frame(
+                            width: 3,
+                            height: barHeight(for: barIndex, timelineDate: timelineContext.date)
+                        )
+                }
+            }
+        }
+    }
+
+    private func barHeight(for barIndex: Int, timelineDate: Date) -> CGFloat {
+        let animationPhase = CGFloat(timelineDate.timeIntervalSinceReferenceDate * (calmShimmer ? 2.1 : 3.6))
+            + CGFloat(barIndex) * 0.35
+        if calmShimmer {
+            let shimmer = (sin(animationPhase) + 1) / 2
+            return 4 + shimmer * 6 * listeningBarProfile[barIndex]
+        }
+
+        let normalizedAudioPowerLevel = max(audioPowerLevel - 0.008, 0)
+        let easedAudioPowerLevel = pow(min(normalizedAudioPowerLevel * 2.85, 1), 0.76)
+        let reactiveHeight = easedAudioPowerLevel * 12 * listeningBarProfile[barIndex]
+        let idlePulse = (sin(animationPhase) + 1) / 2 * 1.5
+        return 3 + reactiveHeight + idlePulse
+    }
+}
+
+private struct IslandScanningEyesView: View {
+    @State private var lookOffset: CGFloat = -3
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Capsule()
+                .fill(Color.white.opacity(0.92))
+                .frame(width: 7, height: 7)
+            Capsule()
+                .fill(Color.white.opacity(0.92))
+                .frame(width: 7, height: 7)
+        }
+        .offset(x: lookOffset)
+        .task {
+            while !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.55)) {
+                    lookOffset = 3
+                }
+                try? await Task.sleep(for: .milliseconds(650))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.55)) {
+                    lookOffset = -3
+                }
+                try? await Task.sleep(for: .milliseconds(650))
+            }
+        }
+    }
+}
+
+private struct IslandApprovalPulseModifier: ViewModifier {
+    @State private var pulsed = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(pulsed ? 0.45 : 1.0)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                    pulsed = true
+                }
+            }
+    }
 }
 
 /// Runs a state-mutating button action on the next main-actor tick.
