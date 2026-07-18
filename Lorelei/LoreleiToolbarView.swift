@@ -103,8 +103,17 @@ struct LoreleiToolbarView: View {
                                     .combined(with: .opacity)
                             ))
                     } else if activity.showsTray {
-                        islandTray
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                        // The tray is a button too: tapping the activity
+                        // readout opens the panel (owner report: the tray
+                        // face was dead after the tray moved out of the
+                        // island button).
+                        Button(action: { deferredAction { toggleExpansion() } }) {
+                            islandTray
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .pointerCursor()
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
