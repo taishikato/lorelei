@@ -64,18 +64,21 @@ struct LoreleiToolbarView: View {
                     Color.clear
 
                     VStack(spacing: 0) {
-                        ZStack {
-                            islandBody(width: islandWidth, height: islandHeight)
-
-                            if activity.showsHead {
-                                islandHead
-                                    .offset(x: headOffset(islandWidth: islandWidth), y: islandHeight * 0.18)
-                                    .animation(.snappy(duration: 0.2), value: headSide)
-                                    .animation(.snappy(duration: 0.18), value: isHeadHovered)
+                        // The head is drawn OVER the island (same fill, square
+                        // junction edge, so the seam is invisible): rendering it
+                        // behind put the island's own drop shadow on top of the
+                        // head's root, which read as a dark gap at the joint.
+                        islandBody(width: islandWidth, height: islandHeight)
+                            .overlay(alignment: headSide == .left ? .bottomLeading : .bottomTrailing) {
+                                if activity.showsHead {
+                                    islandHead(height: islandHeight)
+                                        .offset(x: headProtrusionOffset, y: 0)
+                                        .animation(.snappy(duration: 0.2), value: headSide)
+                                        .animation(.snappy(duration: 0.18), value: isHeadHovered)
+                                }
                             }
-                        }
-                        .frame(width: islandWidth, height: islandHeight)
-                        .frame(maxWidth: .infinity)
+                            .frame(width: islandWidth, height: islandHeight)
+                            .frame(maxWidth: .infinity)
 
                         ZStack(alignment: .top) {
                             if activity.showsTray {
@@ -90,7 +93,11 @@ struct LoreleiToolbarView: View {
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             }
-            .contentShape(Rectangle())
+            .contentShape(IslandHitShape(
+                showsHead: activity.showsHead,
+                showsTray: activity.showsTray,
+                headSide: headSide
+            ))
         }
         .buttonStyle(.plain)
         .help(Self.statusLabel(for: companionManager.runStatus))
@@ -130,9 +137,16 @@ struct LoreleiToolbarView: View {
     }
 
     private func islandBody(width: CGFloat, height: CGFloat) -> some View {
-        UnevenRoundedRectangle(
-            bottomLeadingRadius: IslandGeometry.islandBottomRadius,
-            bottomTrailingRadius: IslandGeometry.islandBottomRadius,
+        // The bottom corner goes SQUARE on the side the head is peeking
+        // from: the head continues the island's bottom line past the edge,
+        // and a rounded corner there lifts away from that line, exposing a
+        // wallpaper wedge under the curve (owner-observed gap).
+        let headOut = activity.showsHead
+        return UnevenRoundedRectangle(
+            bottomLeadingRadius: headOut && headSide == .left
+                ? 0 : IslandGeometry.islandBottomRadius,
+            bottomTrailingRadius: headOut && headSide == .right
+                ? 0 : IslandGeometry.islandBottomRadius,
             style: .continuous
         )
         .fill(DS.Colors.islandSurface)
@@ -140,37 +154,89 @@ struct LoreleiToolbarView: View {
         .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 4)
     }
 
-    private var islandHead: some View {
-        ZStack {
-            Capsule(style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [DS.Colors.islandRaised, DS.Colors.islandSurface],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            Capsule(style: .continuous)
-                .stroke(DS.Colors.islandHairline, lineWidth: 0.8)
-                .padding(.top, 0.5)
-
-            faceView
-                .scaleEffect(0.55)
-        }
-        .frame(width: IslandGeometry.headSize.width, height: IslandGeometry.headSize.height)
-        .shadow(color: .black.opacity(0.28), radius: 6, x: 0, y: 2)
-    }
-
-    private func headOffset(islandWidth: CGFloat) -> CGFloat {
-        let protrusion = IslandGeometry.headRestProtrusion
-            + (isHeadHovered ? IslandGeometry.headHoverExtra : 0)
-        let halfIsland = islandWidth / 2
-        let halfHead = IslandGeometry.headSize.width / 2
+    /// Rounded only on the side facing AWAY from the island: the junction
+    /// side stays square so the head's bottom edge continues the island's
+    /// bottom line with no wedge of wallpaper at the seam (owner feedback).
+    private var headShape: UnevenRoundedRectangle {
         switch headSide {
         case .left:
-            return -(halfIsland + protrusion - halfHead)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 10.5,
+                bottomLeadingRadius: 12,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
         case .right:
-            return halfIsland + protrusion - halfHead
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 12,
+                topTrailingRadius: 10.5,
+                style: .continuous
+            )
+        }
+    }
+
+    private func islandHead(height: CGFloat) -> some View {
+        ZStack {
+            // Seamless with the island: identical fill, no hairline, no
+            // gradient - the head must read as the same black object
+            // (owner direction), with its bottom edge flush with the island's.
+            headShape
+                .fill(DS.Colors.islandSurface)
+
+            // Dedicated tiny face: the toolbar faceView has its own layout
+            // size and overflowed the head capsule. Fixed geometry only.
+            islandHeadFace
+                // Keep the face on the protruding side so the island's edge
+                // never clips an eye.
+                .offset(x: headSide == .left ? -4 : 4)
+        }
+        .frame(width: IslandGeometry.headSize.width, height: height)
+        .clipShape(headShape)
+        .shadow(color: .black.opacity(0.22), radius: 4, x: 0, y: 2)
+    }
+
+    private var islandHeadFace: some View {
+        let expression = LoreleiFaceExpression.expression(for: companionManager.runStatus)
+        return VStack(spacing: 2.5) {
+            HStack(spacing: 7) {
+                Circle().fill(.white).frame(width: 4.5, height: 4.5)
+                Circle().fill(.white).frame(width: 4.5, height: 4.5)
+            }
+            .modifier(IslandBlink())
+
+            switch expression {
+            case .happy:
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(.white.opacity(0.85), lineWidth: 1.4)
+                    .frame(width: 9, height: 4)
+                    .mask(Rectangle().frame(height: 3).offset(y: 1.5))
+            case .sad:
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(.white.opacity(0.85), lineWidth: 1.4)
+                    .frame(width: 9, height: 4)
+                    .mask(Rectangle().frame(height: 3).offset(y: -1.5))
+            default:
+                Capsule().fill(.white.opacity(0.8))
+                    .frame(width: 8, height: 1.6)
+            }
+        }
+    }
+
+    /// Horizontal shift from the island's edge alignment: the head is
+    /// edge-anchored (bottomLeading/bottomTrailing), so a positive protrusion
+    /// slides it outward past the flank while the rest stays hidden behind
+    /// the island body.
+    private var headProtrusionOffset: CGFloat {
+        let protrusion = IslandGeometry.headRestProtrusion
+            + (isHeadHovered ? IslandGeometry.headHoverExtra : 0)
+        switch headSide {
+        case .left:
+            return -protrusion
+        case .right:
+            return protrusion
         }
     }
 
@@ -599,5 +665,85 @@ private struct IslandApprovalPulseModifier: ViewModifier {
 func deferredAction(_ action: @escaping @MainActor @Sendable () -> Void) {
     Task { @MainActor in
         action()
+    }
+}
+
+
+/// Periodic eye blink for the island head: brief vertical squash every few
+/// seconds, with a randomized pause so restarts do not sync.
+private struct IslandBlink: ViewModifier {
+    @State private var isBlinking = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(y: isBlinking ? 0.12 : 1, anchor: .center)
+            .animation(.easeInOut(duration: 0.09), value: isBlinking)
+            .task {
+                while !Task.isCancelled {
+                    let pause = TimeInterval.random(in: 3.2...6.0)
+                    try? await Task.sleep(for: .seconds(pause))
+                    guard !Task.isCancelled else { return }
+                    isBlinking = true
+                    try? await Task.sleep(for: .milliseconds(110))
+                    isBlinking = false
+                }
+            }
+    }
+}
+
+
+/// Hit-test region for the collapsed island button: the island bar itself,
+/// plus the peeking head while visible, plus the tray while visible. The
+/// transparent remainder of the fixed-size window must NOT be clickable
+/// (owner feedback: clicks below the island were opening the panel).
+private struct IslandHitShape: Shape {
+    let showsHead: Bool
+    let showsTray: Bool
+    let headSide: IslandSide
+
+    func path(in rect: CGRect) -> Path {
+        let flank = IslandGeometry.headRestProtrusion + IslandGeometry.headHoverExtra
+        let islandHeight = max(rect.height - IslandGeometry.trayHeight, 1)
+        var path = Path()
+
+        path.addRect(CGRect(
+            x: flank,
+            y: 0,
+            width: max(rect.width - flank * 2, 1),
+            height: islandHeight
+        ))
+
+        if showsHead {
+            let protrusion = IslandGeometry.headRestProtrusion + IslandGeometry.headHoverExtra
+            let headRect: CGRect
+            switch headSide {
+            case .left:
+                headRect = CGRect(
+                    x: flank - protrusion,
+                    y: 0,
+                    width: IslandGeometry.headSize.width,
+                    height: islandHeight
+                )
+            case .right:
+                headRect = CGRect(
+                    x: rect.width - flank + protrusion - IslandGeometry.headSize.width,
+                    y: 0,
+                    width: IslandGeometry.headSize.width,
+                    height: islandHeight
+                )
+            }
+            path.addRect(headRect)
+        }
+
+        if showsTray {
+            path.addRect(CGRect(
+                x: (rect.width - IslandGeometry.trayWidth) / 2,
+                y: islandHeight,
+                width: IslandGeometry.trayWidth,
+                height: IslandGeometry.trayHeight
+            ))
+        }
+
+        return path
     }
 }
