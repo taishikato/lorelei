@@ -26,4 +26,5 @@ struct CompanionManagerPermissionsTests {
 @MainActor
 private final class PermissionTestSpeechOutput: SpeechOutputing {
     func speak(_ text: String) {}
+    func stopSpeaking() {}
 }

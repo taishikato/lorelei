@@ -503,6 +503,7 @@ actor BlockingCodexAppServerTransport: CodexAppServerTransporting {
 @MainActor
 final class SilentSpeechOutput: SpeechOutputing {
     func speak(_ text: String) {}
+    func stopSpeaking() {}
 }
 
 struct FakeAudioInputDeviceEnumerator: AudioInputDeviceEnumerating {

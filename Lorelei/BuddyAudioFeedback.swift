@@ -22,12 +22,27 @@ protocol BuddyAudioFeedbacking: AnyObject {
 @MainActor
 final class BuddyAudioFeedback: BuddyAudioFeedbacking {
     private let speechOutput: SpeechOutputing
+    private let readBackFullResponses: () -> Bool
 
-    init(speechOutput: SpeechOutputing) {
+    init(
+        speechOutput: SpeechOutputing,
+        readBackFullResponses: @escaping () -> Bool = {
+            UserDefaults.standard.bool(forKey: "LoreleiReadBackFullResponses")
+        }
+    ) {
         self.speechOutput = speechOutput
+        self.readBackFullResponses = readBackFullResponses
     }
 
     func play(_ cue: BuddyAudioCue, spokenSummary: String?) {
+        if cue == .listeningStarted {
+            speechOutput.stopSpeaking()
+            if let soundName = soundName(for: cue) {
+                NSSound(named: soundName)?.play()
+            }
+            return
+        }
+
         if let soundName = soundName(for: cue) {
             NSSound(named: soundName)?.play()
         }
@@ -38,6 +53,14 @@ final class BuddyAudioFeedback: BuddyAudioFeedbacking {
         }
 
         guard let spokenSummary else { return }
+
+        if readBackFullResponses() {
+            let trimmed = spokenSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            speechOutput.speak(trimmed)
+            return
+        }
+
         let sentence = Self.firstSentence(spokenSummary)
         guard !sentence.isEmpty else { return }
         speechOutput.speak(sentence)
