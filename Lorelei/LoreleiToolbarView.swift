@@ -24,11 +24,8 @@ struct LoreleiToolbarView: View {
     var body: some View {
         Group {
             if expansionState.isExpanded {
-                GlassEffectContainer {
-                    expandedPanel
-                        .frame(width: 460, height: 430)
-                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
-                }
+                expandedPanel
+                    .frame(width: 460, height: 430)
             } else {
                 islandView
             }
@@ -239,6 +236,15 @@ struct LoreleiToolbarView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            UnevenRoundedRectangle(
+                bottomLeadingRadius: IslandGeometry.trayCornerRadius,
+                bottomTrailingRadius: IslandGeometry.trayCornerRadius,
+                style: .continuous
+            )
+            .fill(DS.Colors.islandSurface)
+            .shadow(color: .black.opacity(0.4), radius: 14, x: 0, y: 8)
+        )
     }
 
     private var expandedHeader: some View {
@@ -250,19 +256,19 @@ struct LoreleiToolbarView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle(.primary)
+                .foregroundStyle(DS.Colors.textPrimary)
 
             Spacer()
 
             Button(action: { deferredAction { companionManager.startNewChatSession() } }) {
                 Text("New Chat")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Colors.textSecondary)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(.white.opacity(0.12))
+                            .fill(DS.Colors.islandRaised)
                     )
                     .contentShape(Capsule())
             }
@@ -274,7 +280,7 @@ struct LoreleiToolbarView: View {
             Button(action: { deferredAction { openSettings() } }) {
                 Image(systemName: "gearshape")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Colors.textSecondary)
                     .frame(width: 26, height: 26)
                     .contentShape(Circle())
             }
@@ -286,7 +292,7 @@ struct LoreleiToolbarView: View {
             Button(action: { deferredAction { toggleExpansion() } }) {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Colors.textSecondary)
                     .frame(width: 26, height: 26)
                     .contentShape(Circle())
             }
@@ -325,11 +331,11 @@ struct LoreleiToolbarView: View {
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.black.opacity(0.12))
+                    .fill(DS.Colors.islandRaised)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(.white.opacity(0.12), lineWidth: 0.7)
+                    .stroke(DS.Colors.islandHairline, lineWidth: 0.7)
             )
             .onChange(of: companionManager.conversationLog) { _, log in
                 guard let lastID = log.last?.id else { return }
@@ -359,34 +365,34 @@ struct LoreleiToolbarView: View {
         VStack(spacing: 14) {
             Image(systemName: "waveform")
                 .font(.system(size: 26, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.Colors.textSecondary)
 
             VStack(spacing: 6) {
                 HStack(spacing: 5) {
                     Text("Hold")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(DS.Colors.textPrimary)
 
                     ForEach(BuddyPushToTalkShortcut.currentShortcutOption.keyCapsuleLabels, id: \.self) { keyLabel in
                         Text(keyLabel)
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(DS.Colors.textPrimary)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
                             .background(
                                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(.white.opacity(0.14))
+                                    .fill(DS.Colors.islandRaised)
                             )
                     }
 
                     Text("and speak")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(DS.Colors.textPrimary)
                 }
 
                 Text("Release to send. Hold again while Lorelei is working to steer the task.")
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(DS.Colors.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -404,7 +410,7 @@ struct LoreleiToolbarView: View {
 
                 Text("Lorelei needs permissions before it can listen: \(companionManager.missingPermissionNames.joined(separator: ", "))")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(DS.Colors.textPrimary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -413,12 +419,12 @@ struct LoreleiToolbarView: View {
             Button(action: { deferredAction { openSettings() } }) {
                 Text("Open Settings")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(DS.Colors.textPrimary)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
                     .background(
                         Capsule()
-                            .fill(.white.opacity(0.18))
+                            .fill(DS.Colors.islandRaised)
                     )
                     .contentShape(Capsule())
             }
@@ -437,7 +443,7 @@ struct LoreleiToolbarView: View {
                 Spacer(minLength: 34)
                 Text("You: \(entry.text)")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(DS.Colors.textPrimary)
                     .multilineTextAlignment(.trailing)
                     .lineLimit(nil)
                     .textSelection(.enabled)
@@ -445,7 +451,7 @@ struct LoreleiToolbarView: View {
         case .assistant:
             Text(entry.text)
                 .font(.system(size: 12, weight: .light, design: .monospaced))
-                .foregroundStyle(.primary)
+                .foregroundStyle(DS.Colors.textPrimary)
                 .lineLimit(nil)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -456,7 +462,7 @@ struct LoreleiToolbarView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(companionManager.pendingApprovalTitle ?? "Needs approval")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(DS.Colors.textPrimary)
                 .lineLimit(2)
 
             HStack(spacing: 8) {
