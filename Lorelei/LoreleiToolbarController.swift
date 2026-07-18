@@ -25,6 +25,7 @@ final class LoreleiToolbarController {
     private let expansionState = LoreleiToolbarExpansionState()
     private var runStatusCancellable: AnyCancellable?
     private var panel: NSPanel?
+    private weak var islandHostingView: IslandClickRegionHostingView<LoreleiToolbarView>?
     var onOpenSettings: (() -> Void)?
 
     init(companionManager: CompanionManager) {
@@ -32,8 +33,17 @@ final class LoreleiToolbarController {
         runStatusCancellable = companionManager.$runStatus
             .receive(on: DispatchQueue.main)
             .sink { [weak self] runStatus in
-                guard case .needsApproval = runStatus else { return }
-                self?.setExpanded(true)
+                guard let self else { return }
+                self.islandHostingView?.trayVisible =
+                    IslandActivity.activity(for: runStatus).showsTray
+                if case .needsApproval = runStatus {
+                    self.setExpanded(true)
+                } else if let panel = self.panel, !self.expansionState.isExpanded {
+                    // The collapsed window only spans the island band while no
+                    // tray is showing (clicks below must reach other apps);
+                    // grow it for the tray, shrink it back after.
+                    self.positionPanel(panel)
+                }
             }
     }
 
@@ -49,6 +59,7 @@ final class LoreleiToolbarController {
     }
 
     func setExpanded(_ expanded: Bool) {
+        islandHostingView?.clickRegionEnabled = !expanded
         guard expansionState.isExpanded != expanded else { return }
         expansionState.isExpanded = expanded
         if expanded {
@@ -132,12 +143,24 @@ final class LoreleiToolbarController {
                 self?.onOpenSettings?()
             }
         )
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = IslandClickRegionHostingView(rootView: rootView)
         // Manual window sizing: the hosting view must never drive the window
         // (see plan 033 crash anatomy).
         hostingView.sizingOptions = []
         hostingView.frame = NSRect(origin: .zero, size: size)
-        panel.contentView = hostingView
+        hostingView.clickRegionEnabled = !expansionState.isExpanded
+        hostingView.trayVisible = IslandActivity.activity(for: companionManager.runStatus).showsTray
+
+        // The hosting view is NOT the contentView: AppKit force-resizes the
+        // contentView with the window, and the collapsed window is shorter
+        // than the SwiftUI layout (island band only while no tray shows, so
+        // clicks under the island reach other apps). A passthrough container
+        // holds the full-size hosting view top-aligned; the window edge clips
+        // the rest.
+        let container = PassthroughContainerView(frame: NSRect(origin: .zero, size: size))
+        container.addSubview(hostingView)
+        panel.contentView = container
+        islandHostingView = hostingView
         panel.setContentSize(size)
 
         return panel
@@ -172,9 +195,14 @@ final class LoreleiToolbarController {
                 topInset: Metrics.topInset
             )
         } else {
+            let trayVisible = IslandActivity
+                .activity(for: companionManager.runStatus).showsTray
+            let windowHeight = trayVisible
+                ? size.height
+                : max(size.height - IslandGeometry.trayHeight, 1)
             frame = Self.collapsedIslandFrame(
                 screenFrame: screen.frame,
-                windowSize: size
+                windowSize: CGSize(width: size.width, height: windowHeight)
             )
         }
 
@@ -183,8 +211,14 @@ final class LoreleiToolbarController {
         panel.hasShadow = expansionState.isExpanded
 
         panel.setFrame(frame, display: true, animate: animated)
-        panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
-        panel.setContentSize(frame.size)
+        // Full SwiftUI layout size, top-aligned inside the (possibly shorter)
+        // window; AppKit clips whatever extends past the window's bottom.
+        islandHostingView?.frame = NSRect(
+            x: 0,
+            y: frame.height - size.height,
+            width: size.width,
+            height: size.height
+        )
     }
 
     private func screenContainingMouse() -> NSScreen {
@@ -192,5 +226,47 @@ final class LoreleiToolbarController {
         return NSScreen.screens.first { screen in
             NSMouseInRect(mouseLocation, screen.frame, false)
         } ?? NSScreen.main ?? NSScreen.screens.first!
+    }
+}
+
+
+/// Hosting view that refuses clicks outside the island's visual region at the
+/// AppKit level: SwiftUI contentShape alone still let the transparent part of
+/// the fixed-size panel swallow clicks meant for windows underneath (owner
+/// report: clicks below the island opened the panel). While collapsed, only
+/// the top island band (which contains the peeking head) and - when a tray is
+/// showing - the tray strip below it are hittable; everything else passes
+/// through to the desktop.
+final class IslandClickRegionHostingView<Content: View>: NSHostingView<Content> {
+    var clickRegionEnabled = false
+    var trayVisible = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard clickRegionEnabled else {
+            return super.hitTest(point)
+        }
+        let local = convert(point, from: superview)
+        let yFromTop = isFlipped ? local.y : bounds.height - local.y
+        let islandHeight = max(bounds.height - IslandGeometry.trayHeight, 1)
+
+        if yFromTop <= islandHeight {
+            return super.hitTest(point)
+        }
+        if trayVisible,
+           yFromTop <= islandHeight + IslandGeometry.trayHeight,
+           abs(local.x - bounds.midX) <= IslandGeometry.trayWidth / 2 {
+            return super.hitTest(point)
+        }
+        return nil
+    }
+}
+
+
+/// Container that never swallows clicks itself: only results from subviews
+/// (the island hosting view with its own hit gating) are returned.
+final class PassthroughContainerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let result = super.hitTest(point)
+        return result === self ? nil : result
     }
 }
