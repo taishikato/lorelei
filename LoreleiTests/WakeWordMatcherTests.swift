@@ -43,4 +43,15 @@ struct WakeWordMatcherTests {
         #expect(!WakeWordMatcher.containsWakeWord("hello world"))
         #expect(!WakeWordMatcher.containsWakeWord("please open the browser"))
     }
+
+    @Test func matchesCommonSpeechAnalyzerSpellingsForDefaultWakeWord() {
+        #expect(WakeWordMatcher.containsWakeWord("lorelai"))
+        #expect(WakeWordMatcher.containsWakeWord("Hey Lorelai,"))
+        #expect(WakeWordMatcher.containsWakeWord("loreley"))
+    }
+
+    @Test func customWakeWordDoesNotAcceptLoreleiAliases() {
+        #expect(!WakeWordMatcher.containsWakeWord("lorelai", wakeWord: "buddy"))
+        #expect(WakeWordMatcher.containsWakeWord("buddy", wakeWord: "buddy"))
+    }
 }

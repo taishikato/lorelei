@@ -35,6 +35,20 @@ enum LoreleiDebugURLHandler {
         let wake = components.queryItems?.first(where: { $0.name == "wake" })?.value == "1"
         return AXProbeRequest(wake: wake)
     }
+
+    /// Parses `lorelei://wake-probe?on=1|0`. Returns nil when the host is not
+    /// wake-probe; otherwise the desired on/off state (default on).
+    static func wakeProbeRequest(url: URL) -> Bool? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme == "lorelei",
+              components.host == "wake-probe" else {
+            return nil
+        }
+        guard let onValue = components.queryItems?.first(where: { $0.name == "on" })?.value else {
+            return true
+        }
+        return onValue != "0"
+    }
 }
 
 @main
@@ -66,6 +80,9 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindowController: OnboardingWindowController?
     private var toolbarController: LoreleiToolbarController?
     private let companionManager = CompanionManager()
+#if DEBUG
+    private let wakeWordProbe = WakeWordProbe()
+#endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🎯 Lorelei: Starting...")
@@ -116,6 +133,14 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
                 AXFocusProbe.runAndLog(wake: request.wake)
                 continue
             }
+            if let enabled = LoreleiDebugURLHandler.wakeProbeRequest(url: url) {
+                if enabled {
+                    wakeWordProbe.start()
+                } else {
+                    wakeWordProbe.stop()
+                }
+                continue
+            }
             guard let prompt = LoreleiDebugURLHandler.debugPrompt(fromURL: url) else { continue }
             companionManager.handleDebugPrompt(prompt)
         }
@@ -135,6 +160,15 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
 
         if let request = LoreleiDebugURLHandler.axProbeRequest(url: url) {
             AXFocusProbe.runAndLog(wake: request.wake)
+            return
+        }
+
+        if let enabled = LoreleiDebugURLHandler.wakeProbeRequest(url: url) {
+            if enabled {
+                wakeWordProbe.start()
+            } else {
+                wakeWordProbe.stop()
+            }
             return
         }
 
