@@ -144,6 +144,8 @@ final class CompanionManager: ObservableObject {
     private let memoryStore: LoreleiMemoryStore
     private let speechOutput: SpeechOutputing
     private let audioFeedback: BuddyAudioFeedbacking
+    private let historyRecorder: (String, String) -> Void
+    private let historyEnabled: () -> Bool
     private let runStatusIdleReturnDelay: Duration
     private let transcribingWatchdogDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
@@ -206,6 +208,8 @@ final class CompanionManager: ObservableObject {
         askSelectionProvider: (() -> (snapshot: DictationSelectionSnapshot?, appName: String?))? = nil,
         codexScreenRequestOverride: ((String) async -> WorkspaceCommandResult)? = nil,
         memoryStore: LoreleiMemoryStore? = nil,
+        historyRecorder: ((String, String) -> Void)? = nil,
+        historyEnabled: (() -> Bool)? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         transcribingWatchdogDelay: Duration = .seconds(6),
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
@@ -221,6 +225,21 @@ final class CompanionManager: ObservableObject {
         self.askSelectionProvider = askSelectionProvider
         self.codexScreenRequestOverride = codexScreenRequestOverride
         self.memoryStore = memoryStore ?? LoreleiMemoryStore()
+        if let historyRecorder {
+            self.historyRecorder = historyRecorder
+        } else {
+            let storeBox = ConversationHistoryStoreBox()
+            self.historyRecorder = { role, text in
+                do {
+                    try storeBox.store.append(role: role, text: text)
+                } catch {
+                    LoreleiDiagLog.log("history: append failed \(error)")
+                }
+            }
+        }
+        self.historyEnabled = historyEnabled ?? {
+            UserDefaults.standard.bool(forKey: "LoreleiPersistentHistoryEnabled")
+        }
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
         self.overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
@@ -724,6 +743,7 @@ final class CompanionManager: ObservableObject {
                         transport: liveCodexAppServerTransport
                     )
                     conversation.append(role: .user, text: "↪ \(transcript)")
+                    recordHistory(role: "user", text: transcript)
                     LoreleiAnalytics.capture(.steerSent)
                     LoreleiAnalytics.capture(.dictationCompleted(
                         transcriptCharacters: transcript.count,
@@ -754,6 +774,7 @@ final class CompanionManager: ObservableObject {
         lastTranscript = transcript
         if appendUserEntry {
             conversation.append(role: .user, text: transcript)
+            recordHistory(role: "user", text: transcript)
         }
         conversation.closeAssistantEntry()
         LoreleiAnalytics.capture(.dictationCompleted(
@@ -1274,9 +1295,19 @@ final class CompanionManager: ObservableObject {
             != result.summary.trimmingCharacters(in: .whitespacesAndNewlines) {
             conversation.updateAssistantEntry(text: result.summary)
         }
+        recordHistory(role: "assistant", text: result.summary)
         let succeeded = result.status == .succeeded
         finishRunStatus(success: succeeded)
         audioFeedback.play(succeeded ? .runSucceeded : .runFailed, spokenSummary: result.summary)
+    }
+
+    private func recordHistory(role: String, text: String) {
+        guard historyEnabled() else {
+            return
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        historyRecorder(role, trimmed)
     }
 
     private func finishRunStatus(success: Bool) {
@@ -1376,6 +1407,11 @@ final class CompanionManager: ObservableObject {
         )
     }
 
+}
+
+/// Lazily creates the production history store so CompanionManager init stays cheap.
+private final class ConversationHistoryStoreBox: @unchecked Sendable {
+    lazy var store = ConversationHistoryStore()
 }
 
 @MainActor
