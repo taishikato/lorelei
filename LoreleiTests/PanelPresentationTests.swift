@@ -66,8 +66,8 @@ struct PanelPresentationTests {
             windowSize: windowSize
         )
 
-        #expect(windowSize == CGSize(width: 242, height: 72))
-        #expect(frame == CGRect(x: 635, y: 910, width: 242, height: 72))
+        #expect(windowSize == CGSize(width: 250, height: 72))
+        #expect(frame == CGRect(x: 631, y: 910, width: 250, height: 72))
         #expect(frame.maxY == 982)
     }
 

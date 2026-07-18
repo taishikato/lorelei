@@ -86,11 +86,17 @@ nonisolated enum IslandGeometry {
         return min(max(raw, minNotchWidth), maxNotchWidth)
     }
 
+    /// The island extends slightly past the physical cutout on each side so
+    /// hairline mismatches between the computed and real notch width are
+    /// absorbed, and the island reads as a deliberate extension of the notch
+    /// (owner-observed sliver during visual QA).
+    static let edgeOverhang: CGFloat = 4
+
     /// Island body size. Height matches the menu-bar/notch safe area when
     /// present; flat screens use a compact 24pt bar.
     static func islandSize(notchWidth: CGFloat, safeAreaTop: CGFloat) -> CGSize {
         let height = safeAreaTop > 0 ? safeAreaTop : flatScreenIslandHeight
-        return CGSize(width: notchWidth, height: height)
+        return CGSize(width: notchWidth + edgeOverhang * 2, height: height)
     }
 
     /// One fixed window that fits the island plus head flanks on both sides

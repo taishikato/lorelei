@@ -80,11 +80,12 @@ struct IslandToolbarModelTests {
     }
 
     @Test func islandHeightUsesSafeAreaOrFlatFallback() {
+        let expectedWidth = 190 + IslandGeometry.edgeOverhang * 2
         let notched = IslandGeometry.islandSize(notchWidth: 190, safeAreaTop: 32)
-        #expect(notched == CGSize(width: 190, height: 32))
+        #expect(notched == CGSize(width: expectedWidth, height: 32))
 
         let flat = IslandGeometry.islandSize(notchWidth: 190, safeAreaTop: 0)
-        #expect(flat == CGSize(width: 190, height: IslandGeometry.flatScreenIslandHeight))
+        #expect(flat == CGSize(width: expectedWidth, height: IslandGeometry.flatScreenIslandHeight))
     }
 
     @Test func windowSizeFitsHeadFlanksAndTray() {
