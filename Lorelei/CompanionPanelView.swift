@@ -16,6 +16,7 @@ struct CompanionPanelView: View {
     @ObservedObject private var audioInputDeviceStore: AudioInputDeviceStore
     @StateObject private var loginItemController: LoginItemSettingsController
     @StateObject private var updateChecker = UpdateChecker()
+    @AppStorage("LoreleiReadBackFullResponses") private var readBackFullResponses = false
 
     @MainActor
     init(companionManager: CompanionManager) {
@@ -116,6 +117,30 @@ struct CompanionPanelView: View {
                     )
                     .labelsHidden()
                     .toggleStyle(.switch)
+                }
+                .padding(8)
+                .background(rowBackground)
+
+                HStack(spacing: 10) {
+                    Image(systemName: "speaker.wave.2")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Read responses aloud")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Text("Speak Codex's full answer, not just the first sentence")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Toggle("", isOn: $readBackFullResponses)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
                 }
                 .padding(8)
                 .background(rowBackground)
