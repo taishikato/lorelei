@@ -18,6 +18,7 @@ import SwiftUI
 @MainActor
 protocol SpeechOutputing: AnyObject {
     func speak(_ text: String)
+    func stopSpeaking()
 }
 
 typealias CodexAppServerDesktopActionRunner = @MainActor (
@@ -64,6 +65,12 @@ final class SpeechOutputClient: SpeechOutputing {
             utterance.voice = voice
         }
         synthesizer.speak(utterance)
+    }
+
+    func stopSpeaking() {
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
     }
 
     static func voice(forText text: String) -> AVSpeechSynthesisVoice? {
@@ -611,6 +618,8 @@ final class CompanionManager: ObservableObject {
 #endif
 
     func stopCurrentRun() {
+        speechOutput.stopSpeaking()
+
         guard currentResponseTask != nil
             || pendingCodexAppServerApproval != nil
         else {
