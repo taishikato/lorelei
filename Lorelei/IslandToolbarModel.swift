@@ -67,6 +67,7 @@ nonisolated enum IslandGeometry {
     static let headRestProtrusion: CGFloat = 22
     /// Extra lean-out on hover.
     static let headHoverExtra: CGFloat = 4
+    static let expandedPanelSize = CGSize(width: 460, height: 430)
     static let minNotchWidth: CGFloat = 150
     static let maxNotchWidth: CGFloat = 260
     static let fallbackNotchWidth: CGFloat = 190

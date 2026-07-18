@@ -12,12 +12,15 @@ import SwiftUI
 @MainActor
 final class LoreleiToolbarExpansionState: ObservableObject {
     @Published var isExpanded = false
+    /// The island's true size for the current screen, published by the
+    /// controller so the view never has to re-derive it from window bounds
+    /// (the expanded window is wider than the island).
+    @Published var islandSize: CGSize = .zero
 }
 
 @MainActor
 final class LoreleiToolbarController {
     private enum Metrics {
-        static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
     }
 
@@ -61,21 +64,22 @@ final class LoreleiToolbarController {
     func setExpanded(_ expanded: Bool) {
         islandHostingView?.clickRegionEnabled = !expanded
         guard expansionState.isExpanded != expanded else { return }
-        expansionState.isExpanded = expanded
         if expanded {
+            // Grow the window first - it is transparent, so the resize is
+            // invisible - then let SwiftUI slide the panel out from under
+            // the island. The window frame itself never animates.
+            expansionState.isExpanded = true
+            if let panel { positionPanel(panel) }
             LoreleiAnalytics.capture(.toolbarExpanded)
+        } else {
+            expansionState.isExpanded = false
+            // Let the retract transition play inside the still-tall window,
+            // then shrink the window back to the island band.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, !self.expansionState.isExpanded, let panel = self.panel else { return }
+                self.positionPanel(panel)
+            }
         }
-        guard let panel else { return }
-        positionPanel(panel, animated: true)
-    }
-
-    static func panelFrame(screenFrame: CGRect, size: CGSize, topInset: CGFloat) -> CGRect {
-        CGRect(
-            x: screenFrame.midX - (size.width / 2),
-            y: screenFrame.maxY - topInset - size.height,
-            width: size.width,
-            height: size.height
-        )
     }
 
     /// Top-centered collapsed island window, flush with the screen's top edge.
@@ -109,10 +113,9 @@ final class LoreleiToolbarController {
     private func makePanel() -> NSPanel {
         let screen = screenContainingMouse()
         let size = currentSize(for: screen)
-        let frame = Self.panelFrame(
-            screenFrame: screen.visibleFrame,
-            size: size,
-            topInset: Metrics.topInset
+        let frame = Self.collapsedIslandFrame(
+            screenFrame: screen.frame,
+            windowSize: size
         )
         let panel = NSPanel(
             contentRect: frame,
@@ -168,13 +171,28 @@ final class LoreleiToolbarController {
 
     private func currentSize(for screen: NSScreen) -> CGSize {
         if expansionState.isExpanded {
-            return Metrics.expandedSize
+            let island = islandSizeForScreen(screen)
+            return CGSize(
+                width: IslandGeometry.expandedPanelSize.width,
+                height: island.height + IslandGeometry.expandedPanelSize.height
+            )
         }
         return Self.collapsedWindowSize(
             screenFrame: screen.frame,
             safeAreaTop: screen.safeAreaInsets.top,
             auxiliaryTopLeftWidth: Self.auxiliaryWidth(screen.auxiliaryTopLeftArea),
             auxiliaryTopRightWidth: Self.auxiliaryWidth(screen.auxiliaryTopRightArea)
+        )
+    }
+
+    private func islandSizeForScreen(_ screen: NSScreen) -> CGSize {
+        IslandGeometry.islandSize(
+            notchWidth: IslandGeometry.notchWidth(
+                screenFrame: screen.frame,
+                auxiliaryTopLeftWidth: Self.auxiliaryWidth(screen.auxiliaryTopLeftArea),
+                auxiliaryTopRightWidth: Self.auxiliaryWidth(screen.auxiliaryTopRightArea)
+            ),
+            safeAreaTop: screen.safeAreaInsets.top
         )
     }
 
@@ -187,12 +205,18 @@ final class LoreleiToolbarController {
         let screen = screenContainingMouse()
         let size = currentSize(for: screen)
 
+        let island = islandSizeForScreen(screen)
+        if expansionState.islandSize != island {
+            expansionState.islandSize = island
+        }
+
         let frame: CGRect
         if expansionState.isExpanded {
-            frame = Self.panelFrame(
-                screenFrame: screen.visibleFrame,
-                size: size,
-                topInset: Metrics.topInset
+            // Same top-flush centered placement as collapsed: the expanded
+            // panel hangs from the island, it does not float below it.
+            frame = Self.collapsedIslandFrame(
+                screenFrame: screen.frame,
+                windowSize: size
             )
         } else {
             let trayVisible = IslandActivity
@@ -208,9 +232,9 @@ final class LoreleiToolbarController {
 
         // Island shadow lives on the SwiftUI shape; a window shadow would
         // outline the notch-matching region and break the merge illusion.
-        panel.hasShadow = expansionState.isExpanded
+        panel.hasShadow = false
 
-        panel.setFrame(frame, display: true, animate: animated)
+        panel.setFrame(frame, display: true, animate: false)
         // Full SwiftUI layout size, top-aligned inside the (possibly shorter)
         // window; AppKit clips whatever extends past the window's bottom.
         islandHostingView?.frame = NSRect(

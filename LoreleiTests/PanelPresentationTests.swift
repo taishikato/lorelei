@@ -43,16 +43,6 @@ struct PanelPresentationTests {
         #expect(BuddyAudioFeedback.firstSentence("Gmailを開きました。次に…") == "Gmailを開きました。")
     }
 
-    @Test func toolbarPanelFrameCentersAtTopOfScreen() async throws {
-        let frame = LoreleiToolbarController.panelFrame(
-            screenFrame: CGRect(x: 0, y: 0, width: 2000, height: 1200),
-            size: CGSize(width: 260, height: 36),
-            topInset: 8
-        )
-
-        #expect(frame == CGRect(x: 870, y: 1156, width: 260, height: 36))
-    }
-
     @Test func collapsedIslandFrameIsTopCenteredAndFlushWithScreenTop() async throws {
         // 14" MacBook Pro shape: full frame 1512x982, notch/menu bar 32pt.
         let windowSize = LoreleiToolbarController.collapsedWindowSize(

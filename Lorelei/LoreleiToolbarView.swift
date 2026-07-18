@@ -22,16 +22,7 @@ struct LoreleiToolbarView: View {
     }
 
     var body: some View {
-        Group {
-            if expansionState.isExpanded {
-                expandedPanel
-                    .frame(width: 460, height: 430)
-            } else {
-                islandView
-            }
-        }
-        .animation(.snappy(duration: 0.22), value: expansionState.isExpanded)
-        .animation(.snappy(duration: 0.22), value: activity)
+        islandView
     }
 
     static func statusLabel(for runStatus: LoreleiRunStatus) -> String {
@@ -51,61 +42,79 @@ struct LoreleiToolbarView: View {
         }
     }
 
-    /// Collapsed island: true-black notch bar, side-peeking head while idle /
-    /// finished, and an activity tray that drops while active.
+    /// The island is permanent; everything else slides out from under it -
+    /// the side-peeking head while idle, the activity tray while active, and
+    /// the conversation panel while expanded. One grammar, one clip, and the
+    /// window itself never animates (it is transparent - AppKit frame
+    /// animation plus SwiftUI transitions double-animating was the visibly
+    /// broken expansion).
     private var islandView: some View {
-        Button(action: { deferredAction { toggleExpansion() } }) {
-            GeometryReader { proxy in
-                let flank = IslandGeometry.headRestProtrusion + IslandGeometry.headHoverExtra
-                let islandWidth = max(proxy.size.width - (flank * 2), 1)
-                let islandHeight = max(proxy.size.height - IslandGeometry.trayHeight, 1)
+        GeometryReader { proxy in
+            let flank = IslandGeometry.headRestProtrusion + IslandGeometry.headHoverExtra
+            let publishedIsland = expansionState.islandSize
+            let islandWidth = publishedIsland.width > 0
+                ? min(publishedIsland.width, proxy.size.width)
+                : max(proxy.size.width - (flank * 2), 1)
+            let islandHeight = publishedIsland.height > 0
+                ? publishedIsland.height
+                : max(proxy.size.height - IslandGeometry.trayHeight, 1)
 
-                ZStack(alignment: .top) {
-                    Color.clear
-
-                    VStack(spacing: 0) {
-                        // The head is drawn OVER the island (same fill, square
-                        // junction edge, so the seam is invisible): rendering it
-                        // behind put the island's own drop shadow on top of the
-                        // head's root, which read as a dark gap at the joint.
-                        islandBody(width: islandWidth, height: islandHeight)
-                            .overlay(alignment: headSide == .left ? .bottomLeading : .bottomTrailing) {
-                                if activity.showsHead {
-                                    islandHead(height: islandHeight)
-                                        .offset(x: headProtrusionOffset, y: 0)
-                                        .animation(.snappy(duration: 0.2), value: headSide)
-                                        .animation(.snappy(duration: 0.18), value: isHeadHovered)
-                                }
-                            }
-                            .frame(width: islandWidth, height: islandHeight)
-                            .frame(maxWidth: .infinity)
-
-                        ZStack(alignment: .top) {
-                            if activity.showsTray {
-                                islandTray
-                                    .transition(.move(edge: .top).combined(with: .opacity))
+            VStack(spacing: 0) {
+                Button(action: { deferredAction { toggleExpansion() } }) {
+                    islandBody(width: islandWidth, height: islandHeight)
+                        .overlay(alignment: headSide == .left ? .bottomLeading : .bottomTrailing) {
+                            if showsIdleHead {
+                                islandHead(height: islandHeight)
+                                    .offset(x: headProtrusionOffset, y: 0)
+                                    .animation(.snappy(duration: 0.2), value: headSide)
+                                    .animation(.snappy(duration: 0.18), value: isHeadHovered)
                             }
                         }
-                        .frame(width: IslandGeometry.trayWidth, height: IslandGeometry.trayHeight, alignment: .top)
+                        .frame(width: islandWidth, height: islandHeight)
                         .frame(maxWidth: .infinity)
-                        .clipped()
+                        .contentShape(IslandHitShape(
+                            islandWidth: islandWidth,
+                            showsHead: showsIdleHead,
+                            headSide: headSide
+                        ))
+                }
+                .buttonStyle(.plain)
+                .help(Self.statusLabel(for: companionManager.runStatus))
+                .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
+                .pointerCursor()
+                .onHover { hovering in
+                    isHeadHovered = hovering
+                }
+
+                ZStack(alignment: .top) {
+                    if expansionState.isExpanded {
+                        expandedPanel
+                            .frame(
+                                width: IslandGeometry.expandedPanelSize.width,
+                                height: IslandGeometry.expandedPanelSize.height
+                            )
+                            // Retract by CONVERGING into the island: scale
+                            // toward the top-center anchor (where the island
+                            // sits) rather than translating up, which read as
+                            // fading away instead of being swallowed.
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .scale(scale: 0.02, anchor: .top)
+                                    .combined(with: .opacity)
+                            ))
+                    } else if activity.showsTray {
+                        islandTray
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .frame(height: max(proxy.size.height - islandHeight, 0), alignment: .top)
+                .clipped()
             }
-            .contentShape(IslandHitShape(
-                showsHead: activity.showsHead,
-                showsTray: activity.showsTray,
-                headSide: headSide
-            ))
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
         }
-        .buttonStyle(.plain)
-        .help(Self.statusLabel(for: companionManager.runStatus))
-        .accessibilityLabel(Self.statusLabel(for: companionManager.runStatus))
-        .pointerCursor()
-        .onHover { hovering in
-            isHeadHovered = hovering
-        }
+        .animation(.snappy(duration: 0.25), value: expansionState.isExpanded)
+        .animation(.snappy(duration: 0.22), value: activity)
         .onChange(of: companionManager.runStatus) { oldStatus, newStatus in
             let wasIdle = IslandActivity.activity(for: oldStatus) == .idlePeek
             let isIdle = IslandActivity.activity(for: newStatus) == .idlePeek
@@ -136,12 +145,16 @@ struct LoreleiToolbarView: View {
         }
     }
 
+    private var showsIdleHead: Bool {
+        !expansionState.isExpanded && activity.showsHead
+    }
+
     private func islandBody(width: CGFloat, height: CGFloat) -> some View {
         // The bottom corner goes SQUARE on the side the head is peeking
         // from: the head continues the island's bottom line past the edge,
         // and a rounded corner there lifts away from that line, exposing a
         // wallpaper wedge under the curve (owner-observed gap).
-        let headOut = activity.showsHead
+        let headOut = showsIdleHead
         return UnevenRoundedRectangle(
             bottomLeadingRadius: headOut && headSide == .left
                 ? 0 : IslandGeometry.islandBottomRadius,
@@ -309,7 +322,6 @@ struct LoreleiToolbarView: View {
                 style: .continuous
             )
             .fill(DS.Colors.islandSurface)
-            .shadow(color: .black.opacity(0.4), radius: 14, x: 0, y: 8)
         )
     }
 
@@ -692,58 +704,39 @@ private struct IslandBlink: ViewModifier {
 }
 
 
-/// Hit-test region for the collapsed island button: the island bar itself,
-/// plus the peeking head while visible, plus the tray while visible. The
-/// transparent remainder of the fixed-size window must NOT be clickable
-/// (owner feedback: clicks below the island were opening the panel).
+/// Hit-test region for the island button (the island band only - the drop
+/// zone below is outside the button entirely): the island bar plus the
+/// peeking head while visible. The empty flank corners of the fixed-width
+/// window must NOT be clickable.
 private struct IslandHitShape: Shape {
+    let islandWidth: CGFloat
     let showsHead: Bool
-    let showsTray: Bool
     let headSide: IslandSide
 
     func path(in rect: CGRect) -> Path {
-        let flank = IslandGeometry.headRestProtrusion + IslandGeometry.headHoverExtra
-        let islandHeight = max(rect.height - IslandGeometry.trayHeight, 1)
         var path = Path()
-
-        path.addRect(CGRect(
-            x: flank,
-            y: 0,
-            width: max(rect.width - flank * 2, 1),
-            height: islandHeight
-        ))
+        let flank = max((rect.width - islandWidth) / 2, 0)
+        path.addRect(CGRect(x: flank, y: 0, width: islandWidth, height: rect.height))
 
         if showsHead {
             let protrusion = IslandGeometry.headRestProtrusion + IslandGeometry.headHoverExtra
-            let headRect: CGRect
             switch headSide {
             case .left:
-                headRect = CGRect(
-                    x: flank - protrusion,
+                path.addRect(CGRect(
+                    x: max(flank - protrusion, 0),
                     y: 0,
                     width: IslandGeometry.headSize.width,
-                    height: islandHeight
-                )
+                    height: rect.height
+                ))
             case .right:
-                headRect = CGRect(
+                path.addRect(CGRect(
                     x: rect.width - flank + protrusion - IslandGeometry.headSize.width,
                     y: 0,
                     width: IslandGeometry.headSize.width,
-                    height: islandHeight
-                )
+                    height: rect.height
+                ))
             }
-            path.addRect(headRect)
         }
-
-        if showsTray {
-            path.addRect(CGRect(
-                x: (rect.width - IslandGeometry.trayWidth) / 2,
-                y: islandHeight,
-                width: IslandGeometry.trayWidth,
-                height: IslandGeometry.trayHeight
-            ))
-        }
-
         return path
     }
 }
