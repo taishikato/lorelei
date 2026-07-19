@@ -38,6 +38,16 @@ nonisolated enum IslandActivity: Equatable, Sendable {
         }
     }
 
+    static func activity(
+        for status: LoreleiRunStatus,
+        pendingApprovalTitle: String?
+    ) -> IslandActivity {
+        if pendingApprovalTitle != nil, status != .listening {
+            return .needsApproval
+        }
+        return activity(for: status)
+    }
+
     var showsTray: Bool {
         switch self {
         case .listening, .transcribing, .working, .needsApproval:

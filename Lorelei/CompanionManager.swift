@@ -775,6 +775,11 @@ final class CompanionManager: ObservableObject {
                     // steered line visually sinks to the bottom of the log.
                     conversation.closeAssistantEntry()
                     recordDebugEvent("Steered: \(Self.conciseDebugLine(transcript))")
+                    if pendingCodexAppServerApproval != nil {
+                        runStatus = .needsApproval(pendingApprovalTitle ?? "Approval")
+                    } else {
+                        runStatus = .working(currentActivity ?? "Thinking…")
+                    }
                 } catch {
                     outstandingSteerTranscripts.removeValue(forKey: requestID)
                     LoreleiAnalytics.capture(.steerFailed)
