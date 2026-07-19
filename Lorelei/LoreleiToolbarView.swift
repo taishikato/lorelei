@@ -18,7 +18,10 @@ struct LoreleiToolbarView: View {
     @State private var sideScheduler = IslandSideScheduler()
 
     private var activity: IslandActivity {
-        IslandActivity.activity(for: companionManager.runStatus)
+        IslandActivity.activity(
+            for: companionManager.runStatus,
+            pendingApprovalTitle: companionManager.pendingApprovalTitle
+        )
     }
 
     var body: some View {
@@ -314,7 +317,7 @@ struct LoreleiToolbarView: View {
             expandedHeader
             conversationArea
 
-            if case .needsApproval = companionManager.runStatus {
+            if companionManager.pendingApprovalTitle != nil {
                 approvalBlock
             }
 

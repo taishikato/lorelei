@@ -20,6 +20,41 @@ struct IslandToolbarModelTests {
         #expect(IslandActivity.activity(for: .finished(success: false)) == .finished(success: false))
     }
 
+    @Test func pendingApprovalActivityTakesPrecedenceExceptWhileListening() {
+        #expect(IslandActivity.activity(
+            for: .listening,
+            pendingApprovalTitle: "Computer Use"
+        ) == .listening)
+        #expect(IslandActivity.activity(
+            for: .transcribing,
+            pendingApprovalTitle: "Computer Use"
+        ) == .needsApproval)
+        #expect(IslandActivity.activity(
+            for: .working("lorelei.set_text"),
+            pendingApprovalTitle: "Computer Use"
+        ) == .needsApproval)
+        #expect(IslandActivity.activity(
+            for: .idle,
+            pendingApprovalTitle: "Computer Use"
+        ) == .needsApproval)
+
+        let statuses: [LoreleiRunStatus] = [
+            .idle,
+            .listening,
+            .transcribing,
+            .working("lorelei.set_text"),
+            .needsApproval("Run command"),
+            .finished(success: true),
+            .finished(success: false)
+        ]
+        for status in statuses {
+            #expect(
+                IslandActivity.activity(for: status, pendingApprovalTitle: nil)
+                    == IslandActivity.activity(for: status)
+            )
+        }
+    }
+
     @Test func activityVisibilityFlags() {
         #expect(IslandActivity.idlePeek.showsHead)
         #expect(!IslandActivity.idlePeek.showsTray)
