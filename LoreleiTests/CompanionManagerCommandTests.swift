@@ -81,7 +81,8 @@ struct CompanionManagerCommandTests {
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
             codexAppServerDesktopActionRunner: computerUseRecorder.run,
-            computerUseInstallationOverride: installation
+            computerUseInstallationOverride: installation,
+            isChatGPTRunning: { true }
         )
 
         computerUseManager.handleFinalTranscriptForTesting("open TextEdit")
@@ -135,7 +136,8 @@ struct CompanionManagerCommandTests {
             speechOutput: SilentSpeechOutput(),
             workspaceSettingsStore: store,
             codexAppServerTransportFactory: { transport },
-            computerUseInstallationOverride: installation
+            computerUseInstallationOverride: installation,
+            isChatGPTRunning: { true }
         )
 
         manager.handleFinalTranscriptForTesting("open TextEdit")
@@ -162,6 +164,101 @@ struct CompanionManagerCommandTests {
         #expect(skill["type"] as? String == "skill")
         #expect(skill["name"] as? String == ComputerUsePluginLocator.skillName)
         #expect(skill["path"] as? String == installation.skillPath)
+        #expect(input.first?["text"] as? String == CodexPromptBuilder.desktopActionPrompt(
+            for: "open TextEdit",
+            computerUseAvailable: true
+        ))
+    }
+
+    @Test func desktopActionGatesComputerUseWhenChatGPTIsNotRunning() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerComputerUseChatGPTGateOffTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerComputerUseChatGPTGateOffTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let installation = ComputerUsePluginInstallation(
+            version: "1.0.10",
+            pluginRootPath: "/plugins/computer-use/1.0.10",
+            mcpBinaryPath: "/plugins/computer-use/1.0.10/SkyComputerUseClient",
+            skillPath: "/plugins/computer-use/1.0.10/skills/computer-use/SKILL.md"
+        )
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            computerUseInstallationOverride: installation,
+            isChatGPTRunning: { false }
+        )
+
+        manager.handleFinalTranscriptForTesting("open TextEdit")
+        for _ in 0..<40 {
+            if manager.latestResultSummary == "Done" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadParams = try #require(threadStart["params"] as? [String: Any])
+        let config = threadParams["config"] as? [String: Any] ?? [:]
+        #expect(config["mcp_servers"] == nil)
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let turnParams = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(turnParams["input"] as? [[String: Any]])
+
+        #expect(input.contains { ($0["type"] as? String) == "skill" } == false)
+        #expect(input.first?["text"] as? String == CodexPromptBuilder.desktopActionPrompt(
+            for: "open TextEdit",
+            computerUseAvailable: false
+        ))
+    }
+
+    @Test func desktopActionKeepsComputerUseWhenChatGPTIsRunning() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerComputerUseChatGPTGateOnTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerComputerUseChatGPTGateOnTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let installation = ComputerUsePluginInstallation(
+            version: "1.0.10",
+            pluginRootPath: "/plugins/computer-use/1.0.10",
+            mcpBinaryPath: "/plugins/computer-use/1.0.10/SkyComputerUseClient",
+            skillPath: "/plugins/computer-use/1.0.10/skills/computer-use/SKILL.md"
+        )
+        let transport = FakeCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            computerUseInstallationOverride: installation,
+            isChatGPTRunning: { true }
+        )
+
+        manager.handleFinalTranscriptForTesting("open TextEdit")
+        for _ in 0..<40 {
+            if manager.latestResultSummary == "Done" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        let sentMessages = try await transport.sentJSONMessages()
+        let threadStart = try #require(sentMessages.first { $0["method"] as? String == "thread/start" })
+        let threadParams = try #require(threadStart["params"] as? [String: Any])
+        let config = try #require(threadParams["config"] as? [String: Any])
+        let servers = try #require(config["mcp_servers"] as? [String: Any])
+        #expect(servers["computer-use"] != nil)
+        let turnStart = try #require(sentMessages.first { $0["method"] as? String == "turn/start" })
+        let turnParams = try #require(turnStart["params"] as? [String: Any])
+        let input = try #require(turnParams["input"] as? [[String: Any]])
+        let skill = try #require(input.last)
+
+        #expect(skill["type"] as? String == "skill")
+        #expect(skill["name"] as? String == ComputerUsePluginLocator.skillName)
         #expect(input.first?["text"] as? String == CodexPromptBuilder.desktopActionPrompt(
             for: "open TextEdit",
             computerUseAvailable: true

@@ -146,6 +146,8 @@ final class CompanionManager: ObservableObject {
     private let audioFeedback: BuddyAudioFeedbacking
     private let historyRecorder: (String, String) -> Void
     private let historyEnabled: () -> Bool
+    private let approvalMemoryEnabled: () -> Bool
+    private let isChatGPTRunning: @Sendable () -> Bool
     private let runStatusIdleReturnDelay: Duration
     private let transcribingWatchdogDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
@@ -154,6 +156,8 @@ final class CompanionManager: ObservableObject {
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var liveCodexAppServerTransport: CodexAppServerTransporting?
     private var activeTurn: (threadID: String, turnID: String)?
+    /// Titles accepted during the current turn; used to auto-accept repeats.
+    private var approvedTitlesForActiveTurn: Set<String> = []
     private var outstandingSteerTranscripts: [Int: String] = [:]
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
@@ -210,6 +214,8 @@ final class CompanionManager: ObservableObject {
         memoryStore: LoreleiMemoryStore? = nil,
         historyRecorder: ((String, String) -> Void)? = nil,
         historyEnabled: (() -> Bool)? = nil,
+        approvalMemoryEnabled: (() -> Bool)? = nil,
+        isChatGPTRunning: (@Sendable () -> Bool)? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         transcribingWatchdogDelay: Duration = .seconds(6),
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
@@ -239,6 +245,12 @@ final class CompanionManager: ObservableObject {
         }
         self.historyEnabled = historyEnabled ?? {
             UserDefaults.standard.bool(forKey: "LoreleiPersistentHistoryEnabled")
+        }
+        self.approvalMemoryEnabled = approvalMemoryEnabled ?? {
+            !UserDefaults.standard.bool(forKey: "LoreleiApprovalMemoryDisabled")
+        }
+        self.isChatGPTRunning = isChatGPTRunning ?? {
+            !NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.chat").isEmpty
         }
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
@@ -306,6 +318,7 @@ final class CompanionManager: ObservableObject {
         currentResponseTask = nil
         _ = resolvePendingCodexAppServerApproval(.cancel)
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
@@ -680,6 +693,7 @@ final class CompanionManager: ObservableObject {
         runStatusIdleReturnTask = nil
         cancelTranscribingWatchdog()
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
         conversation.removeAll()
         streamText = ""
@@ -698,6 +712,7 @@ final class CompanionManager: ObservableObject {
         await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
         cancelPendingCodexAppServerApprovalForStop()
         finishRun(with: WorkspaceCommandResult(summary: "Stopped.", status: .failed))
@@ -858,7 +873,15 @@ final class CompanionManager: ObservableObject {
     private func requestCodexAppServerApproval(
         _ request: CodexAppServerApprovalRequest
     ) async -> CodexAppServerApprovalDecision {
-        await withCheckedContinuation { continuation in
+        if approvalMemoryEnabled(),
+           approvedTitlesForActiveTurn.contains(request.title) {
+            let message = "approval: auto-accepted repeat '\(request.title)'"
+            LoreleiDiagLog.log(message)
+            recordDebugEvent(message)
+            return .accept
+        }
+
+        return await withCheckedContinuation { continuation in
             _ = resolvePendingCodexAppServerApproval(.cancel)
             pendingCodexAppServerApproval = continuation
             pendingApprovalTitle = request.title
@@ -874,11 +897,15 @@ final class CompanionManager: ObservableObject {
 
     private func resolvePendingCodexAppServerApproval(_ decision: CodexAppServerApprovalDecision) -> Bool {
         guard let continuation = pendingCodexAppServerApproval else { return false }
+        let title = pendingApprovalTitle
         pendingCodexAppServerApproval = nil
         pendingApprovalTitle = nil
         runStatus = .working(currentActivity ?? "Thinking…")
         switch decision {
         case .accept:
+            if let title {
+                approvedTitlesForActiveTurn.insert(title)
+            }
             recordDebugEvent("App Server approval accepted")
         case .cancel:
             recordDebugEvent("App Server approval cancelled")
@@ -918,7 +945,14 @@ final class CompanionManager: ObservableObject {
     }
 
     private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
+        let located = Self.locatedComputerUseInstallation(
+            override: computerUseInstallationOverride
+        )
         let installation = resolvedComputerUseInstallation()
+        if located != nil, installation == nil {
+            LoreleiDiagLog.log("computerUse: gated - ChatGPT.app not running")
+            dictationHUD.show("Computer Use off - ChatGPT is not running")
+        }
         let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(
             for: prompt,
             computerUseAvailable: installation != nil
@@ -1018,9 +1052,15 @@ final class CompanionManager: ObservableObject {
             }
             return sections.joined(separator: "\n\n")
         }
-        let computerUseInstallation = resolvedComputerUseInstallation()
+        let installationOverride = computerUseInstallationOverride
+        let isChatGPTRunning = self.isChatGPTRunning
         let configOverridesResolver: @Sendable () -> [String: Any] = {
-            guard let computerUseInstallation else { return [:] }
+            guard let computerUseInstallation = Self.resolveComputerUseInstallation(
+                override: installationOverride,
+                isChatGPTRunning: isChatGPTRunning
+            ) else {
+                return [:]
+            }
             return [
                 "mcp_servers": [
                     "computer-use": [
@@ -1112,8 +1152,17 @@ final class CompanionManager: ObservableObject {
     }
 
     private func resolvedComputerUseInstallation() -> ComputerUsePluginInstallation? {
-        if let computerUseInstallationOverride {
-            return computerUseInstallationOverride
+        Self.resolveComputerUseInstallation(
+            override: computerUseInstallationOverride,
+            isChatGPTRunning: isChatGPTRunning
+        )
+    }
+
+    private nonisolated static func locatedComputerUseInstallation(
+        override: ComputerUsePluginInstallation??
+    ) -> ComputerUsePluginInstallation? {
+        if let override {
+            return override
         }
         guard !UserDefaults.standard.bool(forKey: "LoreleiComputerUseDisabled") else {
             return nil
@@ -1121,6 +1170,17 @@ final class CompanionManager: ObservableObject {
         return ComputerUsePluginLocator.locate(
             baseDirectory: ComputerUsePluginLocator.defaultBaseDirectory()
         )
+    }
+
+    private nonisolated static func resolveComputerUseInstallation(
+        override: ComputerUsePluginInstallation??,
+        isChatGPTRunning: @Sendable () -> Bool
+    ) -> ComputerUsePluginInstallation? {
+        guard let installation = locatedComputerUseInstallation(override: override) else {
+            return nil
+        }
+        guard isChatGPTRunning() else { return nil }
+        return installation
     }
 
     private nonisolated static func fencedMemorySection(file: String, content: String) -> String {
@@ -1260,8 +1320,10 @@ final class CompanionManager: ObservableObject {
         switch progress {
         case .turnStarted(let threadID, let turnID):
             activeTurn = (threadID: threadID, turnID: turnID)
+            approvedTitlesForActiveTurn.removeAll()
         case .turnEnded:
             activeTurn = nil
+            approvedTitlesForActiveTurn.removeAll()
             outstandingSteerTranscripts.removeAll()
         case .steerFailed(let requestID, _):
             guard let transcript = outstandingSteerTranscripts.removeValue(forKey: requestID) else {
@@ -1356,6 +1418,7 @@ final class CompanionManager: ObservableObject {
         currentResponseTask = nil
         liveCodexAppServerTransport = nil
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
     }
 
