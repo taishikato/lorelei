@@ -706,6 +706,170 @@ struct CompanionManagerTurnTests {
         #expect(historyRecorder.roles.isEmpty)
         #expect(manager.streamText == "Hello")
     }
+
+    @Test func companionManagerAutoAcceptsRepeatedApprovalTitleWithinTurn() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerApprovalMemoryRepeatTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerApprovalMemoryRepeatTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#,
+            Self.computerUseApprovalRequestLine(id: 44),
+            Self.computerUseApprovalRequestLine(id: 45),
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let audioFeedback = BuddyAudioFeedbackRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60),
+            audioFeedback: audioFeedback
+        )
+        let recorder = RunStatusRecorder()
+        let statusCancellable = manager.$runStatus.sink { recorder.record($0) }
+        defer { statusCancellable.cancel() }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<40 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+
+        manager.acceptPendingApproval()
+        for _ in 0..<200 {
+            if case .finished(success: true) = manager.runStatus {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.runStatus == .finished(success: true))
+        #expect(recorder.statuses.filter { $0 == .needsApproval("Computer Use") }.count == 1)
+        #expect(audioFeedback.events.filter { $0.cue == .approvalRequested }.count == 1)
+        #expect(manager.latestResultSummary == "Done")
+    }
+
+    @Test func companionManagerSurfacesApprovalAgainAfterDecline() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerApprovalMemoryDeclineTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerApprovalMemoryDeclineTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#,
+            Self.computerUseApprovalRequestLine(id: 44),
+            Self.computerUseApprovalRequestLine(id: 45),
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let audioFeedback = BuddyAudioFeedbackRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60),
+            audioFeedback: audioFeedback
+        )
+        let recorder = RunStatusRecorder()
+        let statusCancellable = manager.$runStatus.sink { recorder.record($0) }
+        defer { statusCancellable.cancel() }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<40 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+
+        manager.cancelPendingApproval()
+        for _ in 0..<40 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+
+        manager.acceptPendingApproval()
+        for _ in 0..<200 {
+            if case .finished = manager.runStatus {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(recorder.statuses.filter { $0 == .needsApproval("Computer Use") }.count == 2)
+        #expect(audioFeedback.events.filter { $0.cue == .approvalRequested }.count == 2)
+    }
+
+    @Test func companionManagerSurfacesRepeatedApprovalWhenMemoryDisabled() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerApprovalMemoryDisabledTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerApprovalMemoryDisabledTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = BlockingCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"status":"inProgress"}}}"#,
+            Self.computerUseApprovalRequestLine(id: 44),
+            Self.computerUseApprovalRequestLine(id: 45),
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Done"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let audioFeedback = BuddyAudioFeedbackRecorder()
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            approvalMemoryEnabled: { false },
+            runStatusIdleReturnDelay: .seconds(60),
+            audioFeedback: audioFeedback
+        )
+        let recorder = RunStatusRecorder()
+        let statusCancellable = manager.$runStatus.sink { recorder.record($0) }
+        defer { statusCancellable.cancel() }
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<40 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+
+        manager.acceptPendingApproval()
+        for _ in 0..<40 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+
+        manager.acceptPendingApproval()
+        for _ in 0..<200 {
+            if case .finished(success: true) = manager.runStatus {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.runStatus == .finished(success: true))
+        #expect(recorder.statuses.filter { $0 == .needsApproval("Computer Use") }.count == 2)
+        #expect(audioFeedback.events.filter { $0.cue == .approvalRequested }.count == 2)
+    }
+
+    private static func computerUseApprovalRequestLine(id: Int) -> String {
+        #"{"id":\#(id),"method":"item/tool/requestUserInput","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","questions":[{"id":"approval","header":"Computer Use","question":"Allow control?","isOther":false,"isSecret":false,"options":[{"label":"Accept","description":"Allow."},{"label":"Decline","description":"Stop."}]}]}}"#
+    }
 }
 
 @MainActor

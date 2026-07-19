@@ -146,6 +146,7 @@ final class CompanionManager: ObservableObject {
     private let audioFeedback: BuddyAudioFeedbacking
     private let historyRecorder: (String, String) -> Void
     private let historyEnabled: () -> Bool
+    private let approvalMemoryEnabled: () -> Bool
     private let runStatusIdleReturnDelay: Duration
     private let transcribingWatchdogDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
@@ -154,6 +155,8 @@ final class CompanionManager: ObservableObject {
     private var pendingCodexAppServerApproval: CheckedContinuation<CodexAppServerApprovalDecision, Never>?
     private var liveCodexAppServerTransport: CodexAppServerTransporting?
     private var activeTurn: (threadID: String, turnID: String)?
+    /// Titles accepted during the current turn; used to auto-accept repeats.
+    private var approvedTitlesForActiveTurn: Set<String> = []
     private var outstandingSteerTranscripts: [Int: String] = [:]
     private var responseTaskTracker = CompanionResponseTaskTracker()
     /// The currently running AI response task, if any. Cancelled when the user
@@ -210,6 +213,7 @@ final class CompanionManager: ObservableObject {
         memoryStore: LoreleiMemoryStore? = nil,
         historyRecorder: ((String, String) -> Void)? = nil,
         historyEnabled: (() -> Bool)? = nil,
+        approvalMemoryEnabled: (() -> Bool)? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         transcribingWatchdogDelay: Duration = .seconds(6),
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
@@ -239,6 +243,9 @@ final class CompanionManager: ObservableObject {
         }
         self.historyEnabled = historyEnabled ?? {
             UserDefaults.standard.bool(forKey: "LoreleiPersistentHistoryEnabled")
+        }
+        self.approvalMemoryEnabled = approvalMemoryEnabled ?? {
+            !UserDefaults.standard.bool(forKey: "LoreleiApprovalMemoryDisabled")
         }
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
@@ -306,6 +313,7 @@ final class CompanionManager: ObservableObject {
         currentResponseTask = nil
         _ = resolvePendingCodexAppServerApproval(.cancel)
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
         runStatusIdleReturnTask?.cancel()
         runStatusIdleReturnTask = nil
@@ -680,6 +688,7 @@ final class CompanionManager: ObservableObject {
         runStatusIdleReturnTask = nil
         cancelTranscribingWatchdog()
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
         conversation.removeAll()
         streamText = ""
@@ -698,6 +707,7 @@ final class CompanionManager: ObservableObject {
         await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
         cancelPendingCodexAppServerApprovalForStop()
         finishRun(with: WorkspaceCommandResult(summary: "Stopped.", status: .failed))
@@ -858,7 +868,15 @@ final class CompanionManager: ObservableObject {
     private func requestCodexAppServerApproval(
         _ request: CodexAppServerApprovalRequest
     ) async -> CodexAppServerApprovalDecision {
-        await withCheckedContinuation { continuation in
+        if approvalMemoryEnabled(),
+           approvedTitlesForActiveTurn.contains(request.title) {
+            let message = "approval: auto-accepted repeat '\(request.title)'"
+            LoreleiDiagLog.log(message)
+            recordDebugEvent(message)
+            return .accept
+        }
+
+        return await withCheckedContinuation { continuation in
             _ = resolvePendingCodexAppServerApproval(.cancel)
             pendingCodexAppServerApproval = continuation
             pendingApprovalTitle = request.title
@@ -874,11 +892,15 @@ final class CompanionManager: ObservableObject {
 
     private func resolvePendingCodexAppServerApproval(_ decision: CodexAppServerApprovalDecision) -> Bool {
         guard let continuation = pendingCodexAppServerApproval else { return false }
+        let title = pendingApprovalTitle
         pendingCodexAppServerApproval = nil
         pendingApprovalTitle = nil
         runStatus = .working(currentActivity ?? "Thinking…")
         switch decision {
         case .accept:
+            if let title {
+                approvedTitlesForActiveTurn.insert(title)
+            }
             recordDebugEvent("App Server approval accepted")
         case .cancel:
             recordDebugEvent("App Server approval cancelled")
@@ -1260,8 +1282,10 @@ final class CompanionManager: ObservableObject {
         switch progress {
         case .turnStarted(let threadID, let turnID):
             activeTurn = (threadID: threadID, turnID: turnID)
+            approvedTitlesForActiveTurn.removeAll()
         case .turnEnded:
             activeTurn = nil
+            approvedTitlesForActiveTurn.removeAll()
             outstandingSteerTranscripts.removeAll()
         case .steerFailed(let requestID, _):
             guard let transcript = outstandingSteerTranscripts.removeValue(forKey: requestID) else {
@@ -1356,6 +1380,7 @@ final class CompanionManager: ObservableObject {
         currentResponseTask = nil
         liveCodexAppServerTransport = nil
         activeTurn = nil
+        approvedTitlesForActiveTurn.removeAll()
         outstandingSteerTranscripts.removeAll()
     }
 
