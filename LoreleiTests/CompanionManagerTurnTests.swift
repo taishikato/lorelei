@@ -150,6 +150,10 @@ struct CompanionManagerTurnTests {
         #expect(manager.runStatus == .working("Thinking…"))
         #expect(manager.streamText == "Working")
 
+        manager.simulateShortcutTransitionForTesting(.pressed)
+        manager.simulateShortcutTransitionForTesting(.released)
+        #expect(manager.runStatus == .transcribing)
+
         manager.handleFinalTranscriptForTesting("actually the other window")
         for _ in 0..<40 {
             let sentMessages = try await transport.sentJSONMessages()
@@ -170,7 +174,7 @@ struct CompanionManagerTurnTests {
         #expect(sentMessages.filter { $0["method"] as? String == "turn/start" }.count == 1)
         #expect(manager.runStatus == .working("Thinking…"))
         #expect(manager.streamText == "Working")
-        #expect(audioFeedback.events.isEmpty)
+        #expect(audioFeedback.events.map(\.cue) == [.listeningStarted, .listeningEnded])
     }
 
     @Test func companionManagerLogsSteeredUtteranceIntoConversation() async throws {
@@ -227,6 +231,66 @@ struct CompanionManagerTurnTests {
             "↪ actually the other window"
         ])
         #expect(manager.conversationLog.filter { $0.role == .assistant }.count == 1)
+    }
+
+    @Test func companionManagerRestoresApprovalStatusAfterSteerSubmits() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerApprovalSteerStatusTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerApprovalSteerStatusTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            Self.computerUseApprovalRequestLine(id: 44),
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Approved"}}"#,
+            #"{"method":"turn/completed","params":{"status":"completed"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        for _ in 0..<200 {
+            if manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+        #expect(manager.pendingApprovalTitle == "Computer Use")
+
+        manager.simulateShortcutTransitionForTesting(.pressed)
+        manager.simulateShortcutTransitionForTesting(.released)
+        #expect(manager.runStatus == .transcribing)
+        manager.handleFinalTranscriptForTesting("actually the other window")
+
+        for _ in 0..<200 {
+            let sentMessages = try await transport.sentJSONMessages()
+            if sentMessages.contains(where: { $0["method"] as? String == "turn/steer" }),
+               manager.runStatus == .needsApproval("Computer Use") {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let sentMessages = try await transport.sentJSONMessages()
+        #expect(sentMessages.contains(where: { $0["method"] as? String == "turn/steer" }))
+        #expect(manager.runStatus == .needsApproval("Computer Use"))
+        #expect(manager.pendingApprovalTitle == "Computer Use")
+
+        manager.acceptPendingApproval()
+        for _ in 0..<200 {
+            if manager.runStatus == .finished(success: true) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(manager.runStatus == .finished(success: true))
+        #expect(manager.pendingApprovalTitle == nil)
+        #expect(manager.latestResultSummary == "Approved")
     }
 
     @Test func companionManagerStartsNewTurnWhenIdle() async throws {
