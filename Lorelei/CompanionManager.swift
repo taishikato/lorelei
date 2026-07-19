@@ -250,7 +250,12 @@ final class CompanionManager: ObservableObject {
             !UserDefaults.standard.bool(forKey: "LoreleiApprovalMemoryDisabled")
         }
         self.isChatGPTRunning = isChatGPTRunning ?? {
-            !NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.chat").isEmpty
+            // The Computer Use helper ships with OpenAI's desktop apps; the
+            // owner's install hosts it under the Codex app (com.openai.codex),
+            // older installs under ChatGPT (com.openai.chat). Either counts.
+            ["com.openai.codex", "com.openai.chat"].contains { bundleID in
+                !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+            }
         }
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
@@ -950,8 +955,8 @@ final class CompanionManager: ObservableObject {
         )
         let installation = resolvedComputerUseInstallation()
         if located != nil, installation == nil {
-            LoreleiDiagLog.log("computerUse: gated - ChatGPT.app not running")
-            dictationHUD.show("Computer Use off - ChatGPT is not running")
+            LoreleiDiagLog.log("computerUse: gated - host app not running")
+            dictationHUD.show("Computer Use off - Codex app is not running")
         }
         let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(
             for: prompt,
