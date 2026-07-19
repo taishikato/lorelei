@@ -135,6 +135,19 @@ enum DS {
         /// (screen overlay vs in-app UI).
         static let overlayCursorBlue = Color(hex: "#3380FF")
 
+        // ── Island Toolbar ───────────────────────────────────────────
+        // Deliberately matches the physical notch: true black so hardware
+        // and the software island read as one object. No translucency.
+
+        /// True black island / tray / expanded-panel fill (matches notch).
+        static let islandSurface = Color(hex: "#000000")
+
+        /// Slightly raised black for head/tray gradient tops.
+        static let islandRaised = Color(hex: "#111214")
+
+        /// Hairline inner top light on machined island pieces (~8% white).
+        static let islandHairline = Color.white.opacity(0.08)
+
         // ── Help Chat ──────────────────────────────────────────────
 
         /// Slightly lighter variant for hover/pressed states on user bubbles.

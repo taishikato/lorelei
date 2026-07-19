@@ -43,28 +43,21 @@ struct PanelPresentationTests {
         #expect(BuddyAudioFeedback.firstSentence("Gmailを開きました。次に…") == "Gmailを開きました。")
     }
 
-    @Test func toolbarPanelFrameCentersAtTopOfScreen() async throws {
-        let frame = LoreleiToolbarController.panelFrame(
-            screenFrame: CGRect(x: 0, y: 0, width: 2000, height: 1200),
-            size: CGSize(width: 260, height: 36),
-            topInset: 8
-        )
-
-        #expect(frame == CGRect(x: 870, y: 1156, width: 260, height: 36))
-    }
-
-    @Test func collapsedPeekFrameHugsNotchAndExtendsChinBelowIt() async throws {
+    @Test func collapsedIslandFrameIsTopCenteredAndFlushWithScreenTop() async throws {
         // 14" MacBook Pro shape: full frame 1512x982, notch/menu bar 32pt.
-        let frame = LoreleiToolbarController.collapsedPeekFrame(
+        let windowSize = LoreleiToolbarController.collapsedWindowSize(
             screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
             safeAreaTop: 32,
-            width: 104,
-            chinHeight: 22
+            auxiliaryTopLeftWidth: 661,
+            auxiliaryTopRightWidth: 661
+        )
+        let frame = LoreleiToolbarController.collapsedIslandFrame(
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            windowSize: windowSize
         )
 
-        // Top edge flush with the screen top so the head runs into the
-        // notch; only the 22pt chin is visible below the 32pt safe area.
-        #expect(frame == CGRect(x: 704, y: 928, width: 104, height: 54))
+        #expect(windowSize == CGSize(width: 250, height: 72))
+        #expect(frame == CGRect(x: 631, y: 910, width: 250, height: 72))
         #expect(frame.maxY == 982)
     }
 

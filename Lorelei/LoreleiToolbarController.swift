@@ -12,25 +12,23 @@ import SwiftUI
 @MainActor
 final class LoreleiToolbarExpansionState: ObservableObject {
     @Published var isExpanded = false
-    @Published var showsNotchPeek = false
+    /// The island's true size for the current screen, published by the
+    /// controller so the view never has to re-derive it from window bounds
+    /// (the expanded window is wider than the island).
+    @Published var islandSize: CGSize = .zero
 }
 
 @MainActor
 final class LoreleiToolbarController {
     private enum Metrics {
-        static let collapsedSize = CGSize(width: 140, height: 40)
-        static let expandedSize = CGSize(width: 460, height: 430)
         static let topInset: CGFloat = 8
-        static let peekWidth: CGFloat = 104
-        // 22pt resting chin + 8pt of hover lean-out headroom; the view keeps
-        // the extra 8pt as bottom padding until the pointer hovers the head.
-        static let peekChinHeight: CGFloat = 30
     }
 
     private let companionManager: CompanionManager
     private let expansionState = LoreleiToolbarExpansionState()
     private var runStatusCancellable: AnyCancellable?
     private var panel: NSPanel?
+    private weak var islandHostingView: IslandClickRegionHostingView<LoreleiToolbarView>?
     var onOpenSettings: (() -> Void)?
 
     init(companionManager: CompanionManager) {
@@ -38,8 +36,17 @@ final class LoreleiToolbarController {
         runStatusCancellable = companionManager.$runStatus
             .receive(on: DispatchQueue.main)
             .sink { [weak self] runStatus in
-                guard case .needsApproval = runStatus else { return }
-                self?.setExpanded(true)
+                guard let self else { return }
+                self.islandHostingView?.trayVisible =
+                    IslandActivity.activity(for: runStatus).showsTray
+                if case .needsApproval = runStatus {
+                    self.setExpanded(true)
+                } else if let panel = self.panel, !self.expansionState.isExpanded {
+                    // The collapsed window only spans the island band while no
+                    // tray is showing (clicks below must reach other apps);
+                    // grow it for the tray, shrink it back after.
+                    self.positionPanel(panel)
+                }
             }
     }
 
@@ -55,52 +62,60 @@ final class LoreleiToolbarController {
     }
 
     func setExpanded(_ expanded: Bool) {
+        islandHostingView?.clickRegionEnabled = !expanded
         guard expansionState.isExpanded != expanded else { return }
-        expansionState.isExpanded = expanded
         if expanded {
+            // Grow the window first - it is transparent, so the resize is
+            // invisible - then let SwiftUI slide the panel out from under
+            // the island. The window frame itself never animates.
+            expansionState.isExpanded = true
+            if let panel { positionPanel(panel) }
             LoreleiAnalytics.capture(.toolbarExpanded)
+        } else {
+            expansionState.isExpanded = false
+            // Let the retract transition play inside the still-tall window,
+            // then shrink the window back to the island band.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, !self.expansionState.isExpanded, let panel = self.panel else { return }
+                self.positionPanel(panel)
+            }
         }
-        guard let panel else { return }
-        positionPanel(panel, animated: true)
     }
 
-    static func panelFrame(screenFrame: CGRect, size: CGSize, topInset: CGFloat) -> CGRect {
+    /// Top-centered collapsed island window, flush with the screen's top edge.
+    static func collapsedIslandFrame(screenFrame: CGRect, windowSize: CGSize) -> CGRect {
         CGRect(
-            x: screenFrame.midX - (size.width / 2),
-            y: screenFrame.maxY - topInset - size.height,
-            width: size.width,
-            height: size.height
+            x: screenFrame.midX - (windowSize.width / 2),
+            y: screenFrame.maxY - windowSize.height,
+            width: windowSize.width,
+            height: windowSize.height
         )
     }
 
-    /// Frame for the collapsed "peeking from behind the notch" window.
-    ///
-    /// The window spans from the very top of the screen (`screenFrame`, not
-    /// `visibleFrame`) so the head shape runs seamlessly into the camera
-    /// housing: everything inside the notch is physically invisible, and only
-    /// the chin below it shows, which sells the peeking illusion. The notch
-    /// is always centered on the screen, so centering on midX is enough.
-    static func collapsedPeekFrame(
+    static func collapsedWindowSize(
         screenFrame: CGRect,
         safeAreaTop: CGFloat,
-        width: CGFloat,
-        chinHeight: CGFloat
-    ) -> CGRect {
-        CGRect(
-            x: screenFrame.midX - (width / 2),
-            y: screenFrame.maxY - safeAreaTop - chinHeight,
-            width: width,
-            height: safeAreaTop + chinHeight
+        auxiliaryTopLeftWidth: CGFloat?,
+        auxiliaryTopRightWidth: CGFloat?
+    ) -> CGSize {
+        let notchWidth = IslandGeometry.notchWidth(
+            screenFrame: screenFrame,
+            auxiliaryTopLeftWidth: auxiliaryTopLeftWidth,
+            auxiliaryTopRightWidth: auxiliaryTopRightWidth
         )
+        let islandSize = IslandGeometry.islandSize(
+            notchWidth: notchWidth,
+            safeAreaTop: safeAreaTop
+        )
+        return IslandGeometry.windowSize(islandSize: islandSize)
     }
 
     private func makePanel() -> NSPanel {
         let screen = screenContainingMouse()
-        let size = currentSize
-        let frame = Self.panelFrame(
-            screenFrame: screen.visibleFrame,
-            size: size,
-            topInset: Metrics.topInset
+        let size = currentSize(for: screen)
+        let frame = Self.collapsedIslandFrame(
+            screenFrame: screen.frame,
+            windowSize: size
         )
         let panel = NSPanel(
             contentRect: frame,
@@ -131,51 +146,103 @@ final class LoreleiToolbarController {
                 self?.onOpenSettings?()
             }
         )
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = IslandClickRegionHostingView(rootView: rootView)
         // Manual window sizing: the hosting view must never drive the window
         // (see plan 033 crash anatomy).
         hostingView.sizingOptions = []
         hostingView.frame = NSRect(origin: .zero, size: size)
-        panel.contentView = hostingView
+        hostingView.clickRegionEnabled = !expansionState.isExpanded
+        hostingView.trayVisible = IslandActivity.activity(for: companionManager.runStatus).showsTray
+
+        // The hosting view is NOT the contentView: AppKit force-resizes the
+        // contentView with the window, and the collapsed window is shorter
+        // than the SwiftUI layout (island band only while no tray shows, so
+        // clicks under the island reach other apps). A passthrough container
+        // holds the full-size hosting view top-aligned; the window edge clips
+        // the rest.
+        let container = PassthroughContainerView(frame: NSRect(origin: .zero, size: size))
+        container.addSubview(hostingView)
+        panel.contentView = container
+        islandHostingView = hostingView
         panel.setContentSize(size)
 
         return panel
     }
 
-    private var currentSize: CGSize {
-        expansionState.isExpanded ? Metrics.expandedSize : Metrics.collapsedSize
+    private func currentSize(for screen: NSScreen) -> CGSize {
+        if expansionState.isExpanded {
+            let island = islandSizeForScreen(screen)
+            return CGSize(
+                width: IslandGeometry.expandedPanelSize.width,
+                height: island.height + IslandGeometry.expandedPanelSize.height
+            )
+        }
+        return Self.collapsedWindowSize(
+            screenFrame: screen.frame,
+            safeAreaTop: screen.safeAreaInsets.top,
+            auxiliaryTopLeftWidth: Self.auxiliaryWidth(screen.auxiliaryTopLeftArea),
+            auxiliaryTopRightWidth: Self.auxiliaryWidth(screen.auxiliaryTopRightArea)
+        )
+    }
+
+    private func islandSizeForScreen(_ screen: NSScreen) -> CGSize {
+        IslandGeometry.islandSize(
+            notchWidth: IslandGeometry.notchWidth(
+                screenFrame: screen.frame,
+                auxiliaryTopLeftWidth: Self.auxiliaryWidth(screen.auxiliaryTopLeftArea),
+                auxiliaryTopRightWidth: Self.auxiliaryWidth(screen.auxiliaryTopRightArea)
+            ),
+            safeAreaTop: screen.safeAreaInsets.top
+        )
+    }
+
+    private static func auxiliaryWidth(_ area: NSRect?) -> CGFloat? {
+        guard let area, area.width > 0 else { return nil }
+        return area.width
     }
 
     private func positionPanel(_ panel: NSPanel, animated: Bool = false) {
         let screen = screenContainingMouse()
-        let usesPeek = !expansionState.isExpanded && screen.safeAreaInsets.top > 0
-        if expansionState.showsNotchPeek != usesPeek {
-            expansionState.showsNotchPeek = usesPeek
+        let size = currentSize(for: screen)
+
+        let island = islandSizeForScreen(screen)
+        if expansionState.islandSize != island {
+            expansionState.islandSize = island
         }
 
         let frame: CGRect
-        if usesPeek {
-            frame = Self.collapsedPeekFrame(
+        if expansionState.isExpanded {
+            // Same top-flush centered placement as collapsed: the expanded
+            // panel hangs from the island, it does not float below it.
+            frame = Self.collapsedIslandFrame(
                 screenFrame: screen.frame,
-                safeAreaTop: screen.safeAreaInsets.top,
-                width: Metrics.peekWidth,
-                chinHeight: Metrics.peekChinHeight
+                windowSize: size
             )
         } else {
-            frame = Self.panelFrame(
-                screenFrame: screen.visibleFrame,
-                size: currentSize,
-                topInset: Metrics.topInset
+            let trayVisible = IslandActivity
+                .activity(for: companionManager.runStatus).showsTray
+            let windowHeight = trayVisible
+                ? size.height
+                : max(size.height - IslandGeometry.trayHeight, 1)
+            frame = Self.collapsedIslandFrame(
+                screenFrame: screen.frame,
+                windowSize: CGSize(width: size.width, height: windowHeight)
             )
         }
 
-        // The peek window extends into the menu bar region; a window shadow
-        // there would outline the part of the head that is supposed to be
-        // hidden behind the notch and break the illusion.
-        panel.hasShadow = !usesPeek
+        // Island shadow lives on the SwiftUI shape; a window shadow would
+        // outline the notch-matching region and break the merge illusion.
+        panel.hasShadow = false
 
-        panel.setFrame(frame, display: true, animate: animated)
-        panel.contentView?.frame = NSRect(origin: .zero, size: frame.size)
+        panel.setFrame(frame, display: true, animate: false)
+        // Full SwiftUI layout size, top-aligned inside the (possibly shorter)
+        // window; AppKit clips whatever extends past the window's bottom.
+        islandHostingView?.frame = NSRect(
+            x: 0,
+            y: frame.height - size.height,
+            width: size.width,
+            height: size.height
+        )
     }
 
     private func screenContainingMouse() -> NSScreen {
@@ -183,5 +250,47 @@ final class LoreleiToolbarController {
         return NSScreen.screens.first { screen in
             NSMouseInRect(mouseLocation, screen.frame, false)
         } ?? NSScreen.main ?? NSScreen.screens.first!
+    }
+}
+
+
+/// Hosting view that refuses clicks outside the island's visual region at the
+/// AppKit level: SwiftUI contentShape alone still let the transparent part of
+/// the fixed-size panel swallow clicks meant for windows underneath (owner
+/// report: clicks below the island opened the panel). While collapsed, only
+/// the top island band (which contains the peeking head) and - when a tray is
+/// showing - the tray strip below it are hittable; everything else passes
+/// through to the desktop.
+final class IslandClickRegionHostingView<Content: View>: NSHostingView<Content> {
+    var clickRegionEnabled = false
+    var trayVisible = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard clickRegionEnabled else {
+            return super.hitTest(point)
+        }
+        let local = convert(point, from: superview)
+        let yFromTop = isFlipped ? local.y : bounds.height - local.y
+        let islandHeight = max(bounds.height - IslandGeometry.trayHeight, 1)
+
+        if yFromTop <= islandHeight {
+            return super.hitTest(point)
+        }
+        if trayVisible,
+           yFromTop <= islandHeight + IslandGeometry.trayHeight,
+           abs(local.x - bounds.midX) <= IslandGeometry.trayWidth / 2 {
+            return super.hitTest(point)
+        }
+        return nil
+    }
+}
+
+
+/// Container that never swallows clicks itself: only results from subviews
+/// (the island hosting view with its own hit gating) are returned.
+final class PassthroughContainerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let result = super.hitTest(point)
+        return result === self ? nil : result
     }
 }
