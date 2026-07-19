@@ -147,6 +147,7 @@ final class CompanionManager: ObservableObject {
     private let historyRecorder: (String, String) -> Void
     private let historyEnabled: () -> Bool
     private let approvalMemoryEnabled: () -> Bool
+    private let isChatGPTRunning: @Sendable () -> Bool
     private let runStatusIdleReturnDelay: Duration
     private let transcribingWatchdogDelay: Duration
     private var axDesktopActionExecutor: AXDesktopActionExecutor?
@@ -214,6 +215,7 @@ final class CompanionManager: ObservableObject {
         historyRecorder: ((String, String) -> Void)? = nil,
         historyEnabled: (() -> Bool)? = nil,
         approvalMemoryEnabled: (() -> Bool)? = nil,
+        isChatGPTRunning: (@Sendable () -> Bool)? = nil,
         runStatusIdleReturnDelay: Duration = .seconds(4),
         transcribingWatchdogDelay: Duration = .seconds(6),
         overlayWindowManager: (any OverlayWindowManaging)? = nil,
@@ -246,6 +248,9 @@ final class CompanionManager: ObservableObject {
         }
         self.approvalMemoryEnabled = approvalMemoryEnabled ?? {
             !UserDefaults.standard.bool(forKey: "LoreleiApprovalMemoryDisabled")
+        }
+        self.isChatGPTRunning = isChatGPTRunning ?? {
+            !NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.chat").isEmpty
         }
         self.runStatusIdleReturnDelay = runStatusIdleReturnDelay
         self.transcribingWatchdogDelay = transcribingWatchdogDelay
@@ -940,7 +945,14 @@ final class CompanionManager: ObservableObject {
     }
 
     private func runCodexAppServerDesktopAction(prompt: String) async -> WorkspaceCommandResult {
+        let located = Self.locatedComputerUseInstallation(
+            override: computerUseInstallationOverride
+        )
         let installation = resolvedComputerUseInstallation()
+        if located != nil, installation == nil {
+            LoreleiDiagLog.log("computerUse: gated - ChatGPT.app not running")
+            dictationHUD.show("Computer Use off - ChatGPT is not running")
+        }
         let appServerPrompt = CodexPromptBuilder.desktopActionPrompt(
             for: prompt,
             computerUseAvailable: installation != nil
@@ -1040,9 +1052,15 @@ final class CompanionManager: ObservableObject {
             }
             return sections.joined(separator: "\n\n")
         }
-        let computerUseInstallation = resolvedComputerUseInstallation()
+        let installationOverride = computerUseInstallationOverride
+        let isChatGPTRunning = self.isChatGPTRunning
         let configOverridesResolver: @Sendable () -> [String: Any] = {
-            guard let computerUseInstallation else { return [:] }
+            guard let computerUseInstallation = Self.resolveComputerUseInstallation(
+                override: installationOverride,
+                isChatGPTRunning: isChatGPTRunning
+            ) else {
+                return [:]
+            }
             return [
                 "mcp_servers": [
                     "computer-use": [
@@ -1134,8 +1152,17 @@ final class CompanionManager: ObservableObject {
     }
 
     private func resolvedComputerUseInstallation() -> ComputerUsePluginInstallation? {
-        if let computerUseInstallationOverride {
-            return computerUseInstallationOverride
+        Self.resolveComputerUseInstallation(
+            override: computerUseInstallationOverride,
+            isChatGPTRunning: isChatGPTRunning
+        )
+    }
+
+    private nonisolated static func locatedComputerUseInstallation(
+        override: ComputerUsePluginInstallation??
+    ) -> ComputerUsePluginInstallation? {
+        if let override {
+            return override
         }
         guard !UserDefaults.standard.bool(forKey: "LoreleiComputerUseDisabled") else {
             return nil
@@ -1143,6 +1170,17 @@ final class CompanionManager: ObservableObject {
         return ComputerUsePluginLocator.locate(
             baseDirectory: ComputerUsePluginLocator.defaultBaseDirectory()
         )
+    }
+
+    private nonisolated static func resolveComputerUseInstallation(
+        override: ComputerUsePluginInstallation??,
+        isChatGPTRunning: @Sendable () -> Bool
+    ) -> ComputerUsePluginInstallation? {
+        guard let installation = locatedComputerUseInstallation(override: override) else {
+            return nil
+        }
+        guard isChatGPTRunning() else { return nil }
+        return installation
     }
 
     private nonisolated static func fencedMemorySection(file: String, content: String) -> String {
