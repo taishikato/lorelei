@@ -154,6 +154,31 @@ struct LoreleiToolbarView: View {
             headSide = scheduler.sideAfterReturnToIdle(current: headSide)
             sideScheduler = scheduler
         }
+        .onChange(of: companionManager.runStatus) { _, newStatus in
+            // Speaking always wins over a half-typed message.
+            if case .listening = newStatus {
+                releaseTextEditing()
+            }
+        }
+        .onChange(of: expansionState.isExpanded) { _, isExpanded in
+            if !isExpanded {
+                releaseTextEditing()
+            }
+        }
+        .onChange(of: companionManager.editableUserEntryID) { _, newID in
+            // The edited entry can be replaced or cleared out from under the
+            // editor (resend, New Chat, the 200-entry cap).
+            if let editingEntryID, editingEntryID != newID {
+                releaseTextEditing()
+            }
+        }
+        .onChange(of: companionManager.isAssistantTurnActive) { _, isActive in
+            // A turn starting takes the inline editor with it: mid-run the
+            // same keystrokes would land as a steer, not as a correction.
+            if isActive, editingEntryID != nil {
+                releaseTextEditing()
+            }
+        }
         .task(id: activity == .idlePeek) {
             guard activity == .idlePeek else { return }
             while !Task.isCancelled {
@@ -352,27 +377,6 @@ struct LoreleiToolbarView: View {
             )
             .fill(DS.Colors.islandSurface)
         )
-        .onChange(of: companionManager.runStatus) { _, newStatus in
-            // Speaking always wins over a half-typed message.
-            if case .listening = newStatus {
-                focusedField = nil
-                editingEntryID = nil
-            }
-        }
-        .onChange(of: expansionState.isExpanded) { _, isExpanded in
-            if !isExpanded {
-                focusedField = nil
-                editingEntryID = nil
-            }
-        }
-        .onChange(of: companionManager.editableUserEntryID) { _, newID in
-            // The edited entry can be replaced or cleared out from under the
-            // editor (resend, New Chat, the 200-entry cap).
-            if let editingEntryID, editingEntryID != newID {
-                self.editingEntryID = nil
-                focusedField = nil
-            }
-        }
     }
 
     private var expandedHeader: some View {
@@ -506,7 +510,7 @@ struct LoreleiToolbarView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(DS.Colors.textPrimary)
 
-            Text("Hold again while Lorelei is working to steer the task.")
+            Text("Speak or type while Lorelei is working to steer the task.")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(DS.Colors.textSecondary)
                 .multilineTextAlignment(.center)
@@ -585,9 +589,12 @@ struct LoreleiToolbarView: View {
             ? String(entry.text.dropFirst(Self.steerMarker.count))
             : entry.text
         let isEditing = editingEntryID == entry.id
-        // Only the latest user message is editable: resending an older turn
-        // would imply a rewind the Codex session cannot perform.
+        // Only the latest user message is editable, and only between turns:
+        // resending an older turn would imply a rewind the Codex session
+        // cannot perform, and mid-run a correction can only land as a steer,
+        // which is what the composer is for.
         let isEditable = companionManager.editableUserEntryID == entry.id
+            && !companionManager.isAssistantTurnActive
 
         return HStack(alignment: .top, spacing: 8) {
             if isSteer {
@@ -604,8 +611,8 @@ struct LoreleiToolbarView: View {
                     .foregroundStyle(DS.Colors.textPrimary)
                     .lineLimit(1...6)
                     .focused($focusedField, equals: .editor(entry.id))
-                    .onSubmit { submitEdit() }
-                    .onExitCommand { cancelEdit() }
+                    .onSubmit { deferredAction { submitEdit() } }
+                    .onExitCommand { deferredAction { cancelEdit() } }
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text(body)
@@ -670,6 +677,16 @@ struct LoreleiToolbarView: View {
         )
     }
 
+    /// Drops panel focus and hands the keyboard back. Every path that closes a
+    /// field goes through here - clearing `focusedField` alone leaves Lorelei
+    /// frontmost, eating keystrokes meant for the app behind it.
+    private func releaseTextEditing() {
+        focusedField = nil
+        editingEntryID = nil
+        editingText = ""
+        endTextEditing()
+    }
+
     private func beginEdit(entry: ConversationEntry, body: String) {
         editingEntryID = entry.id
         editingText = body
@@ -732,8 +749,8 @@ struct LoreleiToolbarView: View {
                 .foregroundStyle(DS.Colors.textPrimary)
                 .lineLimit(1...4)
                 .focused($focusedField, equals: .composer)
-                .onSubmit { submitComposer() }
-                .onExitCommand { dismissComposer() }
+                .onSubmit { deferredAction { submitComposer() } }
+                .onExitCommand { deferredAction { dismissComposer() } }
                 // Until the panel holds key focus the field cannot take first
                 // responder, so the first click has to go to the row's gesture
                 // instead; afterwards the field owns its own clicks (caret
@@ -761,7 +778,7 @@ struct LoreleiToolbarView: View {
                 .pointerCursor()
                 .help("Stop")
                 .accessibilityLabel("Stop the current run")
-            } else if !composerText.isEmpty {
+            } else if !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button(action: { deferredAction { submitComposer() } }) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 17, weight: .regular))

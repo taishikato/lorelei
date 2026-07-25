@@ -40,6 +40,12 @@ final class LoreleiToolbarController {
     private let expansionState = LoreleiToolbarExpansionState()
     private var runStatusCancellable: AnyCancellable?
     private var approvalCancellable: AnyCancellable?
+    /// The app that was frontmost when the panel took focus. Desktop actions
+    /// resolve their target from the frontmost app, so typing must not leave
+    /// Lorelei itself sitting there.
+    private var applicationBeforeTextEditing: NSRunningApplication?
+    /// Whether the current turn has already pulled the panel open once.
+    private var didAutoExpandForCurrentTurn = false
     private var panel: LoreleiToolbarPanel?
     private weak var islandHostingView: IslandClickRegionHostingView<LoreleiToolbarView>?
     var onOpenSettings: (() -> Void)?
@@ -57,10 +63,16 @@ final class LoreleiToolbarController {
                     // must not keep swallowing keystrokes while Lorelei listens.
                     self.endTextEditing()
                 }
-                if Self.shouldAutoExpand(
+                let expansion = Self.autoExpansion(
                     for: runStatus,
                     isAssistantTurnActive: self.companionManager.isAssistantTurnActive
-                ) {
+                )
+                if expansion == .none {
+                    self.didAutoExpandForCurrentTurn = false
+                }
+                if expansion == .always
+                    || (expansion == .oncePerTurn && !self.didAutoExpandForCurrentTurn) {
+                    self.didAutoExpandForCurrentTurn = true
                     self.setExpanded(true)
                 } else if let panel = self.panel, !self.expansionState.isExpanded {
                     // The collapsed window only spans the island band while no
@@ -122,16 +134,33 @@ final class LoreleiToolbarController {
     /// receives keystrokes.
     func beginTextEditing() {
         guard let panel, expansionState.isExpanded else { return }
+        if !panel.isKeyWindow {
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            if frontmost?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                applicationBeforeTextEditing = frontmost
+            }
+        }
         panel.keyFocusAllowed = true
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
     }
 
-    /// Hands focus back to whatever the user was working in.
+    /// Hands the keyboard back to the app the user came from.
+    ///
+    /// `resignKey()` is a notification hook, not a way to give up key status.
+    /// Dropping the first responder and re-activating the remembered app is
+    /// what actually returns focus - and it returns it to the right place,
+    /// which matters because the next desktop action resolves its target from
+    /// whatever is frontmost.
     func endTextEditing() {
+        defer { applicationBeforeTextEditing = nil }
         guard let panel, panel.isKeyWindow else { return }
-        panel.resignKey()
-        NSApp.deactivate()
+        panel.makeFirstResponder(nil)
+        if let previous = applicationBeforeTextEditing, !previous.isTerminated {
+            previous.activate()
+        } else {
+            NSApp.deactivate()
+        }
     }
 
     /// Top-centered collapsed island window, flush with the screen's top edge.
@@ -162,23 +191,31 @@ final class LoreleiToolbarController {
         return IslandGeometry.windowSize(islandSize: islandSize)
     }
 
-    /// Whether a run status should pull the panel open on its own.
+    /// How a run status should affect the panel.
     ///
-    /// A response the user cannot read is no better than no response, so a
-    /// command turn opens the panel the way an approval request does. System
-    /// dictation reports `.working` while it finalizes text into another app
-    /// and must never cover that app's text field, hence the turn check.
-    static func shouldAutoExpand(
+    /// A command turn opens the panel so its answer is readable, but only
+    /// once: `.working` re-emits on every tool change, and a user who
+    /// collapsed the panel mid-run should not have to fight each update. An
+    /// approval blocks the run, so it always wins. System dictation reports
+    /// `.working` too while it finalizes text into another app, and must never
+    /// cover that app's text field.
+    enum PanelAutoExpansion {
+        case none
+        case oncePerTurn
+        case always
+    }
+
+    static func autoExpansion(
         for runStatus: LoreleiRunStatus,
         isAssistantTurnActive: Bool
-    ) -> Bool {
+    ) -> PanelAutoExpansion {
         switch runStatus {
         case .needsApproval:
-            return true
+            return .always
         case .working:
-            return isAssistantTurnActive
+            return isAssistantTurnActive ? .oncePerTurn : .none
         case .idle, .listening, .transcribing, .finished:
-            return false
+            return .none
         }
     }
 
