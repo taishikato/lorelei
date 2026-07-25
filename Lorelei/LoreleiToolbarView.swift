@@ -584,6 +584,10 @@ struct LoreleiToolbarView: View {
     /// shows it as a glyph so the text itself stays clean and selectable.
     private static let steerMarker = "↪ "
 
+    /// Shared height for a user bubble's first line and its edit button, so
+    /// neither one drives the bubble taller than the other.
+    private static let bubbleControlSize: CGFloat = 22
+
     private func userBubble(_ entry: ConversationEntry) -> some View {
         let isSteer = entry.text.hasPrefix(Self.steerMarker)
         let body = isSteer
@@ -619,7 +623,10 @@ struct LoreleiToolbarView: View {
                     .lineLimit(nil)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Match the edit button's height so a one-line message
+                    // centres against it instead of riding above it, while a
+                    // taller message still keeps the button on its first line.
+                    .frame(maxWidth: .infinity, minHeight: Self.bubbleControlSize, alignment: .leading)
             }
 
             if isEditable {
@@ -633,14 +640,14 @@ struct LoreleiToolbarView: View {
                     }
                 }) {
                     Image(systemName: isEditing ? "xmark" : "pencil")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(isEditHovered ? DS.Colors.textPrimary : DS.Colors.textSecondary)
-                        .frame(width: 28, height: 28)
+                        .frame(width: Self.bubbleControlSize, height: Self.bubbleControlSize)
                         .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .fill(.white.opacity(isEditHovered ? 0.16 : 0.07))
                         )
-                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .pointerCursor()
