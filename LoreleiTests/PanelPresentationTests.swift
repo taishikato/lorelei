@@ -210,4 +210,44 @@ struct PanelPresentationTests {
 
         #expect(controller.isExpanded)
     }
+
+    @Test func latestExchangeShowsOnlyTheCurrentCombo() {
+        func user(_ text: String) -> ConversationEntry {
+            ConversationEntry(id: UUID(), role: .user, text: text)
+        }
+        func assistant(_ text: String) -> ConversationEntry {
+            ConversationEntry(id: UUID(), role: .assistant, text: text)
+        }
+
+        #expect(LoreleiToolbarView.latestExchange(in: []).isEmpty)
+
+        // A finished pair is the whole exchange.
+        let pair = [user("first"), assistant("answer")]
+        #expect(LoreleiToolbarView.latestExchange(in: pair).map(\.text) == ["first", "answer"])
+
+        // Earlier turns drop away.
+        let manyTurns = [
+            user("first"), assistant("answer one"),
+            user("second"), assistant("answer two")
+        ]
+        #expect(LoreleiToolbarView.latestExchange(in: manyTurns).map(\.text) == ["second", "answer two"])
+
+        // A question with no answer yet still shows.
+        let unanswered = [user("first"), assistant("answer one"), user("second")]
+        #expect(LoreleiToolbarView.latestExchange(in: unanswered).map(\.text) == ["second"])
+
+        // A steer becomes the head of the current exchange.
+        let steered = [
+            user("first"), assistant("answer one"),
+            user("↪ actually the other window"), assistant("answer two")
+        ]
+        #expect(LoreleiToolbarView.latestExchange(in: steered).map(\.text) == [
+            "↪ actually the other window",
+            "answer two"
+        ])
+
+        // No user entry at all: show what there is rather than nothing.
+        let assistantOnly = [assistant("greeting")]
+        #expect(LoreleiToolbarView.latestExchange(in: assistantOnly).map(\.text) == ["greeting"])
+    }
 }

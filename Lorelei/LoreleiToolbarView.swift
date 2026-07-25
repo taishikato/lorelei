@@ -437,6 +437,20 @@ struct LoreleiToolbarView: View {
         )
     }
 
+    /// The exchange the panel shows: everything from the most recent user
+    /// message onward.
+    ///
+    /// One combo at a time keeps the current answer in view instead of letting
+    /// a long session push it off the top, and the full transcript is still in
+    /// the History window. With no user message at all there is nothing to
+    /// anchor on, so the log passes through unchanged.
+    static func latestExchange(in log: [ConversationEntry]) -> [ConversationEntry] {
+        guard let latestUserIndex = log.lastIndex(where: { $0.role == .user }) else {
+            return log
+        }
+        return Array(log[latestUserIndex...])
+    }
+
     private var conversationArea: some View {
         ScrollViewReader { proxy in
             Group {
@@ -445,7 +459,7 @@ struct LoreleiToolbarView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                            ForEach(companionManager.conversationLog) { entry in
+                            ForEach(Self.latestExchange(in: companionManager.conversationLog)) { entry in
                                 conversationRow(entry)
                                     .id(entry.id)
                             }
