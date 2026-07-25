@@ -29,6 +29,9 @@ struct LoreleiToolbarView: View {
     @State private var composerText = ""
     @State private var editingEntryID: UUID?
     @State private var editingText = ""
+    // Only the latest user bubble shows the edit affordance, so one hover
+    // flag is enough.
+    @State private var isEditHovered = false
     @FocusState private var focusedField: PanelField?
 
     private var activity: IslandActivity {
@@ -629,14 +632,21 @@ struct LoreleiToolbarView: View {
                         }
                     }
                 }) {
-                    Image(systemName: isEditing ? "xmark" : "pencil")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(DS.Colors.textTertiary)
-                        .frame(width: 20, height: 20)
+                    Image(systemName: isEditing ? "xmark" : "square.and.pencil")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isEditHovered ? DS.Colors.textPrimary : DS.Colors.textSecondary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            Circle()
+                                .fill(.white.opacity(isEditHovered ? 0.12 : 0))
+                        )
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .pointerCursor()
+                .onHover { hovering in
+                    isEditHovered = hovering
+                }
                 .help(isEditing ? "Cancel editing" : "Edit and resend")
                 .accessibilityLabel(isEditing ? "Cancel editing" : "Edit and resend")
             }
