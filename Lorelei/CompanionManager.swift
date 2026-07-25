@@ -741,9 +741,9 @@ final class CompanionManager: ObservableObject {
     /// Resends a corrected version of the latest user message.
     ///
     /// The Codex session cannot rewind, so this is always a fresh submission.
-    /// The only thing editing buys is log hygiene: when nothing has answered
-    /// the message yet, the original entry is rewritten instead of leaving a
-    /// near-duplicate pair behind.
+    /// What editing buys is panel hygiene: when nothing has answered the
+    /// message yet, the visible entry is rewritten instead of leaving a
+    /// near-duplicate pair behind. History still records both texts.
     func resubmitEditedUserEntry(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -808,10 +808,8 @@ final class CompanionManager: ObservableObject {
                         prompt: transcript,
                         transport: liveCodexAppServerTransport
                     )
-                    if appendUserEntry {
-                        conversation.append(role: .user, text: "↪ \(transcript)")
-                        recordHistory(role: "user", text: transcript)
-                    }
+                    conversation.append(role: .user, text: "↪ \(transcript)")
+                    recordHistory(role: "user", text: transcript)
                     LoreleiAnalytics.capture(.steerSent)
                     LoreleiAnalytics.capture(.dictationCompleted(
                         transcriptCharacters: transcript.count,
