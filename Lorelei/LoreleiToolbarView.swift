@@ -632,13 +632,13 @@ struct LoreleiToolbarView: View {
                         }
                     }
                 }) {
-                    Image(systemName: isEditing ? "xmark" : "square.and.pencil")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isEditHovered ? DS.Colors.textPrimary : DS.Colors.textSecondary)
+                    Image(systemName: isEditing ? "xmark" : "pencil")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(isEditHovered ? Color.black : DS.Colors.textPrimary)
                         .frame(width: 26, height: 26)
                         .background(
                             Circle()
-                                .fill(.white.opacity(isEditHovered ? 0.12 : 0))
+                                .fill(.white.opacity(isEditHovered ? 0.9 : 0.1))
                         )
                         .contentShape(Circle())
                 }
