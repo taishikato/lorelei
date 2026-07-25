@@ -39,6 +39,7 @@ final class LoreleiToolbarController {
     private let companionManager: CompanionManager
     private let expansionState = LoreleiToolbarExpansionState()
     private var runStatusCancellable: AnyCancellable?
+    private var approvalCancellable: AnyCancellable?
     private var panel: LoreleiToolbarPanel?
     private weak var islandHostingView: IslandClickRegionHostingView<LoreleiToolbarView>?
     var onOpenSettings: (() -> Void)?
@@ -67,6 +68,17 @@ final class LoreleiToolbarController {
                     // grow it for the tray, shrink it back after.
                     self.positionPanel(panel)
                 }
+            }
+
+        // The panel is taller while an approval is pending, so the window has
+        // to follow the approval in BOTH directions - the run status sink only
+        // repositions while collapsed.
+        approvalCancellable = companionManager.$pendingApprovalTitle
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.expansionState.isExpanded, let panel = self.panel else { return }
+                self.positionPanel(panel)
             }
     }
 
@@ -243,7 +255,9 @@ final class LoreleiToolbarController {
             let island = islandSizeForScreen(screen)
             return CGSize(
                 width: IslandGeometry.expandedPanelSize.width,
-                height: island.height + IslandGeometry.expandedPanelSize.height
+                height: island.height + IslandGeometry.expandedPanelHeight(
+                    hasPendingApproval: companionManager.pendingApprovalTitle != nil
+                )
             )
         }
         return Self.collapsedWindowSize(

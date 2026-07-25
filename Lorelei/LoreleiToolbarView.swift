@@ -108,7 +108,9 @@ struct LoreleiToolbarView: View {
                         expandedPanel
                             .frame(
                                 width: IslandGeometry.expandedPanelSize.width,
-                                height: IslandGeometry.expandedPanelSize.height
+                                height: IslandGeometry.expandedPanelHeight(
+                                    hasPendingApproval: companionManager.pendingApprovalTitle != nil
+                                )
                             )
                             // Retract by CONVERGING into the island: scale
                             // toward the top-center anchor (where the island
