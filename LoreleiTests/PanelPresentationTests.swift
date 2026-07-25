@@ -118,8 +118,10 @@ struct PanelPresentationTests {
         let controller = LoreleiToolbarController(companionManager: manager)
 
         manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        // Wait on the approval itself: the panel already opens when the turn
+        // starts, so `isExpanded` would go true long before the request lands.
         for _ in 0..<20 {
-            if controller.isExpanded {
+            if manager.pendingApprovalTitle != nil {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
@@ -127,5 +129,185 @@ struct PanelPresentationTests {
 
         #expect(manager.runStatus == .needsApproval("Computer Use"))
         #expect(controller.isExpanded)
+    }
+
+    @Test func toolbarPanelRefusesKeyFocusUntilAllowed() async throws {
+        let panel = LoreleiToolbarPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        #expect(!panel.canBecomeKey)
+
+        panel.keyFocusAllowed = true
+        #expect(panel.canBecomeKey)
+
+        panel.keyFocusAllowed = false
+        #expect(!panel.canBecomeKey)
+    }
+
+    @Test func expandedWindowHeightStacksThePanelUnderTheIsland() async throws {
+        let islandSize = IslandGeometry.islandSize(notchWidth: 190, safeAreaTop: 32)
+        #expect(islandSize.height == 32)
+
+        let plainWindowHeight = islandSize.height
+            + IslandGeometry.expandedPanelHeight(hasPendingApproval: false)
+        let approvingWindowHeight = islandSize.height
+            + IslandGeometry.expandedPanelHeight(hasPendingApproval: true)
+
+        #expect(plainWindowHeight == 32 + IslandGeometry.expandedPanelSize.height)
+        #expect(approvingWindowHeight
+            == plainWindowHeight + IslandGeometry.approvalPanelExtraHeight)
+        #expect(IslandGeometry.expandedPanelSize.width == 460)
+    }
+
+    @Test func aVoiceSteerDoesNotReopenAPanelTheUserCollapsed() {
+        var tracker = LoreleiToolbarController.PanelAutoExpansionTracker()
+        let turnOne = UUID()
+        let turnTwo = UUID()
+        // `#expect` captures its expression in a closure, so the mutating
+        // calls have to happen out here.
+        let turnStart = tracker.shouldExpand(
+            for: .working("Thinking…"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let laterActivity = tracker.shouldExpand(
+            for: .working("lorelei.set_text"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let steerListening = tracker.shouldExpand(
+            for: .listening, isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let steerTranscribing = tracker.shouldExpand(
+            for: .transcribing, isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let afterSteer = tracker.shouldExpand(
+            for: .working("Thinking…"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let approval = tracker.shouldExpand(
+            for: .needsApproval("Computer Use"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        // Straight into the next turn, with no idle gap in between - a typed
+        // message can start one before the previous status reaches `.idle`.
+        let nextTurn = tracker.shouldExpand(
+            for: .working("Thinking…"), isAssistantTurnActive: true, turnToken: turnTwo
+        )
+
+        // The turn starts and opens the panel once.
+        #expect(turnStart)
+        // Later activity updates in the same turn leave it alone, so a user
+        // who collapsed it is not fought.
+        #expect(!laterActivity)
+        // A voice steer runs INSIDE the turn: it passes through listening and
+        // transcribing, and the working status that follows must not reopen
+        // what the user closed.
+        #expect(!steerListening)
+        #expect(!steerTranscribing)
+        #expect(!afterSteer)
+        // An approval blocks the run, so it still surfaces mid-turn.
+        #expect(approval)
+        // A genuinely new turn opens the panel again.
+        #expect(nextTurn)
+    }
+
+    @Test func autoExpansionRulesCoverTurnsApprovalsAndDictation() {
+        // A command turn opens the panel, but only once - `.working` re-emits
+        // on every tool change and must not fight a mid-run collapse.
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .working("Thinking…"), isAssistantTurnActive: true
+        ) == .oncePerTurn)
+        // System dictation reports `.working` too and must NOT open it.
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .working("Dictating…"), isAssistantTurnActive: false
+        ) == .none)
+        // Approvals block the run, so they surface every time.
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .needsApproval("Computer Use"), isAssistantTurnActive: true
+        ) == .always)
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .needsApproval("Computer Use"), isAssistantTurnActive: false
+        ) == .always)
+        // Nothing else does.
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .idle, isAssistantTurnActive: false
+        ) == .none)
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .listening, isAssistantTurnActive: false
+        ) == .none)
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .transcribing, isAssistantTurnActive: false
+        ) == .none)
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .finished(success: true), isAssistantTurnActive: false
+        ) == .none)
+    }
+
+    @Test func toolbarAutoExpandsWhenTheAssistantStartsResponding() async throws {
+        let defaults = UserDefaults(suiteName: "ToolbarAutoExpansionTurnTests")!
+        defaults.removePersistentDomain(forName: "ToolbarAutoExpansionTurnTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Working"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+        let controller = LoreleiToolbarController(companionManager: manager)
+
+        #expect(!controller.isExpanded)
+
+        manager.submitTypedMessage("open the notes app")
+        for _ in 0..<40 {
+            if controller.isExpanded { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(controller.isExpanded)
+    }
+
+    @Test func latestExchangeShowsOnlyTheCurrentCombo() {
+        func user(_ text: String) -> ConversationEntry {
+            ConversationEntry(id: UUID(), role: .user, text: text)
+        }
+        func assistant(_ text: String) -> ConversationEntry {
+            ConversationEntry(id: UUID(), role: .assistant, text: text)
+        }
+
+        #expect(LoreleiToolbarView.latestExchange(in: []).isEmpty)
+
+        // A finished pair is the whole exchange.
+        let pair = [user("first"), assistant("answer")]
+        #expect(LoreleiToolbarView.latestExchange(in: pair).map(\.text) == ["first", "answer"])
+
+        // Earlier turns drop away.
+        let manyTurns = [
+            user("first"), assistant("answer one"),
+            user("second"), assistant("answer two")
+        ]
+        #expect(LoreleiToolbarView.latestExchange(in: manyTurns).map(\.text) == ["second", "answer two"])
+
+        // A question with no answer yet still shows.
+        let unanswered = [user("first"), assistant("answer one"), user("second")]
+        #expect(LoreleiToolbarView.latestExchange(in: unanswered).map(\.text) == ["second"])
+
+        // A steer becomes the head of the current exchange.
+        let steered = [
+            user("first"), assistant("answer one"),
+            user("↪ actually the other window"), assistant("answer two")
+        ]
+        #expect(LoreleiToolbarView.latestExchange(in: steered).map(\.text) == [
+            "↪ actually the other window",
+            "answer two"
+        ])
+
+        // No user entry at all: show what there is rather than nothing.
+        let assistantOnly = [assistant("greeting")]
+        #expect(LoreleiToolbarView.latestExchange(in: assistantOnly).map(\.text) == ["greeting"])
     }
 }

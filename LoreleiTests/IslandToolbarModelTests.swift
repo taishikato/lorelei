@@ -147,4 +147,15 @@ struct IslandToolbarModelTests {
         #expect(scheduler.sideAfterReturnToIdle(current: IslandSide.left) == IslandSide.right)
         #expect(scheduler.sideAfterReturnToIdle(current: IslandSide.right) == IslandSide.left)
     }
+
+    @Test func approvalGivesThePanelExtraHeight() {
+        let plain = IslandGeometry.expandedPanelHeight(hasPendingApproval: false)
+        let approving = IslandGeometry.expandedPanelHeight(hasPendingApproval: true)
+
+        #expect(plain == IslandGeometry.expandedPanelSize.height)
+        #expect(approving == plain + IslandGeometry.approvalPanelExtraHeight)
+        // The approval block plus the Stop button need real room, or the
+        // conversation is squeezed out exactly when it matters most.
+        #expect(IslandGeometry.approvalPanelExtraHeight >= 120)
+    }
 }

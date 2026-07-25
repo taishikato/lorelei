@@ -54,6 +54,28 @@ struct ConversationLog: Equatable, Sendable {
         currentAssistantEntryID = nil
     }
 
+    /// Identifier of the most recent `.user` entry. The panel shows its edit
+    /// affordance on this entry only - editing older turns would imply a
+    /// rewind the Codex session cannot perform.
+    var latestUserEntryID: UUID? {
+        entries.last(where: { $0.role == .user })?.id
+    }
+
+    /// Rewrites the trailing user entry in place, so a corrected utterance
+    /// replaces the original instead of piling a near-duplicate onto the log.
+    /// Returns whether the replacement happened.
+    ///
+    /// 'Trailing' is all this checks: an assistant entry after the user's
+    /// means the message was answered and must not be rewritten. Whether a
+    /// turn is still in flight is the caller's business.
+    mutating func replaceLatestUserEntryTextIfUnanswered(_ text: String) -> Bool {
+        guard let index = entries.indices.last, entries[index].role == .user else {
+            return false
+        }
+        entries[index].text = text
+        return true
+    }
+
     mutating func removeAll() {
         entries.removeAll()
         currentAssistantEntryID = nil

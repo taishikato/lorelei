@@ -197,10 +197,26 @@ final class CompanionManager: ObservableObject {
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
 
-    /// Stop is only meaningful for an in-flight command turn. System dictation
-    /// uses `.working("Dictating…")` for progress UI and must not show Stop.
-    var canStopCurrentRun: Bool {
+    /// True while a command turn owns the run status. System dictation reports
+    /// `.working("Dictating…")` for its own progress UI, so anything that must
+    /// not react to dictation gates on this rather than the raw run status.
+    var isAssistantTurnActive: Bool {
         currentResponseTask != nil || pendingCodexAppServerApproval != nil
+    }
+
+    /// Stop is only meaningful for an in-flight command turn.
+    var canStopCurrentRun: Bool {
+        isAssistantTurnActive
+    }
+
+    /// Identity of the in-flight command turn, or nil between turns.
+    ///
+    /// UI that should react once per turn keys off this rather than off the
+    /// run status: a steer or another tool keeps the same token, while a new
+    /// turn always gets a fresh one - even when it starts before the run
+    /// status has had a chance to pass through `.idle`.
+    var currentTurnToken: UUID? {
+        responseTaskTracker.currentTaskID
     }
 
     init(
@@ -713,6 +729,46 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Submits text the user typed into the panel. Typed input is the same
+    /// kind of user turn as a released push-to-talk transcript, so it takes
+    /// the identical path: a new turn when idle, a steer while a turn runs.
+    func submitTypedMessage(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        LoreleiAnalytics.capture(.typedMessageSent(
+            characters: trimmed.count,
+            wasEdited: false
+        ))
+        handleFinalTranscriptLocally(trimmed)
+    }
+
+    /// The entry the panel offers an edit affordance on: the most recent user
+    /// message.
+    var editableUserEntryID: UUID? {
+        conversation.latestUserEntryID
+    }
+
+    /// Resends a corrected version of the latest user message.
+    ///
+    /// The Codex session cannot rewind, so this is always a fresh submission.
+    /// What editing buys is panel hygiene: when nothing has answered the
+    /// message yet, the visible entry is rewritten instead of leaving a
+    /// near-duplicate pair behind. History still records both texts.
+    func resubmitEditedUserEntry(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        LoreleiAnalytics.capture(.typedMessageSent(
+            characters: trimmed.count,
+            wasEdited: true
+        ))
+        if activeTurn == nil, conversation.replaceLatestUserEntryTextIfUnanswered(trimmed) {
+            recordHistory(role: "user", text: trimmed)
+            handleFinalTranscriptLocally(trimmed, appendUserEntry: false)
+            return
+        }
+        handleFinalTranscriptLocally(trimmed)
+    }
+
     private func stopCurrentRunByInvalidatingSession() async {
         await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
@@ -747,7 +803,7 @@ final class CompanionManager: ObservableObject {
 #endif
 
     /// Routes final transcripts to Lorelei's current local workspace and Codex actions.
-    private func handleFinalTranscriptLocally(_ transcript: String) {
+    private func handleFinalTranscriptLocally(_ transcript: String, appendUserEntry: Bool = true) {
         if let activeTurn,
            let liveCodexAppServerTransport,
            let codexAppServerExecutor {
@@ -784,13 +840,13 @@ final class CompanionManager: ObservableObject {
                     outstandingSteerTranscripts.removeValue(forKey: requestID)
                     LoreleiAnalytics.capture(.steerFailed)
                     recordDebugEvent("Steer failed - starting a new turn")
-                    routeFinalTranscriptAsNewTurn(transcript)
+                    routeFinalTranscriptAsNewTurn(transcript, appendUserEntry: appendUserEntry)
                 }
             }
             return
         }
 
-        routeFinalTranscriptAsNewTurn(transcript)
+        routeFinalTranscriptAsNewTurn(transcript, appendUserEntry: appendUserEntry)
     }
 
     private func routeFinalTranscriptAsNewTurn(_ transcript: String, appendUserEntry: Bool = true) {

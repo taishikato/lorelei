@@ -55,6 +55,7 @@ enum LoreleiAnalyticsEvent {
     case settingsPanelOpened
     case toolbarExpanded
     case newChatStarted
+    case typedMessageSent(characters: Int, wasEdited: Bool)
     case onboardingStarted
     case onboardingCompleted
     case updateCheckPerformed(updateAvailable: Bool)
@@ -77,6 +78,7 @@ enum LoreleiAnalyticsEvent {
         case .settingsPanelOpened: "settings_panel_opened"
         case .toolbarExpanded: "toolbar_expanded"
         case .newChatStarted: "new_chat_started"
+        case .typedMessageSent: "typed_message_sent"
         case .onboardingStarted: "onboarding_started"
         case .onboardingCompleted: "onboarding_completed"
         case .updateCheckPerformed: "update_check_performed"
@@ -144,6 +146,11 @@ enum LoreleiAnalyticsEvent {
             return ["accepted": accepted]
         case .updateCheckPerformed(let updateAvailable):
             return ["update_available": updateAvailable]
+        case .typedMessageSent(let characters, let wasEdited):
+            return [
+                "characters": characters,
+                "was_edited": wasEdited
+            ]
         }
     }
 }

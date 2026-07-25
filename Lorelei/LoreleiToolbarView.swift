@@ -7,15 +7,32 @@
 
 import SwiftUI
 
+/// Which of the panel's text fields currently holds focus. The panel takes
+/// keyboard focus away from the user's frontmost app, so exactly one field may
+/// be active at a time and `nil` must give focus straight back.
+enum PanelField: Hashable {
+    case composer
+    case editor(UUID)
+}
+
 struct LoreleiToolbarView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var expansionState: LoreleiToolbarExpansionState
     let toggleExpansion: @MainActor @Sendable () -> Void
     let openSettings: @MainActor @Sendable () -> Void
+    let beginTextEditing: @MainActor @Sendable () -> Void
+    let endTextEditing: @MainActor @Sendable () -> Void
 
     @State private var isHeadHovered = false
     @State private var headSide: IslandSide = .left
     @State private var sideScheduler = IslandSideScheduler()
+    @State private var composerText = ""
+    @State private var editingEntryID: UUID?
+    @State private var editingText = ""
+    // Only the latest user bubble shows the edit affordance, so one hover
+    // flag is enough.
+    @State private var isEditHovered = false
+    @FocusState private var focusedField: PanelField?
 
     private var activity: IslandActivity {
         IslandActivity.activity(
@@ -94,7 +111,9 @@ struct LoreleiToolbarView: View {
                         expandedPanel
                             .frame(
                                 width: IslandGeometry.expandedPanelSize.width,
-                                height: IslandGeometry.expandedPanelSize.height
+                                height: IslandGeometry.expandedPanelHeight(
+                                    hasPendingApproval: companionManager.pendingApprovalTitle != nil
+                                )
                             )
                             // Retract by CONVERGING into the island: scale
                             // toward the top-center anchor (where the island
@@ -134,6 +153,31 @@ struct LoreleiToolbarView: View {
             var scheduler = sideScheduler
             headSide = scheduler.sideAfterReturnToIdle(current: headSide)
             sideScheduler = scheduler
+        }
+        .onChange(of: companionManager.runStatus) { _, newStatus in
+            // Speaking always wins over a half-typed message.
+            if case .listening = newStatus {
+                releaseTextEditing()
+            }
+        }
+        .onChange(of: expansionState.isExpanded) { _, isExpanded in
+            if !isExpanded {
+                releaseTextEditing()
+            }
+        }
+        .onChange(of: companionManager.editableUserEntryID) { _, newID in
+            // The edited entry can be replaced or cleared out from under the
+            // editor (resend, New Chat, the 200-entry cap).
+            if let editingEntryID, editingEntryID != newID {
+                releaseTextEditing()
+            }
+        }
+        .onChange(of: companionManager.isAssistantTurnActive) { _, isActive in
+            // A turn starting takes the inline editor with it: mid-run the
+            // same keystrokes would land as a steer, not as a correction.
+            if isActive, editingEntryID != nil {
+                releaseTextEditing()
+            }
         }
         .task(id: activity == .idlePeek) {
             guard activity == .idlePeek else { return }
@@ -321,9 +365,7 @@ struct LoreleiToolbarView: View {
                 approvalBlock
             }
 
-            if showsStopButton {
-                footer
-            }
+            composerRow
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -340,13 +382,13 @@ struct LoreleiToolbarView: View {
     private var expandedHeader: some View {
         HStack(spacing: 9) {
             faceView
-                .scaleEffect(0.72)
-                .frame(width: 36, height: 20)
+                .scaleEffect(0.92)
+                .frame(width: 50, height: 26)
             Text(Self.statusLabel(for: companionManager.runStatus))
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle(DS.Colors.textPrimary)
+                .foregroundStyle(DS.Colors.textSecondary)
 
             Spacer()
 
@@ -400,6 +442,20 @@ struct LoreleiToolbarView: View {
         )
     }
 
+    /// The exchange the panel shows: everything from the most recent user
+    /// message onward.
+    ///
+    /// One combo at a time keeps the current answer in view instead of letting
+    /// a long session push it off the top, and the full transcript is still in
+    /// the History window. With no user message at all there is nothing to
+    /// anchor on, so the log passes through unchanged.
+    static func latestExchange(in log: [ConversationEntry]) -> [ConversationEntry] {
+        guard let latestUserIndex = log.lastIndex(where: { $0.role == .user }) else {
+            return log
+        }
+        return Array(log[latestUserIndex...])
+    }
+
     private var conversationArea: some View {
         ScrollViewReader { proxy in
             Group {
@@ -407,26 +463,19 @@ struct LoreleiToolbarView: View {
                     conversationEmptyState
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(companionManager.conversationLog) { entry in
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(Self.latestExchange(in: companionManager.conversationLog)) { entry in
                                 conversationRow(entry)
                                     .id(entry.id)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 8)
                     }
+                    .scrollIndicators(.never)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(DS.Colors.islandRaised)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(DS.Colors.islandHairline, lineWidth: 0.7)
-            )
             .onChange(of: companionManager.conversationLog) { _, log in
                 guard let lastID = log.last?.id else { return }
                 withAnimation(.easeOut(duration: 0.18)) {
@@ -452,40 +501,20 @@ struct LoreleiToolbarView: View {
     }
 
     private var emptyStateGuidance: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             Image(systemName: "waveform")
                 .font(.system(size: 26, weight: .medium))
                 .foregroundStyle(DS.Colors.textSecondary)
 
-            VStack(spacing: 6) {
-                HStack(spacing: 5) {
-                    Text("Hold")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(DS.Colors.textPrimary)
+            Text("Speak or type to get started.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(DS.Colors.textPrimary)
 
-                    ForEach(BuddyPushToTalkShortcut.currentShortcutOption.keyCapsuleLabels, id: \.self) { keyLabel in
-                        Text(keyLabel)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(DS.Colors.textPrimary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(DS.Colors.islandRaised)
-                            )
-                    }
-
-                    Text("and speak")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(DS.Colors.textPrimary)
-                }
-
-                Text("Release to send. Hold again while Lorelei is working to steer the task.")
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(DS.Colors.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Speak or type while Lorelei is working to steer the task.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(DS.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -529,23 +558,156 @@ struct LoreleiToolbarView: View {
     private func conversationRow(_ entry: ConversationEntry) -> some View {
         switch entry.role {
         case .user:
-            HStack {
-                Spacer(minLength: 34)
-                Text("You: \(entry.text)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(DS.Colors.textPrimary)
-                    .multilineTextAlignment(.trailing)
-                    .lineLimit(nil)
-                    .textSelection(.enabled)
-            }
+            userBubble(entry)
         case .assistant:
             Text(entry.text)
-                .font(.system(size: 12, weight: .light, design: .monospaced))
+                .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(DS.Colors.textPrimary)
                 .lineLimit(nil)
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
         }
+    }
+
+    /// A steered utterance is logged with a leading arrow marker; the bubble
+    /// shows it as a glyph so the text itself stays clean and selectable.
+    private static let steerMarker = "↪ "
+
+    /// Shared height for a user bubble's first line and its edit button, so
+    /// neither one drives the bubble taller than the other.
+    private static let bubbleControlSize: CGFloat = 22
+
+    /// Shared height for the composer's field and its trailing send/stop
+    /// button, so the row never changes height as that button appears.
+    private static let composerControlSize: CGFloat = 20
+
+    private func userBubble(_ entry: ConversationEntry) -> some View {
+        let isSteer = entry.text.hasPrefix(Self.steerMarker)
+        let body = isSteer
+            ? String(entry.text.dropFirst(Self.steerMarker.count))
+            : entry.text
+        let isEditing = editingEntryID == entry.id
+        // Only the latest user message is editable, and only between turns:
+        // resending an older turn would imply a rewind the Codex session
+        // cannot perform, and mid-run a correction can only land as a steer,
+        // which is what the composer is for.
+        let isEditable = companionManager.editableUserEntryID == entry.id
+            && !companionManager.isAssistantTurnActive
+
+        return HStack(alignment: .top, spacing: 8) {
+            if isSteer {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(DS.Colors.textTertiary)
+                    .padding(.top, 2)
+            }
+
+            if isEditing {
+                TextField("", text: $editingText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(DS.Colors.textPrimary)
+                    .lineLimit(1...6)
+                    .focused($focusedField, equals: .editor(entry.id))
+                    .onSubmit { deferredAction { submitEdit() } }
+                    .onExitCommand { deferredAction { cancelEdit() } }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(body)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(DS.Colors.textPrimary)
+                    .lineLimit(nil)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    // Match the edit button's height so a one-line message
+                    // centres against it instead of riding above it, while a
+                    // taller message still keeps the button on its first line.
+                    .frame(maxWidth: .infinity, minHeight: Self.bubbleControlSize, alignment: .leading)
+            }
+
+            if isEditable {
+                Button(action: {
+                    deferredAction {
+                        if isEditing {
+                            cancelEdit()
+                        } else {
+                            beginEdit(entry: entry, body: body)
+                        }
+                    }
+                }) {
+                    Group {
+                        if isEditing {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .semibold))
+                        } else {
+                            // Lucide 'pencil' (ISC license), bundled as a
+                            // template asset: the outlined pen SF Symbols
+                            // does not have.
+                            Image("EditPen")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+                    .foregroundStyle(isEditHovered ? DS.Colors.textPrimary : DS.Colors.textSecondary)
+                    .frame(width: Self.bubbleControlSize, height: Self.bubbleControlSize)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(.white.opacity(isEditHovered ? 0.16 : 0.07))
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .onHover { hovering in
+                    isEditHovered = hovering
+                }
+                .help(isEditing ? "Cancel editing" : "Edit and resend")
+                .accessibilityLabel(isEditing ? "Cancel editing" : "Edit and resend")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(DS.Colors.islandUserBubble)
+        )
+    }
+
+    /// Drops panel focus and hands the keyboard back. Every path that closes a
+    /// field goes through here - clearing `focusedField` alone leaves Lorelei
+    /// frontmost, eating keystrokes meant for the app behind it.
+    private func releaseTextEditing() {
+        focusedField = nil
+        editingEntryID = nil
+        editingText = ""
+        endTextEditing()
+    }
+
+    private func beginEdit(entry: ConversationEntry, body: String) {
+        editingEntryID = entry.id
+        editingText = body
+        beginTextEditing()
+        focusedField = .editor(entry.id)
+    }
+
+    private func cancelEdit() {
+        editingEntryID = nil
+        editingText = ""
+        focusedField = nil
+        endTextEditing()
+    }
+
+    private func submitEdit() {
+        let text = editingText
+        editingEntryID = nil
+        editingText = ""
+        focusedField = nil
+        endTextEditing()
+        companionManager.resubmitEditedUserEntry(text)
     }
 
     private var approvalBlock: some View {
@@ -579,19 +741,111 @@ struct LoreleiToolbarView: View {
         )
     }
 
-    private var footer: some View {
-        HStack {
-            Spacer()
+    private var composerRow: some View {
+        HStack(spacing: 8) {
+            TextField("", text: $composerText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(DS.Colors.textPrimary)
+                .lineLimit(1...4)
+                .focused($focusedField, equals: .composer)
+                .onSubmit { deferredAction { submitComposer() } }
+                .onExitCommand { deferredAction { dismissComposer() } }
+                // Until the panel holds key focus the field cannot take first
+                // responder, so the first click has to go to the row's gesture
+                // instead; afterwards the field owns its own clicks (caret
+                // placement, selection).
+                .allowsHitTesting(focusedField == .composer)
+                // The trailing control comes and goes; pinning the field to the
+                // same height keeps the composer from jumping when it does.
+                .frame(minHeight: Self.composerControlSize)
+                .overlay(alignment: .leading) {
+                    if composerText.isEmpty {
+                        composerPlaceholder
+                            .allowsHitTesting(false)
+                    }
+                }
 
-            Button("Stop") {
-                deferredAction { companionManager.stopCurrentRun() }
+            if companionManager.canStopCurrentRun {
+                Button(action: { deferredAction { companionManager.stopCurrentRun() } }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(DS.Colors.textPrimary)
+                        .frame(width: Self.composerControlSize, height: Self.composerControlSize)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Stop")
+                .accessibilityLabel("Stop the current run")
+            } else if !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button(action: { deferredAction { submitComposer() } }) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(DS.Colors.textPrimary)
+                        .frame(width: Self.composerControlSize, height: Self.composerControlSize)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Send")
+                .accessibilityLabel("Send message")
             }
-            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(DS.Colors.islandUserBubble)
+        )
+        .overlay(
+            Capsule()
+                .stroke(DS.Colors.islandHairline, lineWidth: 0.7)
+        )
+        .contentShape(Capsule())
+        .onTapGesture {
+            beginTextEditing()
+            focusedField = .composer
         }
     }
 
-    private var showsStopButton: Bool {
-        companionManager.canStopCurrentRun
+    private var composerPlaceholder: some View {
+        HStack(spacing: 5) {
+            Text("Type or hold")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(DS.Colors.textTertiary)
+
+            ForEach(BuddyPushToTalkShortcut.currentShortcutOption.keyCapsuleLabels, id: \.self) { keyLabel in
+                Text(keyLabel)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(DS.Colors.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(DS.Colors.islandRaised)
+                    )
+            }
+
+            Text("to speak")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(DS.Colors.textTertiary)
+        }
+    }
+
+    private func submitComposer() {
+        let text = composerText
+        composerText = ""
+        focusedField = nil
+        endTextEditing()
+        companionManager.submitTypedMessage(text)
+    }
+
+    /// Escape gives focus straight back to the app the user was working in,
+    /// leaving whatever they typed in place for a later send.
+    private func dismissComposer() {
+        focusedField = nil
+        endTextEditing()
     }
 
 }

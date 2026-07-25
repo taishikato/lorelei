@@ -77,7 +77,19 @@ nonisolated enum IslandGeometry {
     static let headRestProtrusion: CGFloat = 22
     /// Extra lean-out on hover.
     static let headHoverExtra: CGFloat = 4
-    static let expandedPanelSize = CGSize(width: 460, height: 430)
+    static let expandedPanelSize = CGSize(width: 460, height: 240)
+    /// Extra room while an approval is pending. The approval block costs about
+    /// 100pt with its spacing, which on a 240pt panel would leave the
+    /// conversation with nothing at the one moment the user needs to read it.
+    static let approvalPanelExtraHeight: CGFloat = 140
+
+    /// The panel's height for the current state. Two fixed heights, not a
+    /// content fit: sizing the window from SwiftUI content would resize it on
+    /// every streaming delta, and the hosting view must never drive the window
+    /// (plan 033).
+    static func expandedPanelHeight(hasPendingApproval: Bool) -> CGFloat {
+        expandedPanelSize.height + (hasPendingApproval ? approvalPanelExtraHeight : 0)
+    }
     static let minNotchWidth: CGFloat = 150
     static let maxNotchWidth: CGFloat = 260
     static let fallbackNotchWidth: CGFloat = 190

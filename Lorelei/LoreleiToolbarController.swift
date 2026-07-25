@@ -18,6 +18,18 @@ final class LoreleiToolbarExpansionState: ObservableObject {
     @Published var islandSize: CGSize = .zero
 }
 
+/// The toolbar's panel. Borderless non-activating panels refuse key status
+/// outright, which is right for the island band but wrong for the expanded
+/// panel's text fields - so key eligibility is a flag the controller opens
+/// only while the panel is expanded.
+final class LoreleiToolbarPanel: NSPanel {
+    var keyFocusAllowed = false
+
+    override var canBecomeKey: Bool {
+        keyFocusAllowed
+    }
+}
+
 @MainActor
 final class LoreleiToolbarController {
     private enum Metrics {
@@ -27,7 +39,13 @@ final class LoreleiToolbarController {
     private let companionManager: CompanionManager
     private let expansionState = LoreleiToolbarExpansionState()
     private var runStatusCancellable: AnyCancellable?
-    private var panel: NSPanel?
+    private var approvalCancellable: AnyCancellable?
+    /// The app that was frontmost when the panel took focus. Desktop actions
+    /// resolve their target from the frontmost app, so typing must not leave
+    /// Lorelei itself sitting there.
+    private var applicationBeforeTextEditing: NSRunningApplication?
+    private var autoExpansionTracker = PanelAutoExpansionTracker()
+    private var panel: LoreleiToolbarPanel?
     private weak var islandHostingView: IslandClickRegionHostingView<LoreleiToolbarView>?
     var onOpenSettings: (() -> Void)?
 
@@ -39,7 +57,16 @@ final class LoreleiToolbarController {
                 guard let self else { return }
                 self.islandHostingView?.trayVisible =
                     IslandActivity.activity(for: runStatus).showsTray
-                if case .needsApproval = runStatus {
+                if case .listening = runStatus {
+                    // Push-to-talk wins over a half-typed message: the field
+                    // must not keep swallowing keystrokes while Lorelei listens.
+                    self.endTextEditing()
+                }
+                if self.autoExpansionTracker.shouldExpand(
+                    for: runStatus,
+                    isAssistantTurnActive: self.companionManager.isAssistantTurnActive,
+                    turnToken: self.companionManager.currentTurnToken
+                ) {
                     self.setExpanded(true)
                 } else if let panel = self.panel, !self.expansionState.isExpanded {
                     // The collapsed window only spans the island band while no
@@ -47,6 +74,17 @@ final class LoreleiToolbarController {
                     // grow it for the tray, shrink it back after.
                     self.positionPanel(panel)
                 }
+            }
+
+        // The panel is taller while an approval is pending, so the window has
+        // to follow the approval in BOTH directions - the run status sink only
+        // repositions while collapsed.
+        approvalCancellable = companionManager.$pendingApprovalTitle
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.expansionState.isExpanded, let panel = self.panel else { return }
+                self.positionPanel(panel)
             }
     }
 
@@ -69,16 +107,53 @@ final class LoreleiToolbarController {
             // invisible - then let SwiftUI slide the panel out from under
             // the island. The window frame itself never animates.
             expansionState.isExpanded = true
+            panel?.keyFocusAllowed = true
             if let panel { positionPanel(panel) }
             LoreleiAnalytics.capture(.toolbarExpanded)
         } else {
             expansionState.isExpanded = false
+            endTextEditing()
+            panel?.keyFocusAllowed = false
             // Let the retract transition play inside the still-tall window,
             // then shrink the window back to the island band.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, !self.expansionState.isExpanded, let panel = self.panel else { return }
                 self.positionPanel(panel)
             }
+        }
+    }
+
+    /// Takes keyboard focus for the panel's text fields. The app is an
+    /// accessory (`LSUIElement`), so it must activate before its key window
+    /// receives keystrokes.
+    func beginTextEditing() {
+        guard let panel, expansionState.isExpanded else { return }
+        if !panel.isKeyWindow {
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            if frontmost?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                applicationBeforeTextEditing = frontmost
+            }
+        }
+        panel.keyFocusAllowed = true
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKey()
+    }
+
+    /// Hands the keyboard back to the app the user came from.
+    ///
+    /// `resignKey()` is a notification hook, not a way to give up key status.
+    /// Dropping the first responder and re-activating the remembered app is
+    /// what actually returns focus - and it returns it to the right place,
+    /// which matters because the next desktop action resolves its target from
+    /// whatever is frontmost.
+    func endTextEditing() {
+        defer { applicationBeforeTextEditing = nil }
+        guard let panel, panel.isKeyWindow else { return }
+        panel.makeFirstResponder(nil)
+        if let previous = applicationBeforeTextEditing, !previous.isTerminated {
+            previous.activate()
+        } else {
+            NSApp.deactivate()
         }
     }
 
@@ -110,14 +185,75 @@ final class LoreleiToolbarController {
         return IslandGeometry.windowSize(islandSize: islandSize)
     }
 
-    private func makePanel() -> NSPanel {
+    /// How a run status should affect the panel.
+    ///
+    /// A command turn opens the panel so its answer is readable, but only
+    /// once: `.working` re-emits on every tool change, and a user who
+    /// collapsed the panel mid-run should not have to fight each update. An
+    /// approval blocks the run, so it always wins. System dictation reports
+    /// `.working` too while it finalizes text into another app, and must never
+    /// cover that app's text field.
+    enum PanelAutoExpansion {
+        case none
+        case oncePerTurn
+        case always
+    }
+
+    static func autoExpansion(
+        for runStatus: LoreleiRunStatus,
+        isAssistantTurnActive: Bool
+    ) -> PanelAutoExpansion {
+        switch runStatus {
+        case .needsApproval:
+            return .always
+        case .working:
+            return isAssistantTurnActive ? .oncePerTurn : .none
+        case .idle, .listening, .transcribing, .finished:
+            return .none
+        }
+    }
+
+    /// Remembers which turn has already opened the panel.
+    ///
+    /// Keyed on the turn's identity, not on the run status. Neither of the
+    /// obvious alternatives survives contact: a voice steer runs inside the
+    /// turn and passes through `.listening` and `.transcribing`, so resetting
+    /// on a non-expanding status reopened a panel the user had collapsed;
+    /// and a turn started before the previous one's status reached `.idle`
+    /// never showed a gap to reset on, so it silently failed to open.
+    struct PanelAutoExpansionTracker {
+        private var expandedForTurn: UUID?
+
+        mutating func shouldExpand(
+            for runStatus: LoreleiRunStatus,
+            isAssistantTurnActive: Bool,
+            turnToken: UUID?
+        ) -> Bool {
+            switch LoreleiToolbarController.autoExpansion(
+                for: runStatus,
+                isAssistantTurnActive: isAssistantTurnActive
+            ) {
+            case .none:
+                return false
+            case .always:
+                expandedForTurn = turnToken
+                return true
+            case .oncePerTurn:
+                guard expandedForTurn != turnToken else { return false }
+                expandedForTurn = turnToken
+                return true
+            }
+        }
+    }
+
+    private func makePanel() -> LoreleiToolbarPanel {
         let screen = screenContainingMouse()
         let size = currentSize(for: screen)
         let frame = Self.collapsedIslandFrame(
             screenFrame: screen.frame,
             windowSize: size
         )
-        let panel = NSPanel(
+        let panel = LoreleiToolbarPanel(
             contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
@@ -134,6 +270,9 @@ final class LoreleiToolbarController {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.ignoresMouseEvents = false
+        // Only a view that actually needs key status (a text field) should
+        // pull focus away from whatever app the user is working in.
+        panel.becomesKeyOnlyIfNeeded = true
 
         let rootView = LoreleiToolbarView(
             companionManager: companionManager,
@@ -144,6 +283,12 @@ final class LoreleiToolbarController {
             },
             openSettings: { [weak self] in
                 self?.onOpenSettings?()
+            },
+            beginTextEditing: { [weak self] in
+                self?.beginTextEditing()
+            },
+            endTextEditing: { [weak self] in
+                self?.endTextEditing()
             }
         )
         let hostingView = IslandClickRegionHostingView(rootView: rootView)
@@ -174,7 +319,9 @@ final class LoreleiToolbarController {
             let island = islandSizeForScreen(screen)
             return CGSize(
                 width: IslandGeometry.expandedPanelSize.width,
-                height: island.height + IslandGeometry.expandedPanelSize.height
+                height: island.height + IslandGeometry.expandedPanelHeight(
+                    hasPendingApproval: companionManager.pendingApprovalTitle != nil
+                )
             )
         }
         return Self.collapsedWindowSize(
@@ -201,7 +348,7 @@ final class LoreleiToolbarController {
         return area.width
     }
 
-    private func positionPanel(_ panel: NSPanel, animated: Bool = false) {
+    private func positionPanel(_ panel: LoreleiToolbarPanel, animated: Bool = false) {
         let screen = screenContainingMouse()
         let size = currentSize(for: screen)
 

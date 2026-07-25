@@ -122,4 +122,66 @@ struct ConversationLogTests {
         #expect(log.entries[0].role == .assistant)
         #expect(log.entries[0].text == "Fresh")
     }
+
+    @Test func latestUserEntryIDReturnsMostRecentUserEntry() {
+        var log = ConversationLog()
+
+        log.append(role: .user, text: "First")
+        log.append(role: .assistant, text: "Reply")
+        log.append(role: .user, text: "Second")
+
+        #expect(log.latestUserEntryID == log.entries.last?.id)
+    }
+
+    @Test func latestUserEntryIDIsNilWithoutUserEntries() {
+        var log = ConversationLog()
+
+        log.append(role: .assistant, text: "Reply")
+
+        #expect(log.latestUserEntryID == nil)
+    }
+
+    @Test func replaceLatestUserEntryTextIfUnansweredRewritesTrailingUserEntry() {
+        var log = ConversationLog()
+
+        log.append(role: .user, text: "Open Gmial")
+        let didReplace = log.replaceLatestUserEntryTextIfUnanswered("Open Gmail")
+
+        #expect(didReplace)
+        #expect(log.entries.count == 1)
+        #expect(log.entries[0].text == "Open Gmail")
+        #expect(log.entries[0].role == .user)
+    }
+
+    @Test func replaceLatestUserEntryTextIfUnansweredKeepsIdentityOfTheEntry() {
+        var log = ConversationLog()
+
+        log.append(role: .user, text: "Open Gmial")
+        let originalID = log.entries[0].id
+        _ = log.replaceLatestUserEntryTextIfUnanswered("Open Gmail")
+
+        #expect(log.entries[0].id == originalID)
+    }
+
+    @Test func replaceLatestUserEntryTextIfUnansweredDoesNothingWhenAnswered() {
+        var log = ConversationLog()
+
+        log.append(role: .user, text: "Open Gmial")
+        log.append(role: .assistant, text: "Opened.")
+        let before = log
+
+        let didReplace = log.replaceLatestUserEntryTextIfUnanswered("Open Gmail")
+
+        #expect(!didReplace)
+        #expect(log == before)
+    }
+
+    @Test func replaceLatestUserEntryTextIfUnansweredDoesNothingOnEmptyLog() {
+        var log = ConversationLog()
+
+        let didReplace = log.replaceLatestUserEntryTextIfUnanswered("Open Gmail")
+
+        #expect(!didReplace)
+        #expect(log.entries.isEmpty)
+    }
 }
