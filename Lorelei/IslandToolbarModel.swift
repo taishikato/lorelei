@@ -77,7 +77,7 @@ nonisolated enum IslandGeometry {
     static let headRestProtrusion: CGFloat = 22
     /// Extra lean-out on hover.
     static let headHoverExtra: CGFloat = 4
-    static let expandedPanelSize = CGSize(width: 460, height: 300)
+    static let expandedPanelSize = CGSize(width: 460, height: 270)
     /// Extra room while an approval is pending. The approval block and the
     /// Stop button together take about 160pt, which would leave the
     /// conversation with nothing at the one moment the user needs to read it.
