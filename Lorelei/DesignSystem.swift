@@ -148,10 +148,10 @@ enum DS {
         /// Hairline inner top light on machined island pieces (~8% white).
         static let islandHairline = Color.white.opacity(0.08)
 
-        // ── Help Chat ──────────────────────────────────────────────
-
-        /// Slightly lighter variant for hover/pressed states on user bubbles.
-        static let helpChatUserBubbleHover = blue700
+        /// Fill for the user's message bubbles inside the island panel. Lifted
+        /// just far enough off the true-black panel to read as a distinct
+        /// object without becoming a second surface.
+        static let islandUserBubble = Color(hex: "#1C1D1F")
 
         // ── Disabled State ───────────────────────────────────────────
         // Following Material Design 3's disabled pattern:

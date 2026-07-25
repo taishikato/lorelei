@@ -409,26 +409,32 @@ struct LoreleiToolbarView: View {
                     conversationEmptyState
                 } else {
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
                             ForEach(companionManager.conversationLog) { entry in
                                 conversationRow(entry)
                                     .id(entry.id)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 8)
                     }
+                    .scrollIndicators(.never)
+                    // Messages dissolve into the panel's bottom edge rather
+                    // than being sliced by it.
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black, location: 0.86),
+                                .init(color: .clear, location: 1)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(DS.Colors.islandRaised)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(DS.Colors.islandHairline, lineWidth: 0.7)
-            )
             .onChange(of: companionManager.conversationLog) { _, log in
                 guard let lastID = log.last?.id else { return }
                 withAnimation(.easeOut(duration: 0.18)) {
@@ -531,23 +537,52 @@ struct LoreleiToolbarView: View {
     private func conversationRow(_ entry: ConversationEntry) -> some View {
         switch entry.role {
         case .user:
-            HStack {
-                Spacer(minLength: 34)
-                Text("You: \(entry.text)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(DS.Colors.textPrimary)
-                    .multilineTextAlignment(.trailing)
-                    .lineLimit(nil)
-                    .textSelection(.enabled)
-            }
+            userBubble(entry)
         case .assistant:
             Text(entry.text)
-                .font(.system(size: 12, weight: .light, design: .monospaced))
+                .font(.system(size: 15, weight: .regular))
                 .foregroundStyle(DS.Colors.textPrimary)
                 .lineLimit(nil)
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    /// A steered utterance is logged with a leading arrow marker; the bubble
+    /// shows it as a glyph so the text itself stays clean and selectable.
+    private static let steerMarker = "↪ "
+
+    private func userBubble(_ entry: ConversationEntry) -> some View {
+        let isSteer = entry.text.hasPrefix(Self.steerMarker)
+        let body = isSteer
+            ? String(entry.text.dropFirst(Self.steerMarker.count))
+            : entry.text
+
+        return HStack(alignment: .top, spacing: 8) {
+            if isSteer {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(DS.Colors.textTertiary)
+                    .padding(.top, 2)
+            }
+
+            Text(body)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(DS.Colors.textPrimary)
+                .lineLimit(nil)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(DS.Colors.islandUserBubble)
+        )
     }
 
     private var approvalBlock: some View {
