@@ -337,10 +337,6 @@ struct LoreleiToolbarView: View {
                 approvalBlock
             }
 
-            if showsStopButton {
-                footer
-            }
-
             composerRow
         }
         .padding(16)
@@ -708,17 +704,6 @@ struct LoreleiToolbarView: View {
         )
     }
 
-    private var footer: some View {
-        HStack {
-            Spacer()
-
-            Button("Stop") {
-                deferredAction { companionManager.stopCurrentRun() }
-            }
-            .buttonStyle(.bordered)
-        }
-    }
-
     private var composerRow: some View {
         HStack(spacing: 8) {
             TextField("", text: $composerText, axis: .vertical)
@@ -741,7 +726,19 @@ struct LoreleiToolbarView: View {
                     }
                 }
 
-            if !composerText.isEmpty {
+            if companionManager.canStopCurrentRun {
+                Button(action: { deferredAction { companionManager.stopCurrentRun() } }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(DS.Colors.textPrimary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Stop")
+                .accessibilityLabel("Stop the current run")
+            } else if !composerText.isEmpty {
                 Button(action: { deferredAction { submitComposer() } }) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 20, weight: .regular))
@@ -808,10 +805,6 @@ struct LoreleiToolbarView: View {
     private func dismissComposer() {
         focusedField = nil
         endTextEditing()
-    }
-
-    private var showsStopButton: Bool {
-        companionManager.canStopCurrentRun
     }
 
 }
