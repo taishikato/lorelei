@@ -54,6 +54,24 @@ struct ConversationLog: Equatable, Sendable {
         currentAssistantEntryID = nil
     }
 
+    /// Identifier of the most recent `.user` entry. The panel shows its edit
+    /// affordance on this entry only - editing older turns would imply a
+    /// rewind the Codex session cannot perform.
+    var latestUserEntryID: UUID? {
+        entries.last(where: { $0.role == .user })?.id
+    }
+
+    /// Rewrites the trailing user entry in place when nothing has answered it
+    /// yet, so a corrected utterance replaces the original instead of piling a
+    /// near-duplicate onto the log. Returns whether the replacement happened.
+    mutating func replaceLatestUserEntryTextIfUnanswered(_ text: String) -> Bool {
+        guard let index = entries.indices.last, entries[index].role == .user else {
+            return false
+        }
+        entries[index].text = text
+        return true
+    }
+
     mutating func removeAll() {
         entries.removeAll()
         currentAssistantEntryID = nil
