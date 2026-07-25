@@ -726,6 +726,33 @@ final class CompanionManager: ObservableObject {
         handleFinalTranscriptLocally(trimmed)
     }
 
+    /// The entry the panel offers an edit affordance on: the most recent user
+    /// message.
+    var editableUserEntryID: UUID? {
+        conversation.latestUserEntryID
+    }
+
+    /// Resends a corrected version of the latest user message.
+    ///
+    /// The Codex session cannot rewind, so this is always a fresh submission.
+    /// The only thing editing buys is log hygiene: when nothing has answered
+    /// the message yet, the original entry is rewritten instead of leaving a
+    /// near-duplicate pair behind.
+    func resubmitEditedUserEntry(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        LoreleiAnalytics.capture(.typedMessageSent(
+            characters: trimmed.count,
+            wasEdited: true
+        ))
+        if activeTurn == nil, conversation.replaceLatestUserEntryTextIfUnanswered(trimmed) {
+            recordHistory(role: "user", text: trimmed)
+            handleFinalTranscriptLocally(trimmed, appendUserEntry: false)
+            return
+        }
+        handleFinalTranscriptLocally(trimmed)
+    }
+
     private func stopCurrentRunByInvalidatingSession() async {
         await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
@@ -760,7 +787,7 @@ final class CompanionManager: ObservableObject {
 #endif
 
     /// Routes final transcripts to Lorelei's current local workspace and Codex actions.
-    private func handleFinalTranscriptLocally(_ transcript: String) {
+    private func handleFinalTranscriptLocally(_ transcript: String, appendUserEntry: Bool = true) {
         if let activeTurn,
            let liveCodexAppServerTransport,
            let codexAppServerExecutor {
@@ -775,8 +802,10 @@ final class CompanionManager: ObservableObject {
                         prompt: transcript,
                         transport: liveCodexAppServerTransport
                     )
-                    conversation.append(role: .user, text: "↪ \(transcript)")
-                    recordHistory(role: "user", text: transcript)
+                    if appendUserEntry {
+                        conversation.append(role: .user, text: "↪ \(transcript)")
+                        recordHistory(role: "user", text: transcript)
+                    }
                     LoreleiAnalytics.capture(.steerSent)
                     LoreleiAnalytics.capture(.dictationCompleted(
                         transcriptCharacters: transcript.count,
@@ -797,13 +826,13 @@ final class CompanionManager: ObservableObject {
                     outstandingSteerTranscripts.removeValue(forKey: requestID)
                     LoreleiAnalytics.capture(.steerFailed)
                     recordDebugEvent("Steer failed - starting a new turn")
-                    routeFinalTranscriptAsNewTurn(transcript)
+                    routeFinalTranscriptAsNewTurn(transcript, appendUserEntry: appendUserEntry)
                 }
             }
             return
         }
 
-        routeFinalTranscriptAsNewTurn(transcript)
+        routeFinalTranscriptAsNewTurn(transcript, appendUserEntry: appendUserEntry)
     }
 
     private func routeFinalTranscriptAsNewTurn(_ transcript: String, appendUserEntry: Bool = true) {

@@ -108,4 +108,97 @@ struct CompanionManagerTypedInputTests {
         #expect(sentMessages.filter { $0["method"] as? String == "turn/start" }.count == 1)
         #expect(manager.conversationLog.last?.text == "↪ actually the other window")
     }
+
+    @Test func resubmitEditedUserEntryReplacesTheUnansweredEntryInPlace() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerEditResendReplaceTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerEditResendReplaceTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.seedConversationEntryForTesting(role: .user, text: "Open Gmial")
+        let originalID = manager.editableUserEntryID
+
+        manager.resubmitEditedUserEntry("Open Gmail")
+
+        #expect(manager.conversationLog.filter { $0.role == .user }.count == 1)
+        #expect(manager.conversationLog.first?.text == "Open Gmail")
+        #expect(manager.editableUserEntryID == originalID)
+    }
+
+    @Test func resubmitEditedUserEntryAppendsWhenTheEntryWasAlreadyAnswered() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerEditResendAppendTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerEditResendAppendTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.seedConversationEntryForTesting(role: .user, text: "Open Gmial")
+        manager.seedConversationEntryForTesting(role: .assistant, text: "I could not find that.")
+
+        manager.resubmitEditedUserEntry("Open Gmail")
+
+        #expect(manager.conversationLog.map(\.role) == [
+            ConversationEntry.Role.user,
+            ConversationEntry.Role.assistant,
+            ConversationEntry.Role.user
+        ])
+        #expect(manager.conversationLog.map(\.text) == [
+            "Open Gmial",
+            "I could not find that.",
+            "Open Gmail"
+        ])
+    }
+
+    @Test func resubmitEditedUserEntryIgnoresEmptyInput() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerEditResendEmptyTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerEditResendEmptyTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        manager.seedConversationEntryForTesting(role: .user, text: "Open Gmial")
+
+        manager.resubmitEditedUserEntry("   ")
+
+        #expect(manager.conversationLog.map(\.text) == ["Open Gmial"])
+    }
+
+    @Test func editableUserEntryIDIsNilWithoutUserEntries() async throws {
+        let defaults = UserDefaults(suiteName: "CompanionManagerEditableEntryNilTests")!
+        defaults.removePersistentDomain(forName: "CompanionManagerEditableEntryNilTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+
+        #expect(manager.editableUserEntryID == nil)
+
+        manager.seedConversationEntryForTesting(role: .assistant, text: "Hello")
+
+        #expect(manager.editableUserEntryID == nil)
+    }
 }
