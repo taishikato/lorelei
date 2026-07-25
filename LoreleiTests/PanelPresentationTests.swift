@@ -150,36 +150,49 @@ struct PanelPresentationTests {
 
     @Test func expandedWindowHeightStacksThePanelUnderTheIsland() async throws {
         let islandSize = IslandGeometry.islandSize(notchWidth: 190, safeAreaTop: 32)
-        let expectedHeight = islandSize.height + IslandGeometry.expandedPanelSize.height
-
         #expect(islandSize.height == 32)
-        #expect(expectedHeight == 32 + IslandGeometry.expandedPanelSize.height)
+
+        let plainWindowHeight = islandSize.height
+            + IslandGeometry.expandedPanelHeight(hasPendingApproval: false)
+        let approvingWindowHeight = islandSize.height
+            + IslandGeometry.expandedPanelHeight(hasPendingApproval: true)
+
+        #expect(plainWindowHeight == 32 + IslandGeometry.expandedPanelSize.height)
+        #expect(approvingWindowHeight
+            == plainWindowHeight + IslandGeometry.approvalPanelExtraHeight)
         #expect(IslandGeometry.expandedPanelSize.width == 460)
     }
 
-    @Test func autoExpandRulesCoverTurnsApprovalsAndDictation() {
-        // A command turn pulls the panel open.
-        #expect(LoreleiToolbarController.shouldAutoExpand(
+    @Test func autoExpansionRulesCoverTurnsApprovalsAndDictation() {
+        // A command turn opens the panel, but only once - `.working` re-emits
+        // on every tool change and must not fight a mid-run collapse.
+        #expect(LoreleiToolbarController.autoExpansion(
             for: .working("Thinking…"), isAssistantTurnActive: true
-        ))
+        ) == .oncePerTurn)
         // System dictation reports `.working` too and must NOT open it.
-        #expect(!LoreleiToolbarController.shouldAutoExpand(
+        #expect(LoreleiToolbarController.autoExpansion(
             for: .working("Dictating…"), isAssistantTurnActive: false
-        ))
-        // Approvals open it regardless.
-        #expect(LoreleiToolbarController.shouldAutoExpand(
+        ) == .none)
+        // Approvals block the run, so they surface every time.
+        #expect(LoreleiToolbarController.autoExpansion(
             for: .needsApproval("Computer Use"), isAssistantTurnActive: true
-        ))
-        #expect(LoreleiToolbarController.shouldAutoExpand(
+        ) == .always)
+        #expect(LoreleiToolbarController.autoExpansion(
             for: .needsApproval("Computer Use"), isAssistantTurnActive: false
-        ))
+        ) == .always)
         // Nothing else does.
-        #expect(!LoreleiToolbarController.shouldAutoExpand(for: .idle, isAssistantTurnActive: false))
-        #expect(!LoreleiToolbarController.shouldAutoExpand(for: .listening, isAssistantTurnActive: false))
-        #expect(!LoreleiToolbarController.shouldAutoExpand(for: .transcribing, isAssistantTurnActive: false))
-        #expect(!LoreleiToolbarController.shouldAutoExpand(
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .idle, isAssistantTurnActive: false
+        ) == .none)
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .listening, isAssistantTurnActive: false
+        ) == .none)
+        #expect(LoreleiToolbarController.autoExpansion(
+            for: .transcribing, isAssistantTurnActive: false
+        ) == .none)
+        #expect(LoreleiToolbarController.autoExpansion(
             for: .finished(success: true), isAssistantTurnActive: false
-        ))
+        ) == .none)
     }
 
     @Test func toolbarAutoExpandsWhenTheAssistantStartsResponding() async throws {

@@ -114,7 +114,10 @@ struct CompanionManagerTypedInputTests {
         defaults.removePersistentDomain(forName: "CompanionManagerEditResendReplaceTests")
         let store = WorkspaceSettingsStore(defaults: defaults)
         let transport = HangingAfterLinesCodexAppServerTransport(lines: [
-            #"{"id":1,"result":{"userAgent":"codex-test"}}"#
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Working"}}"#
         ])
         let manager = CompanionManager(
             speechOutput: SilentSpeechOutput(),
@@ -127,7 +130,15 @@ struct CompanionManagerTypedInputTests {
         let originalID = manager.editableUserEntryID
 
         manager.resubmitEditedUserEntry("Open Gmail")
+        for _ in 0..<40 {
+            let sentMessages = try await transport.sentJSONMessages()
+            if sentMessages.contains(where: { $0["method"] as? String == "turn/start" }) { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
 
+        // The corrected text is actually sent, not just swapped in the log.
+        let sentMessages = try await transport.sentJSONMessages()
+        #expect(sentMessages.contains { $0["method"] as? String == "turn/start" })
         #expect(manager.conversationLog.filter { $0.role == .user }.count == 1)
         #expect(manager.conversationLog.first?.text == "Open Gmail")
         #expect(manager.editableUserEntryID == originalID)
