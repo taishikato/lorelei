@@ -12,6 +12,8 @@ struct LoreleiToolbarView: View {
     @ObservedObject var expansionState: LoreleiToolbarExpansionState
     let toggleExpansion: @MainActor @Sendable () -> Void
     let openSettings: @MainActor @Sendable () -> Void
+    let beginTextEditing: @MainActor @Sendable () -> Void
+    let endTextEditing: @MainActor @Sendable () -> Void
 
     @State private var isHeadHovered = false
     @State private var headSide: IslandSide = .left

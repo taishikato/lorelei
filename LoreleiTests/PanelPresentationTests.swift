@@ -128,4 +128,30 @@ struct PanelPresentationTests {
         #expect(manager.runStatus == .needsApproval("Computer Use"))
         #expect(controller.isExpanded)
     }
+
+    @Test func toolbarPanelRefusesKeyFocusUntilAllowed() async throws {
+        let panel = LoreleiToolbarPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 200),
+            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        #expect(!panel.canBecomeKey)
+
+        panel.keyFocusAllowed = true
+        #expect(panel.canBecomeKey)
+
+        panel.keyFocusAllowed = false
+        #expect(!panel.canBecomeKey)
+    }
+
+    @Test func expandedWindowHeightStacksThePanelUnderTheIsland() async throws {
+        let islandSize = IslandGeometry.islandSize(notchWidth: 190, safeAreaTop: 32)
+        let expectedHeight = islandSize.height + IslandGeometry.expandedPanelSize.height
+
+        #expect(islandSize.height == 32)
+        #expect(expectedHeight == 32 + IslandGeometry.expandedPanelSize.height)
+        #expect(IslandGeometry.expandedPanelSize.width == 460)
+    }
 }

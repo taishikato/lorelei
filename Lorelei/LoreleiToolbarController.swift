@@ -18,6 +18,18 @@ final class LoreleiToolbarExpansionState: ObservableObject {
     @Published var islandSize: CGSize = .zero
 }
 
+/// The toolbar's panel. Borderless non-activating panels refuse key status
+/// outright, which is right for the island band but wrong for the expanded
+/// panel's text fields - so key eligibility is a flag the controller opens
+/// only while the panel is expanded.
+final class LoreleiToolbarPanel: NSPanel {
+    var keyFocusAllowed = false
+
+    override var canBecomeKey: Bool {
+        keyFocusAllowed
+    }
+}
+
 @MainActor
 final class LoreleiToolbarController {
     private enum Metrics {
@@ -27,7 +39,7 @@ final class LoreleiToolbarController {
     private let companionManager: CompanionManager
     private let expansionState = LoreleiToolbarExpansionState()
     private var runStatusCancellable: AnyCancellable?
-    private var panel: NSPanel?
+    private var panel: LoreleiToolbarPanel?
     private weak var islandHostingView: IslandClickRegionHostingView<LoreleiToolbarView>?
     var onOpenSettings: (() -> Void)?
 
@@ -39,6 +51,11 @@ final class LoreleiToolbarController {
                 guard let self else { return }
                 self.islandHostingView?.trayVisible =
                     IslandActivity.activity(for: runStatus).showsTray
+                if case .listening = runStatus {
+                    // Push-to-talk wins over a half-typed message: the field
+                    // must not keep swallowing keystrokes while Lorelei listens.
+                    self.endTextEditing()
+                }
                 if case .needsApproval = runStatus {
                     self.setExpanded(true)
                 } else if let panel = self.panel, !self.expansionState.isExpanded {
@@ -69,10 +86,13 @@ final class LoreleiToolbarController {
             // invisible - then let SwiftUI slide the panel out from under
             // the island. The window frame itself never animates.
             expansionState.isExpanded = true
+            panel?.keyFocusAllowed = true
             if let panel { positionPanel(panel) }
             LoreleiAnalytics.capture(.toolbarExpanded)
         } else {
             expansionState.isExpanded = false
+            endTextEditing()
+            panel?.keyFocusAllowed = false
             // Let the retract transition play inside the still-tall window,
             // then shrink the window back to the island band.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -80,6 +100,23 @@ final class LoreleiToolbarController {
                 self.positionPanel(panel)
             }
         }
+    }
+
+    /// Takes keyboard focus for the panel's text fields. The app is an
+    /// accessory (`LSUIElement`), so it must activate before its key window
+    /// receives keystrokes.
+    func beginTextEditing() {
+        guard let panel, expansionState.isExpanded else { return }
+        panel.keyFocusAllowed = true
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKey()
+    }
+
+    /// Hands focus back to whatever the user was working in.
+    func endTextEditing() {
+        guard let panel, panel.isKeyWindow else { return }
+        panel.resignKey()
+        NSApp.deactivate()
     }
 
     /// Top-centered collapsed island window, flush with the screen's top edge.
@@ -110,14 +147,14 @@ final class LoreleiToolbarController {
         return IslandGeometry.windowSize(islandSize: islandSize)
     }
 
-    private func makePanel() -> NSPanel {
+    private func makePanel() -> LoreleiToolbarPanel {
         let screen = screenContainingMouse()
         let size = currentSize(for: screen)
         let frame = Self.collapsedIslandFrame(
             screenFrame: screen.frame,
             windowSize: size
         )
-        let panel = NSPanel(
+        let panel = LoreleiToolbarPanel(
             contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
             backing: .buffered,
@@ -134,6 +171,9 @@ final class LoreleiToolbarController {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.ignoresMouseEvents = false
+        // Only a view that actually needs key status (a text field) should
+        // pull focus away from whatever app the user is working in.
+        panel.becomesKeyOnlyIfNeeded = true
 
         let rootView = LoreleiToolbarView(
             companionManager: companionManager,
@@ -144,6 +184,12 @@ final class LoreleiToolbarController {
             },
             openSettings: { [weak self] in
                 self?.onOpenSettings?()
+            },
+            beginTextEditing: { [weak self] in
+                self?.beginTextEditing()
+            },
+            endTextEditing: { [weak self] in
+                self?.endTextEditing()
             }
         )
         let hostingView = IslandClickRegionHostingView(rootView: rootView)
@@ -201,7 +247,7 @@ final class LoreleiToolbarController {
         return area.width
     }
 
-    private func positionPanel(_ panel: NSPanel, animated: Bool = false) {
+    private func positionPanel(_ panel: LoreleiToolbarPanel, animated: Bool = false) {
         let screen = screenContainingMouse()
         let size = currentSize(for: screen)
 
