@@ -7,6 +7,14 @@
 
 import SwiftUI
 
+/// Which of the panel's text fields currently holds focus. The panel takes
+/// keyboard focus away from the user's frontmost app, so exactly one field may
+/// be active at a time and `nil` must give focus straight back.
+enum PanelField: Hashable {
+    case composer
+    case editor(UUID)
+}
+
 struct LoreleiToolbarView: View {
     @ObservedObject var companionManager: CompanionManager
     @ObservedObject var expansionState: LoreleiToolbarExpansionState
@@ -18,6 +26,8 @@ struct LoreleiToolbarView: View {
     @State private var isHeadHovered = false
     @State private var headSide: IslandSide = .left
     @State private var sideScheduler = IslandSideScheduler()
+    @State private var composerText = ""
+    @FocusState private var focusedField: PanelField?
 
     private var activity: IslandActivity {
         IslandActivity.activity(
@@ -326,6 +336,8 @@ struct LoreleiToolbarView: View {
             if showsStopButton {
                 footer
             }
+
+            composerRow
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -337,6 +349,15 @@ struct LoreleiToolbarView: View {
             )
             .fill(DS.Colors.islandSurface)
         )
+        .onChange(of: companionManager.runStatus) { _, newStatus in
+            // Speaking always wins over a half-typed message.
+            if case .listening = newStatus {
+                focusedField = nil
+            }
+        }
+        .onChange(of: expansionState.isExpanded) { _, isExpanded in
+            if !isExpanded { focusedField = nil }
+        }
     }
 
     private var expandedHeader: some View {
@@ -460,40 +481,20 @@ struct LoreleiToolbarView: View {
     }
 
     private var emptyStateGuidance: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             Image(systemName: "waveform")
                 .font(.system(size: 26, weight: .medium))
                 .foregroundStyle(DS.Colors.textSecondary)
 
-            VStack(spacing: 6) {
-                HStack(spacing: 5) {
-                    Text("Hold")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(DS.Colors.textPrimary)
+            Text("Speak or type to get started.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(DS.Colors.textPrimary)
 
-                    ForEach(BuddyPushToTalkShortcut.currentShortcutOption.keyCapsuleLabels, id: \.self) { keyLabel in
-                        Text(keyLabel)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(DS.Colors.textPrimary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                    .fill(DS.Colors.islandRaised)
-                            )
-                    }
-
-                    Text("and speak")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(DS.Colors.textPrimary)
-                }
-
-                Text("Release to send. Hold again while Lorelei is working to steer the task.")
-                    .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(DS.Colors.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Hold again while Lorelei is working to steer the task.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(DS.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -625,6 +626,97 @@ struct LoreleiToolbarView: View {
             }
             .buttonStyle(.bordered)
         }
+    }
+
+    private var composerRow: some View {
+        HStack(spacing: 8) {
+            TextField("", text: $composerText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(DS.Colors.textPrimary)
+                .lineLimit(1...4)
+                .focused($focusedField, equals: .composer)
+                .onSubmit { submitComposer() }
+                .onExitCommand { dismissComposer() }
+                // Until the panel holds key focus the field cannot take first
+                // responder, so the first click has to go to the row's gesture
+                // instead; afterwards the field owns its own clicks (caret
+                // placement, selection).
+                .allowsHitTesting(focusedField == .composer)
+                .overlay(alignment: .leading) {
+                    if composerText.isEmpty {
+                        composerPlaceholder
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            if !composerText.isEmpty {
+                Button(action: { deferredAction { submitComposer() } }) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(DS.Colors.textPrimary)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Send")
+                .accessibilityLabel("Send message")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(DS.Colors.islandUserBubble)
+        )
+        .overlay(
+            Capsule()
+                .stroke(DS.Colors.islandHairline, lineWidth: 0.7)
+        )
+        .contentShape(Capsule())
+        .onTapGesture {
+            beginTextEditing()
+            focusedField = .composer
+        }
+    }
+
+    private var composerPlaceholder: some View {
+        HStack(spacing: 5) {
+            Text("Type or hold")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(DS.Colors.textTertiary)
+
+            ForEach(BuddyPushToTalkShortcut.currentShortcutOption.keyCapsuleLabels, id: \.self) { keyLabel in
+                Text(keyLabel)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(DS.Colors.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(DS.Colors.islandRaised)
+                    )
+            }
+
+            Text("to speak")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(DS.Colors.textTertiary)
+        }
+    }
+
+    private func submitComposer() {
+        let text = composerText
+        composerText = ""
+        focusedField = nil
+        endTextEditing()
+        companionManager.submitTypedMessage(text)
+    }
+
+    /// Escape gives focus straight back to the app the user was working in,
+    /// leaving whatever they typed in place for a later send.
+    private func dismissComposer() {
+        focusedField = nil
+        endTextEditing()
     }
 
     private var showsStopButton: Bool {
