@@ -56,7 +56,10 @@ final class LoreleiToolbarController {
                     // must not keep swallowing keystrokes while Lorelei listens.
                     self.endTextEditing()
                 }
-                if case .needsApproval = runStatus {
+                if Self.shouldAutoExpand(
+                    for: runStatus,
+                    isAssistantTurnActive: self.companionManager.isAssistantTurnActive
+                ) {
                     self.setExpanded(true)
                 } else if let panel = self.panel, !self.expansionState.isExpanded {
                     // The collapsed window only spans the island band while no
@@ -145,6 +148,26 @@ final class LoreleiToolbarController {
             safeAreaTop: safeAreaTop
         )
         return IslandGeometry.windowSize(islandSize: islandSize)
+    }
+
+    /// Whether a run status should pull the panel open on its own.
+    ///
+    /// A response the user cannot read is no better than no response, so a
+    /// command turn opens the panel the way an approval request does. System
+    /// dictation reports `.working` while it finalizes text into another app
+    /// and must never cover that app's text field, hence the turn check.
+    static func shouldAutoExpand(
+        for runStatus: LoreleiRunStatus,
+        isAssistantTurnActive: Bool
+    ) -> Bool {
+        switch runStatus {
+        case .needsApproval:
+            return true
+        case .working:
+            return isAssistantTurnActive
+        case .idle, .listening, .transcribing, .finished:
+            return false
+        }
     }
 
     private func makePanel() -> LoreleiToolbarPanel {

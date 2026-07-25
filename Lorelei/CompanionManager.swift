@@ -197,10 +197,16 @@ final class CompanionManager: ObservableObject {
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
 
-    /// Stop is only meaningful for an in-flight command turn. System dictation
-    /// uses `.working("Dictating…")` for progress UI and must not show Stop.
-    var canStopCurrentRun: Bool {
+    /// True while a command turn owns the run status. System dictation reports
+    /// `.working("Dictating…")` for its own progress UI, so anything that must
+    /// not react to dictation gates on this rather than the raw run status.
+    var isAssistantTurnActive: Bool {
         currentResponseTask != nil || pendingCodexAppServerApproval != nil
+    }
+
+    /// Stop is only meaningful for an in-flight command turn.
+    var canStopCurrentRun: Bool {
+        isAssistantTurnActive
     }
 
     init(

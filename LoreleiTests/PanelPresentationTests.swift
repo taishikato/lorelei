@@ -118,8 +118,10 @@ struct PanelPresentationTests {
         let controller = LoreleiToolbarController(companionManager: manager)
 
         manager.handleFinalTranscriptForTesting("use computer use to inspect TextEdit")
+        // Wait on the approval itself: the panel already opens when the turn
+        // starts, so `isExpanded` would go true long before the request lands.
         for _ in 0..<20 {
-            if controller.isExpanded {
+            if manager.pendingApprovalTitle != nil {
                 break
             }
             try await Task.sleep(for: .milliseconds(50))
@@ -153,5 +155,59 @@ struct PanelPresentationTests {
         #expect(islandSize.height == 32)
         #expect(expectedHeight == 32 + IslandGeometry.expandedPanelSize.height)
         #expect(IslandGeometry.expandedPanelSize.width == 460)
+    }
+
+    @Test func autoExpandRulesCoverTurnsApprovalsAndDictation() {
+        // A command turn pulls the panel open.
+        #expect(LoreleiToolbarController.shouldAutoExpand(
+            for: .working("Thinking…"), isAssistantTurnActive: true
+        ))
+        // System dictation reports `.working` too and must NOT open it.
+        #expect(!LoreleiToolbarController.shouldAutoExpand(
+            for: .working("Dictating…"), isAssistantTurnActive: false
+        ))
+        // Approvals open it regardless.
+        #expect(LoreleiToolbarController.shouldAutoExpand(
+            for: .needsApproval("Computer Use"), isAssistantTurnActive: true
+        ))
+        #expect(LoreleiToolbarController.shouldAutoExpand(
+            for: .needsApproval("Computer Use"), isAssistantTurnActive: false
+        ))
+        // Nothing else does.
+        #expect(!LoreleiToolbarController.shouldAutoExpand(for: .idle, isAssistantTurnActive: false))
+        #expect(!LoreleiToolbarController.shouldAutoExpand(for: .listening, isAssistantTurnActive: false))
+        #expect(!LoreleiToolbarController.shouldAutoExpand(for: .transcribing, isAssistantTurnActive: false))
+        #expect(!LoreleiToolbarController.shouldAutoExpand(
+            for: .finished(success: true), isAssistantTurnActive: false
+        ))
+    }
+
+    @Test func toolbarAutoExpandsWhenTheAssistantStartsResponding() async throws {
+        let defaults = UserDefaults(suiteName: "ToolbarAutoExpansionTurnTests")!
+        defaults.removePersistentDomain(forName: "ToolbarAutoExpansionTurnTests")
+        let store = WorkspaceSettingsStore(defaults: defaults)
+        let transport = HangingAfterLinesCodexAppServerTransport(lines: [
+            #"{"id":1,"result":{"userAgent":"codex-test"}}"#,
+            #"{"id":2,"result":{"thread":{"id":"thread-1"}}}"#,
+            #"{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-9","items":[],"status":"inProgress"}}}"#,
+            #"{"method":"item/agentMessage/delta","params":{"delta":"Working"}}"#
+        ])
+        let manager = CompanionManager(
+            speechOutput: SilentSpeechOutput(),
+            workspaceSettingsStore: store,
+            codexAppServerTransportFactory: { transport },
+            runStatusIdleReturnDelay: .seconds(60)
+        )
+        let controller = LoreleiToolbarController(companionManager: manager)
+
+        #expect(!controller.isExpanded)
+
+        manager.submitTypedMessage("open the notes app")
+        for _ in 0..<40 {
+            if controller.isExpanded { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(controller.isExpanded)
     }
 }
