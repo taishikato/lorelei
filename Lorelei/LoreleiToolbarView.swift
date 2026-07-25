@@ -27,6 +27,8 @@ struct LoreleiToolbarView: View {
     @State private var headSide: IslandSide = .left
     @State private var sideScheduler = IslandSideScheduler()
     @State private var composerText = ""
+    @State private var editingEntryID: UUID?
+    @State private var editingText = ""
     @FocusState private var focusedField: PanelField?
 
     private var activity: IslandActivity {
@@ -353,10 +355,22 @@ struct LoreleiToolbarView: View {
             // Speaking always wins over a half-typed message.
             if case .listening = newStatus {
                 focusedField = nil
+                editingEntryID = nil
             }
         }
         .onChange(of: expansionState.isExpanded) { _, isExpanded in
-            if !isExpanded { focusedField = nil }
+            if !isExpanded {
+                focusedField = nil
+                editingEntryID = nil
+            }
+        }
+        .onChange(of: companionManager.editableUserEntryID) { _, newID in
+            // The edited entry can be replaced or cleared out from under the
+            // editor (resend, New Chat, the 200-entry cap).
+            if let editingEntryID, editingEntryID != newID {
+                self.editingEntryID = nil
+                focusedField = nil
+            }
         }
     }
 
@@ -560,6 +574,10 @@ struct LoreleiToolbarView: View {
         let body = isSteer
             ? String(entry.text.dropFirst(Self.steerMarker.count))
             : entry.text
+        let isEditing = editingEntryID == entry.id
+        // Only the latest user message is editable: resending an older turn
+        // would imply a rewind the Codex session cannot perform.
+        let isEditable = companionManager.editableUserEntryID == entry.id
 
         return HStack(alignment: .top, spacing: 8) {
             if isSteer {
@@ -569,13 +587,47 @@ struct LoreleiToolbarView: View {
                     .padding(.top, 2)
             }
 
-            Text(body)
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(DS.Colors.textPrimary)
-                .lineLimit(nil)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if isEditing {
+                TextField("", text: $editingText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(DS.Colors.textPrimary)
+                    .lineLimit(1...6)
+                    .focused($focusedField, equals: .editor(entry.id))
+                    .onSubmit { submitEdit() }
+                    .onExitCommand { cancelEdit() }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(body)
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(DS.Colors.textPrimary)
+                    .lineLimit(nil)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if isEditable {
+                Button(action: {
+                    deferredAction {
+                        if isEditing {
+                            cancelEdit()
+                        } else {
+                            beginEdit(entry: entry, body: body)
+                        }
+                    }
+                }) {
+                    Image(systemName: isEditing ? "xmark" : "pencil")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(DS.Colors.textTertiary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help(isEditing ? "Cancel editing" : "Edit and resend")
+                .accessibilityLabel(isEditing ? "Cancel editing" : "Edit and resend")
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -584,6 +636,29 @@ struct LoreleiToolbarView: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(DS.Colors.islandUserBubble)
         )
+    }
+
+    private func beginEdit(entry: ConversationEntry, body: String) {
+        editingEntryID = entry.id
+        editingText = body
+        beginTextEditing()
+        focusedField = .editor(entry.id)
+    }
+
+    private func cancelEdit() {
+        editingEntryID = nil
+        editingText = ""
+        focusedField = nil
+        endTextEditing()
+    }
+
+    private func submitEdit() {
+        let text = editingText
+        editingEntryID = nil
+        editingText = ""
+        focusedField = nil
+        endTextEditing()
+        companionManager.resubmitEditedUserEntry(text)
     }
 
     private var approvalBlock: some View {
