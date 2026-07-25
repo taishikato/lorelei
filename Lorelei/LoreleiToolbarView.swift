@@ -588,6 +588,10 @@ struct LoreleiToolbarView: View {
     /// neither one drives the bubble taller than the other.
     private static let bubbleControlSize: CGFloat = 22
 
+    /// Shared height for the composer's field and its trailing send/stop
+    /// button, so the row never changes height as that button appears.
+    private static let composerControlSize: CGFloat = 20
+
     private func userBubble(_ entry: ConversationEntry) -> some View {
         let isSteer = entry.text.hasPrefix(Self.steerMarker)
         let body = isSteer
@@ -736,6 +740,9 @@ struct LoreleiToolbarView: View {
                 // instead; afterwards the field owns its own clicks (caret
                 // placement, selection).
                 .allowsHitTesting(focusedField == .composer)
+                // The trailing control comes and goes; pinning the field to the
+                // same height keeps the composer from jumping when it does.
+                .frame(minHeight: Self.composerControlSize)
                 .overlay(alignment: .leading) {
                     if composerText.isEmpty {
                         composerPlaceholder
@@ -746,9 +753,9 @@ struct LoreleiToolbarView: View {
             if companionManager.canStopCurrentRun {
                 Button(action: { deferredAction { companionManager.stopCurrentRun() } }) {
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(DS.Colors.textPrimary)
-                        .frame(width: 22, height: 22)
+                        .frame(width: Self.composerControlSize, height: Self.composerControlSize)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -758,8 +765,9 @@ struct LoreleiToolbarView: View {
             } else if !composerText.isEmpty {
                 Button(action: { deferredAction { submitComposer() } }) {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 20, weight: .regular))
+                        .font(.system(size: 17, weight: .regular))
                         .foregroundStyle(DS.Colors.textPrimary)
+                        .frame(width: Self.composerControlSize, height: Self.composerControlSize)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
