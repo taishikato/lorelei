@@ -44,8 +44,7 @@ final class LoreleiToolbarController {
     /// resolve their target from the frontmost app, so typing must not leave
     /// Lorelei itself sitting there.
     private var applicationBeforeTextEditing: NSRunningApplication?
-    /// Whether the current turn has already pulled the panel open once.
-    private var didAutoExpandForCurrentTurn = false
+    private var autoExpansionTracker = PanelAutoExpansionTracker()
     private var panel: LoreleiToolbarPanel?
     private weak var islandHostingView: IslandClickRegionHostingView<LoreleiToolbarView>?
     var onOpenSettings: (() -> Void)?
@@ -63,16 +62,10 @@ final class LoreleiToolbarController {
                     // must not keep swallowing keystrokes while Lorelei listens.
                     self.endTextEditing()
                 }
-                let expansion = Self.autoExpansion(
+                if self.autoExpansionTracker.shouldExpand(
                     for: runStatus,
                     isAssistantTurnActive: self.companionManager.isAssistantTurnActive
-                )
-                if expansion == .none {
-                    self.didAutoExpandForCurrentTurn = false
-                }
-                if expansion == .always
-                    || (expansion == .oncePerTurn && !self.didAutoExpandForCurrentTurn) {
-                    self.didAutoExpandForCurrentTurn = true
+                ) {
                     self.setExpanded(true)
                 } else if let panel = self.panel, !self.expansionState.isExpanded {
                     // The collapsed window only spans the island band while no
@@ -216,6 +209,40 @@ final class LoreleiToolbarController {
             return isAssistantTurnActive ? .oncePerTurn : .none
         case .idle, .listening, .transcribing, .finished:
             return .none
+        }
+    }
+
+    /// Remembers whether the current turn has already opened the panel.
+    ///
+    /// The reset keys off the TURN being over, not off the status being one
+    /// that does not expand. A voice steer runs inside the turn and passes
+    /// through `.listening` and `.transcribing` on the way; treating those as
+    /// 'turn over' let the `.working` that followed yank open a panel the user
+    /// had deliberately collapsed.
+    struct PanelAutoExpansionTracker {
+        private var didExpandForCurrentTurn = false
+
+        mutating func shouldExpand(
+            for runStatus: LoreleiRunStatus,
+            isAssistantTurnActive: Bool
+        ) -> Bool {
+            if !isAssistantTurnActive {
+                didExpandForCurrentTurn = false
+            }
+            switch LoreleiToolbarController.autoExpansion(
+                for: runStatus,
+                isAssistantTurnActive: isAssistantTurnActive
+            ) {
+            case .none:
+                return false
+            case .always:
+                didExpandForCurrentTurn = true
+                return true
+            case .oncePerTurn:
+                guard !didExpandForCurrentTurn else { return false }
+                didExpandForCurrentTurn = true
+                return true
+            }
         }
     }
 

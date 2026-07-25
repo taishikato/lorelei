@@ -163,6 +163,37 @@ struct PanelPresentationTests {
         #expect(IslandGeometry.expandedPanelSize.width == 460)
     }
 
+    @Test func aVoiceSteerDoesNotReopenAPanelTheUserCollapsed() {
+        var tracker = LoreleiToolbarController.PanelAutoExpansionTracker()
+        // `#expect` captures its expression in a closure, so the mutating
+        // calls have to happen out here.
+        let turnStart = tracker.shouldExpand(for: .working("Thinking…"), isAssistantTurnActive: true)
+        let laterActivity = tracker.shouldExpand(for: .working("lorelei.set_text"), isAssistantTurnActive: true)
+        let steerListening = tracker.shouldExpand(for: .listening, isAssistantTurnActive: true)
+        let steerTranscribing = tracker.shouldExpand(for: .transcribing, isAssistantTurnActive: true)
+        let afterSteer = tracker.shouldExpand(for: .working("Thinking…"), isAssistantTurnActive: true)
+        let approval = tracker.shouldExpand(for: .needsApproval("Computer Use"), isAssistantTurnActive: true)
+        let turnOver = tracker.shouldExpand(for: .idle, isAssistantTurnActive: false)
+        let nextTurn = tracker.shouldExpand(for: .working("Thinking…"), isAssistantTurnActive: true)
+
+        // The turn starts and opens the panel once.
+        #expect(turnStart)
+        // Later activity updates in the same turn leave it alone, so a user
+        // who collapsed it is not fought.
+        #expect(!laterActivity)
+        // A voice steer runs INSIDE the turn: it passes through listening and
+        // transcribing, and the working status that follows must not reopen
+        // what the user closed.
+        #expect(!steerListening)
+        #expect(!steerTranscribing)
+        #expect(!afterSteer)
+        // An approval blocks the run, so it still surfaces mid-turn.
+        #expect(approval)
+        // Once the turn is over, the next one may open the panel again.
+        #expect(!turnOver)
+        #expect(nextTurn)
+    }
+
     @Test func autoExpansionRulesCoverTurnsApprovalsAndDictation() {
         // A command turn opens the panel, but only once - `.working` re-emits
         // on every tool change and must not fight a mid-run collapse.
