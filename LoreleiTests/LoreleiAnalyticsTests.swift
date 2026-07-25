@@ -164,4 +164,13 @@ struct LoreleiAnalyticsTests {
         // would pollute production data.
         #expect(!LoreleiAnalytics.isEnabled)
     }
+
+    @Test func typedMessageSentCarriesOnlyCoarseMetadata() {
+        let event = LoreleiAnalyticsEvent.typedMessageSent(characters: 12, wasEdited: true)
+
+        #expect(event.name == "typed_message_sent")
+        #expect(event.properties["characters"] as? Int == 12)
+        #expect(event.properties["was_edited"] as? Bool == true)
+        #expect(event.properties.count == 2)
+    }
 }

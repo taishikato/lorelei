@@ -713,6 +713,19 @@ final class CompanionManager: ObservableObject {
         }
     }
 
+    /// Submits text the user typed into the panel. Typed input is the same
+    /// kind of user turn as a released push-to-talk transcript, so it takes
+    /// the identical path: a new turn when idle, a steer while a turn runs.
+    func submitTypedMessage(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        LoreleiAnalytics.capture(.typedMessageSent(
+            characters: trimmed.count,
+            wasEdited: false
+        ))
+        handleFinalTranscriptLocally(trimmed)
+    }
+
     private func stopCurrentRunByInvalidatingSession() async {
         await invalidateLiveCodexAppServerSessionWhenReady()
         currentResponseTask?.cancel()
