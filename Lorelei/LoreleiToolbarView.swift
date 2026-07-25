@@ -377,13 +377,13 @@ struct LoreleiToolbarView: View {
     private var expandedHeader: some View {
         HStack(spacing: 9) {
             faceView
-                .scaleEffect(0.72)
-                .frame(width: 36, height: 20)
+                .scaleEffect(0.92)
+                .frame(width: 50, height: 26)
             Text(Self.statusLabel(for: companionManager.runStatus))
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .foregroundStyle(DS.Colors.textPrimary)
+                .foregroundStyle(DS.Colors.textSecondary)
 
             Spacer()
 
