@@ -630,10 +630,22 @@ struct LoreleiToolbarView: View {
                         }
                     }
                 }) {
-                    Image(systemName: isEditing ? "xmark" : "pencil")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(isEditHovered ? DS.Colors.textPrimary : DS.Colors.textSecondary)
-                        .frame(width: Self.bubbleControlSize, height: Self.bubbleControlSize)
+                    Group {
+                        if isEditing {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .semibold))
+                        } else {
+                            // Lucide 'pencil' (ISC license), bundled as a
+                            // template asset: the outlined pen SF Symbols
+                            // does not have.
+                            Image("EditPen")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 14, height: 14)
+                        }
+                    }
+                    .foregroundStyle(isEditHovered ? DS.Colors.textPrimary : DS.Colors.textSecondary)
+                    .frame(width: Self.bubbleControlSize, height: Self.bubbleControlSize)
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .fill(.white.opacity(isEditHovered ? 0.16 : 0.07))
