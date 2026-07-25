@@ -165,16 +165,33 @@ struct PanelPresentationTests {
 
     @Test func aVoiceSteerDoesNotReopenAPanelTheUserCollapsed() {
         var tracker = LoreleiToolbarController.PanelAutoExpansionTracker()
+        let turnOne = UUID()
+        let turnTwo = UUID()
         // `#expect` captures its expression in a closure, so the mutating
         // calls have to happen out here.
-        let turnStart = tracker.shouldExpand(for: .working("Thinking…"), isAssistantTurnActive: true)
-        let laterActivity = tracker.shouldExpand(for: .working("lorelei.set_text"), isAssistantTurnActive: true)
-        let steerListening = tracker.shouldExpand(for: .listening, isAssistantTurnActive: true)
-        let steerTranscribing = tracker.shouldExpand(for: .transcribing, isAssistantTurnActive: true)
-        let afterSteer = tracker.shouldExpand(for: .working("Thinking…"), isAssistantTurnActive: true)
-        let approval = tracker.shouldExpand(for: .needsApproval("Computer Use"), isAssistantTurnActive: true)
-        let turnOver = tracker.shouldExpand(for: .idle, isAssistantTurnActive: false)
-        let nextTurn = tracker.shouldExpand(for: .working("Thinking…"), isAssistantTurnActive: true)
+        let turnStart = tracker.shouldExpand(
+            for: .working("Thinking…"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let laterActivity = tracker.shouldExpand(
+            for: .working("lorelei.set_text"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let steerListening = tracker.shouldExpand(
+            for: .listening, isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let steerTranscribing = tracker.shouldExpand(
+            for: .transcribing, isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let afterSteer = tracker.shouldExpand(
+            for: .working("Thinking…"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        let approval = tracker.shouldExpand(
+            for: .needsApproval("Computer Use"), isAssistantTurnActive: true, turnToken: turnOne
+        )
+        // Straight into the next turn, with no idle gap in between - a typed
+        // message can start one before the previous status reaches `.idle`.
+        let nextTurn = tracker.shouldExpand(
+            for: .working("Thinking…"), isAssistantTurnActive: true, turnToken: turnTwo
+        )
 
         // The turn starts and opens the panel once.
         #expect(turnStart)
@@ -189,8 +206,7 @@ struct PanelPresentationTests {
         #expect(!afterSteer)
         // An approval blocks the run, so it still surfaces mid-turn.
         #expect(approval)
-        // Once the turn is over, the next one may open the panel again.
-        #expect(!turnOver)
+        // A genuinely new turn opens the panel again.
         #expect(nextTurn)
     }
 

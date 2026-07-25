@@ -209,6 +209,16 @@ final class CompanionManager: ObservableObject {
         isAssistantTurnActive
     }
 
+    /// Identity of the in-flight command turn, or nil between turns.
+    ///
+    /// UI that should react once per turn keys off this rather than off the
+    /// run status: a steer or another tool keeps the same token, while a new
+    /// turn always gets a fresh one - even when it starts before the run
+    /// status has had a chance to pass through `.idle`.
+    var currentTurnToken: UUID? {
+        responseTaskTracker.currentTaskID
+    }
+
     init(
         speechOutput: SpeechOutputing? = nil,
         workspaceSettingsStore: WorkspaceSettingsStore? = nil,

@@ -64,7 +64,8 @@ final class LoreleiToolbarController {
                 }
                 if self.autoExpansionTracker.shouldExpand(
                     for: runStatus,
-                    isAssistantTurnActive: self.companionManager.isAssistantTurnActive
+                    isAssistantTurnActive: self.companionManager.isAssistantTurnActive,
+                    turnToken: self.companionManager.currentTurnToken
                 ) {
                     self.setExpanded(true)
                 } else if let panel = self.panel, !self.expansionState.isExpanded {
@@ -212,23 +213,22 @@ final class LoreleiToolbarController {
         }
     }
 
-    /// Remembers whether the current turn has already opened the panel.
+    /// Remembers which turn has already opened the panel.
     ///
-    /// The reset keys off the TURN being over, not off the status being one
-    /// that does not expand. A voice steer runs inside the turn and passes
-    /// through `.listening` and `.transcribing` on the way; treating those as
-    /// 'turn over' let the `.working` that followed yank open a panel the user
-    /// had deliberately collapsed.
+    /// Keyed on the turn's identity, not on the run status. Neither of the
+    /// obvious alternatives survives contact: a voice steer runs inside the
+    /// turn and passes through `.listening` and `.transcribing`, so resetting
+    /// on a non-expanding status reopened a panel the user had collapsed;
+    /// and a turn started before the previous one's status reached `.idle`
+    /// never showed a gap to reset on, so it silently failed to open.
     struct PanelAutoExpansionTracker {
-        private var didExpandForCurrentTurn = false
+        private var expandedForTurn: UUID?
 
         mutating func shouldExpand(
             for runStatus: LoreleiRunStatus,
-            isAssistantTurnActive: Bool
+            isAssistantTurnActive: Bool,
+            turnToken: UUID?
         ) -> Bool {
-            if !isAssistantTurnActive {
-                didExpandForCurrentTurn = false
-            }
             switch LoreleiToolbarController.autoExpansion(
                 for: runStatus,
                 isAssistantTurnActive: isAssistantTurnActive
@@ -236,11 +236,11 @@ final class LoreleiToolbarController {
             case .none:
                 return false
             case .always:
-                didExpandForCurrentTurn = true
+                expandedForTurn = turnToken
                 return true
             case .oncePerTurn:
-                guard !didExpandForCurrentTurn else { return false }
-                didExpandForCurrentTurn = true
+                guard expandedForTurn != turnToken else { return false }
+                expandedForTurn = turnToken
                 return true
             }
         }
