@@ -163,7 +163,7 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md) for build / test expectations and 
 ## Known limitations
 
 - **English only for now.** Japanese speech is currently mis-transcribed as English phonetics; ja-JP model installation and locale selection are planned follow-ups.
-- One active turn at a time; no session history UI and no text input in the toolbar (deliberate v1 scope).
+- One active turn at a time; you cannot run multiple requests concurrently.
 - Apps with poor accessibility support depend on the screenshot fallback, which is slower and less precise.
 - Official Computer Use availability depends on ChatGPT.app's managed plugin layout; Lorelei falls back automatically if discovery fails after an update.
 
