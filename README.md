@@ -4,8 +4,10 @@
 
 <img width="2560" height="1440" alt="Image" src="https://github.com/user-attachments/assets/5391ce6f-bdfd-4475-b0a9-42ac5d21923f" />
 
-Lorelei is an open-source (MIT), local-first voice control layer for your Mac.
-Hold a hotkey, speak, and on-device speech recognition hands the transcript to [OpenAI Codex](https://developers.openai.com/codex) (`codex app-server`, gpt-5.5), which drives the desktop through Lorelei's accessibility tools - using your existing ChatGPT subscription, with no separate API bill and no cloud middleman of Lorelei's own.
+Lorelei is an open-source, local-first voice control layer for your Mac.
+Hold `Control + Option` and speak to control your Mac, or hold `Control + Shift` to dictate cleaned-up text into any app.
+Speech recognition runs on-device, and the transcript goes to [OpenAI Codex](https://developers.openai.com/codex) (`codex app-server`, gpt-5.5) on your existing ChatGPT subscription.
+No separate API bill, no cloud middleman of Lorelei's own.
 
 Everything happens through a small liquid-glass toolbar at the top of your screen and a waveform capsule next to your cursor.
 There is no chat window to babysit.
