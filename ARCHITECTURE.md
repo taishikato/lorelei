@@ -28,7 +28,6 @@ Lorelei.app executes in-process via lorelei.* tools:
   lorelei.desktop_action     press / focus / raise / open / select / showMenu by id
   lorelei.set_text           set text via AX values (IME-safe for non-ASCII)
   lorelei.screenshot         PNG fallback when the AX tree is not enough
-  lorelei.memory_write       replace local profile or volatile memory Markdown
 ```
 
 Hotkey capture and the floating UI live in the companion / toolbar layer.
@@ -57,11 +56,9 @@ Declaration, routing, and execution:
 1. **Declare** a `CodexAppServerDynamicToolSpec` (name + `lorelei` namespace + JSON Schema) in the matching suite:
    - Desktop AX tools: `CodexAppServerDesktopToolSuite.toolSpecs()`
    - Foreground / Spaces: `CodexAppServerDesktopForegroundTool.spec`
-   - Memory: `CodexAppServerMemoryToolSuite.toolSpecs()`
-2. **Register** the specs from `CompanionManager` when building the Codex turn (`dynamicToolSpecsResolver` concatenates foreground + desktop + memory specs).
+2. **Register** the specs from `CompanionManager` when building the Codex turn (`dynamicToolSpecsResolver` concatenates foreground + desktop specs).
 3. **Route and execute** in the `dynamicToolHandler` closure:
    - `foreground_app` → `CodexAppServerDesktopForegroundTool.handle`
-   - `memory_write` → `CodexAppServerMemoryToolSuite.handle`
    - other `lorelei.*` desktop tools → `CodexAppServerDesktopToolSuite.handle`, which calls into `DesktopActionExecuting`
 
 Qualified names Codex sees are `lorelei.<tool>` (for example `lorelei.desktop_snapshot`).
