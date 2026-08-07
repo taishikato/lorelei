@@ -158,11 +158,11 @@ struct AppServerProtocolTests {
         let request = CodexAppServerProtocol.threadStartRequest(
             id: 2,
             cwd: "/Users/example",
-            developerInstructions: "Use local memory."
+            developerInstructions: "Follow app-specific guidance."
         )
         let params = try #require(request["params"] as? [String: Any])
 
-        #expect(params["developerInstructions"] as? String == "Use local memory.")
+        #expect(params["developerInstructions"] as? String == "Follow app-specific guidance.")
     }
 
     @Test func appServerThreadStartOmitsEmptyDeveloperInstructions() throws {

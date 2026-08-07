@@ -29,6 +29,8 @@ See [Talking to Lorelei](#talking-to-lorelei) for the full reference, Stop / app
 - Release the key. Your words are transcribed fully on-device and sent to Codex immediately. No confirmation dialog.
 - A glass capsule at the top-center of your screen shows live status: `Ready`, `Listening…`, `Transcribing…`, the tool currently running, or `Needs approval`.
 - Click the capsule to expand it: you see the live response stream, current tool activity, a Stop button, and approval buttons when Codex asks for one.
+- The expanded toolbar is a chat-style conversation panel: your requests and Lorelei's answers appear as message bubbles, and a text field at the bottom lets you type a request instead of speaking.
+- Hover the latest user message between turns to edit it inline and resend, without repeating yourself out loud.
 - Completion and failure are announced with a sound cue and a one-sentence spoken summary.
 
 Example: say 'Open TextEdit and type hello world', and Lorelei foregrounds TextEdit, reads its accessibility tree, creates a document if needed, and types the text, narrating its progress in the toolbar stream.
@@ -92,6 +94,8 @@ You also pick a **workspace folder** in onboarding or settings; Codex uses it as
 - 'What's on my screen?' style questions capture the screen and answer.
   With text selected, questions like 'what does this mean?' are answered about the selection instead - no screenshot taken.
 - Git and coding requests ('what changed?', 'update the readme') run through Codex against your workspace folder.
+- Prefer typing? The expanded toolbar has a text field; press Return to send the message through the same pipeline as voice.
+- Turn on **Conversation history** in Settings to save transcripts and answers to a local file (`~/Library/Application Support/Lorelei/history/`); the View button opens a history window with past conversations.
 - Press **Stop** in the expanded toolbar to interrupt a run instantly.
 - When Codex flags an action as risky, the toolbar auto-expands with Accept / Decline buttons and announces 'Needs approval'. That approval bridge is the only gate; routine commands run without confirmation.
 
@@ -163,7 +167,7 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md) for build / test expectations and 
 ## Known limitations
 
 - **English only for now.** Japanese speech is currently mis-transcribed as English phonetics; ja-JP model installation and locale selection are planned follow-ups.
-- One active turn at a time; no session history UI and no text input in the toolbar (deliberate v1 scope).
+- One active turn at a time; you cannot run multiple requests concurrently.
 - Apps with poor accessibility support depend on the screenshot fallback, which is slower and less precise.
 - Official Computer Use availability depends on ChatGPT.app's managed plugin layout; Lorelei falls back automatically if discovery fails after an update.
 

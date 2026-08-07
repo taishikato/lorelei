@@ -46,7 +46,6 @@ struct CompanionPanelView: View {
                 header
                 generalSection
                 workspaceSection
-                memorySection
                 voiceSection
             }
             .padding(12)
@@ -287,34 +286,6 @@ struct CompanionPanelView: View {
             VStack(spacing: 5) {
                 inputDeviceRow
                 PermissionRowsView(companionManager: companionManager)
-            }
-        }
-    }
-
-    private var memorySection: some View {
-        section("Memory") {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Lorelei remembers your preferences in local Markdown files.")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 8) {
-                    Button {
-                        deferredAction { companionManager.revealMemoryInFinder() }
-                    } label: {
-                        Label("Open Memory Folder", systemImage: "folder")
-                    }
-                    .buttonStyle(PanelButtonStyle(kind: .primary))
-                    .pointerCursor()
-
-                    Button {
-                        deferredAction { Task { await companionManager.clearMemory() } }
-                    } label: {
-                        Label("Clear Memory", systemImage: "trash")
-                    }
-                    .buttonStyle(PanelButtonStyle(kind: .secondary))
-                    .pointerCursor()
-                }
             }
         }
     }
